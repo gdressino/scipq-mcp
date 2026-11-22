@@ -88,8 +88,6 @@ uvx scipq-mcp --help            # run without installing
 pipx install scipq-mcp          # or install it
 ```
 
-> Not on PyPI yet. Until then: `uvx --from git+https://github.com/gdressino/scipq-mcp scipq-mcp`.
-
 ### Claude Code
 
 ```sh
