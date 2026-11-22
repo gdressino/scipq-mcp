@@ -22,6 +22,7 @@ from . import render
 from . import setup as SETUP
 from . import symbols as S
 from . import config as CFG
+from . import libsrc as L
 from .cachedir import CacheError
 from .graph import Graph, GraphError
 from .index import Index, IndexError_
@@ -41,7 +42,8 @@ NO_SHARDS_HINT = ("This project has not been compiled with the scip-javac plugin
 class Service:
     def __init__(self, default_root: str | None = None, shards_dir: str | None = None,
                  freshness: str = "full", cache_dir: str | None = None,
-                 index_external: str = "all", config_file: str | None = None):
+                 index_external: str = "all", config_file: str | None = None,
+                 library_roots: list[str] | None = None):
         """freshness: "full" (every shard against its source, ~0.1 s on 10k files, run in
         parallel with the query), "results" (only the files in the answer) or "off"."""
         if freshness not in FRESHNESS_MODES:
@@ -52,6 +54,7 @@ class Service:
         self.cache_dir = cache_dir
         self.index_external = index_external
         self.config_file = config_file
+        self.library_roots = library_roots
 
     def settings(self, root: str, graph=None) -> CFG.Settings:
         present = graph.annotations_present() if graph is not None else None
@@ -190,9 +193,21 @@ class Service:
             return note + text, {r.location.source for r in refs}
         return body
 
+    def _library(self, symbol: str):
+        if S.is_local(symbol):
+            return None
+        try:
+            return L.lookup(L.LibraryIndex(self.cache_dir, self.library_roots), symbol)
+        except (CacheError, OSError, sqlite3.Error):
+            return None
+
     def _b_definition(self, symbol: str) -> Body:
         def body(nav: Navigator):
             sym, note, d = self._resolved(nav, symbol, nav.definition)
+            if d is None:
+                lib = self._library(sym)
+                if lib is not None:
+                    return note + render.library_definition(lib), set()
             return note + render.definition(nav.ws, d, sym), {d.location.source} if d else set()
         return body
 
@@ -257,6 +272,10 @@ class Service:
     def _b_source(self, symbol: str, max_lines: int = 200) -> Body:
         def body(nav: Navigator):
             sym, note, src = self._resolved(nav, symbol, lambda s: X.source(nav, s, max_lines))
+            if src is None:
+                lib = self._library(sym)
+                if lib is not None:
+                    return note + render.library_source(lib, max_lines), set()
             return note + render.source(src, sym), (
                 {src.definition.location.source} if src else set())
         return body
@@ -267,7 +286,22 @@ class Service:
             sym, note, (groups, external) = self._resolved(
                 nav, symbol, lambda s: X.members(nav, s, inherited))
             srcs = {g.definition.location.source for g in groups if g.definition}
-            return note + render.members(sym, groups, external, offset, limit), srcs
+            libs = []
+            if external:
+                try:
+                    index = L.LibraryIndex(self.cache_dir, self.library_roots)
+                except (CacheError, OSError):
+                    index = None
+                overridden = {o for g in groups for over in g.overrides.values() for o in over}
+                for ext in external:
+                    got = L.type_members(index, ext) if index is not None else None
+                    if got is None:
+                        libs.append((ext, None, []))
+                        continue
+                    lib, mems = got
+                    hidden = {S.name_of(o) for o in overridden if S.parent(o) == ext}
+                    libs.append((ext, lib, [m for m in mems if m.name not in hidden]))
+            return note + render.members(sym, groups, external, offset, limit, libs), srcs
         return body
 
     def _b_annotated(self, annotation: str, offset: int = 0, limit: int = DEFAULT_LIMIT,
@@ -292,7 +326,9 @@ class Service:
                 want = [m.strip() for m in modifiers if m.strip()]
                 uses = [u for u in uses if all(re.search(r"\b" + re.escape(m) + r"\b", u.detail)
                                                for m in want)]
-            return (note + render.typed(sym, uses, categories, offset, limit),
+            filters = (f" with {' '.join(modifiers)}" if modifiers else "") + (
+                f" in {scope}" if scope else "")
+            return (note + render.typed(sym, uses, categories, offset, limit, filters),
                     {u.location.source for u in uses})
         return body
 
@@ -468,9 +504,12 @@ class Service:
                                    entry_supertypes=st.entry_supertypes,
                                    entry_type_names=st.entry_type_names,
                                    entry_packages=st.entry_packages,
-                                   by_name_globs=globs, root=nav.ws.root)
+                                   by_name_globs=globs, by_name_exclude=st.by_name_exclude,
+                                   root=nav.ws.root)
+                suppressed = dict(g.suppressed)
             note = f"-- profiles: {', '.join(st.profiles) or 'none'} ({st.source or 'none'})\n"
-            return render.index_note(stats) + note + render.dead_code(rows, offset, limit), set()
+            return render.index_note(stats) + note + render.dead_code(rows, offset, limit,
+                                                                      suppressed), set()
         return body
 
     def _b_census(self, scope: str = "", limit: int = 50, category: str = "annotations",

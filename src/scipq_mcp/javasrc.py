@@ -113,7 +113,10 @@ class JavaSource:
                 brace = self.masked.find("{", m.end(), hi)
                 if brace < 0:
                     continue
-                found = (m.start(), brace, _match_brace(self.masked, brace))
+                line_start = self.masked.rfind("\n", 0, m.start()) + 1
+                start = line_start if not self.masked[line_start:m.start()].strip(
+                    " \t").endswith((";", "}")) else m.start()
+                found = (start, brace, _match_brace(self.masked, brace))
                 break
             if found is None:
                 return None
@@ -123,7 +126,11 @@ class JavaSource:
 
     # members -----------------------------------------------------------------------------
 
-    def members(self, body_open: int, body_close: int, is_enum: bool = False) -> list[Member]:
+    def members(self, body_open: int, body_close: int, is_enum: bool = False,
+                type_name: str = "") -> list[Member]:
+        """Members at the top level of a type body. A constructor is a method named like the
+        type (`type_name`)."""
+        self._type_name = type_name
         m, t = self.masked, self.text
         out: list[Member] = []
         i = body_open + 1
@@ -182,18 +189,17 @@ class JavaSource:
             return Member("type", td.group(2), declaration, self.line_of(start),
                           self.line_of(end), javadoc, mods)
         paren = _top_level_paren(bare)
+        if paren >= 0 and _top_level_equals(bare[:paren]):
+            paren = -1  # `Type name = new Foo(…)`: a field with an initializer
         if paren >= 0:
             names = _IDENT_BEFORE_PAREN.findall(bare[:paren + 1])
             name = names[-1] if names else ""
             if not name or name in _CONTROL:
                 return None
-            before = bare[:bare.rfind(name, 0, paren + 1)].split()
-            before = [w for w in before if w not in _MODIFIERS]
-            kind = "constructor" if not before or before[-1].endswith(">") and len(before) == 1 \
-                else "method"
+            kind = "constructor" if name == getattr(self, "_type_name", "") else "method"
             return Member(kind, name, declaration, self.line_of(start), self.line_of(end),
                           javadoc, mods)
-        lhs = bare.split("=", 1)[0]
+        lhs = _split_top_level_equals(bare)
         idents = re.findall(r"[A-Za-z_$][\w$]*", lhs)
         if not idents:
             return None
@@ -222,6 +228,37 @@ def _top_level_equals(header: str) -> bool:
         elif ch == "=" and depth <= 0:
             return True
     return False
+
+
+def _split_top_level_equals(header: str) -> str:
+    depth = 0
+    for k, ch in enumerate(header):
+        if ch in "(<[":
+            depth += 1
+        elif ch in ")>]":
+            depth -= 1
+        elif ch == "=" and depth <= 0:
+            return header[:k]
+    return header
+
+
+def enum_constant(text: str, name: str) -> tuple[str, str, int] | None:
+    """(declaration, javadoc, offset within text) of one constant in an enum constant list."""
+    masked = mask(text)
+    m = re.search(r"(?<![\w$])" + re.escape(name) + r"(?![\w$])", masked)
+    if not m:
+        return None
+    depth, k = 0, m.start()
+    while k < len(masked):
+        ch = masked[k]
+        if ch in "({":
+            depth += 1
+        elif ch in ")}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            break
+        k += 1
+    return " ".join(text[m.start():k].split()), _javadoc(text[:m.start()][-4000:]), m.start()
 
 
 def _top_level_paren(s: str) -> int:

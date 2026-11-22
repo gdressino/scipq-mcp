@@ -20,12 +20,19 @@ version and date when releasing.
   glob); `modifiers` on typed (e.g. static fields); javadoc `{@link}`/`@see` mentions in
   `references(by_name=true)`.
 - `--tools all|core|names` to expose fewer tools.
+- Library and JDK sources: `definition`, `source` and `members` read external symbols from the
+  `-sources.jar` files in the Gradle/Maven caches and the JDK's `src.zip` (declaration, javadoc,
+  overloads, bodies, inherited members), with the version used.
+- dead_code says how many candidates names in other files suppressed, and where; it searches
+  tracked or non-ignored files under 2 MB (`[project.by_name] exclude` for more).
 
 ### Fixed
 
 - Types that scip-javac reports at a string holding their name (e.g. `@Label("Invoice")`
   above `class Invoice`) are located at their declaration; their annotations are found.
 - `callers` counts distinct callers (and tree nodes separately).
+- changed: annotations or javadoc above a class are reported without expanding the change to
+  every user of the class.
 
 ## 0.1.0 — 2026-11-22
 

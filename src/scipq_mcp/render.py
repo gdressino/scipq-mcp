@@ -350,7 +350,8 @@ def source(src, symbol: str) -> str:
     return "\n".join(out)
 
 
-def members(type_symbol: str, groups, external: list[str], offset: int, limit: int) -> str:
+def members(type_symbol: str, groups, external: list[str], offset: int, limit: int,
+            libs=None) -> str:
     rows: list[str] = []
     own = groups[0]
     for g in groups:
@@ -371,14 +372,69 @@ def members(type_symbol: str, groups, external: list[str], offset: int, limit: i
             tail = f"  ({'; '.join(extra)})" if extra else ""
             rows.append(f"  {m.location.line:>5}  {m.kind}: {sig}{tail}")
     total = sum(len(g.members) for g in groups)
+    no_sources = []
+    for ext, lib, mems in libs or []:
+        if lib is None:
+            no_sources.append(ext)
+            continue
+        total += len(mems)
+        rows.append(f"from {S.short(ext)} ({len(mems)}, library sources: {lib.coordinates}):")
+        for m in mems:
+            rows.append(f"  {m.start_line:>5}  {m.kind}: {_decl(m.declaration)}")
+    if libs is None:
+        no_sources = list(external)
     shown, suffix = page(rows, offset, limit)
     lines = [f"{S.short(type_symbol)} — {len(own.members)} own members, "
              f"{total - len(own.members)} inherited{suffix}"]
     lines += list(shown)
-    if external:
-        lines.append("external supertypes (members not indexed): "
-                     + ", ".join(S.short(e) for e in external))
+    if no_sources:
+        lines.append("external supertypes without sources (no -sources.jar in the Gradle/Maven "
+                     "caches): " + ", ".join(S.short(e) for e in no_sources))
     return "\n".join(lines)
+
+
+def _decl(declaration: str) -> str:
+    """A declaration without its annotations, for listings."""
+    out = re.sub(r"@\s*[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?\s*", "", declaration).strip()
+    return out[:200]
+
+
+def library_definition(lib) -> str:
+    m = lib.member
+    where = f"{lib.lib.coordinates}" + (f" (+{lib.lib.others} other versions cached)"
+                                         if lib.lib.others else "")
+    lines = [f"{lib.symbol}", f"external — {where}",
+             f"source: {lib.lib.jar}!/{lib.lib.entry}:{lib.body[0]} (read it with `source`)"]
+    if m is None:
+        lines.append(_decl(lib.type_declaration))
+        doc = lib.type_javadoc
+    else:
+        lines.append(f"in: {_decl(lib.type_declaration)}")
+        lines.append(f"{m.kind}: {_decl(m.declaration)}")
+        doc = m.javadoc
+        if len(lib.overloads) > 1:
+            lines.append(f"overloads ({len(lib.overloads)}; SCIP numbers them in declaration "
+                         "order, which this one assumes):")
+            for o in lib.overloads:
+                mark = "→" if o is m else " "
+                lines.append(f"  {mark} {o.start_line}: {_decl(o.declaration)}")
+    if doc:
+        lines.append("")
+        lines.append(doc)
+    return "\n".join(lines)
+
+
+def library_source(lib, max_lines: int) -> str:
+    first, last = lib.body
+    shown_last = min(last, first + max(1, max_lines) - 1)
+    head = (f"{lib.symbol} — {lib.lib.coordinates} {lib.lib.entry}:{first}"
+            + (f" (+{lib.lib.others} other versions cached)" if lib.lib.others else ""))
+    width = len(str(shown_last))
+    body = [f"{first + k:>{width}}  {t}" for k, t in enumerate(lib.source.lines(first, shown_last))]
+    out = [head] + body
+    if shown_last < last:
+        out.append(f"… truncated; the body ends at line {last} (raise max_lines)")
+    return "\n".join(out)
 
 
 def annotated(annotation: str, items, offset: int, limit: int) -> str:
@@ -397,11 +453,20 @@ def annotated(annotation: str, items, offset: int, limit: int) -> str:
     return "\n".join(lines)
 
 
-def typed(type_symbol: str, uses, categories: list[str] | None, offset: int, limit: int) -> str:
+def typed(type_symbol: str, uses, categories: list[str] | None, offset: int, limit: int,
+          filters: str = "") -> str:
     if categories:
         uses = [u for u in uses if u.category in categories]
+    seen, unique = set(), []
+    for u in uses:  # a declaration that mentions the type twice (e.g. `Map<…> m = Map.of()`)
+        key = (u.category, u.owner, u.location.source, u.location.range.start_line)
+        if key not in seen:
+            seen.add(key)
+            unique.append(u)
+    uses = unique
     if not uses:
-        return f"no uses of {S.short(type_symbol)} in this project"
+        what = (", ".join(categories) + " " if categories else "") + "uses"
+        return f"no {what} of {S.short(type_symbol)}{filters or ' in this project'}"
     counts = OrderedDict()
     for u in uses:
         counts[u.category] = counts.get(u.category, 0) + 1
@@ -646,8 +711,11 @@ def changed(result: dict, base: str, impact_nodes, tests_line: str, depth: int =
         lines.append(f"  {S.short(sym)}  {e['source']}:{e['line']}  changed {span}{test}")
     for sym, e in result.get("class_level", {}).items():
         ch = sorted(e["changed"])
-        lines.append(f"  {S.short(sym)}  {e['source']}:{e['line']}  class body outside members "
-                     f"changed ({', '.join(map(str, ch[:5]))}{' …' if len(ch) > 5 else ''}); "
+        where = " and ".join(sorted(e.get("kind", set()))) or "class body outside members"
+        if e.get("kind"):
+            where = f"class {where} (framework behavior, not its API)"
+        lines.append(f"  {S.short(sym)}  {e['source']}:{e['line']}  {where} changed "
+                     f"({', '.join(map(str, ch[:5]))}{' …' if len(ch) > 5 else ''}); "
                      "not expanded to the class's users")
     if result.get("untracked"):
         lines.append(f"untracked .java included: {_some(result['untracked'])}")
@@ -701,12 +769,21 @@ def uses_between(scope: str, target: str, rows, total: int) -> str:
     return "\n".join(lines)
 
 
-def dead_code(rows, offset: int, limit: int) -> str:
+def dead_code(rows, offset: int, limit: int, suppressed: dict | None = None) -> str:
+    omitted = ""
+    if suppressed:
+        top = sorted(suppressed.items(), key=lambda kv: -kv[1])[:5]
+        omitted = (f"omitted because their name appears in strings or other files: "
+                   f"{sum(suppressed.values())} — " + ", ".join(f"{p} {n}" for p, n in top)
+                   + (" … (exclude generated files with [project.by_name] exclude)"
+                      if len(suppressed) > 5 else ""))
     if not rows:
-        return "no dead-code candidates in scope"
+        return "no dead-code candidates in scope" + (f"\n{omitted}" if omitted else "")
     shown, suffix = page(rows, offset, limit)
     lines = [f"{len(rows)} dead-code candidates (no references; framework entry points, "
              f"overrides and names used in strings left out — check before deleting){suffix}"]
+    if omitted:
+        lines.append(omitted)
     current = None
     for sym, kind, src, line, sig in shown:
         if src != current:

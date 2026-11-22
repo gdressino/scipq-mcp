@@ -146,6 +146,17 @@ Server options: `--root DIR` (default project), `--shards-dir` (default
 All tools are read-only and take an optional `project_root`. Lists take `offset`/`limit` and
 say `next offset N` when there is more.
 
+### Library and JDK symbols
+
+`definition`, `source` and `members` also answer for symbols the project only uses — the JDK and
+its dependencies — from the `-sources.jar` files in the Gradle (`~/.gradle/caches`) and Maven
+(`~/.m2/repository`) caches and the JDK's `lib/src.zip`: declaration, javadoc, overloads, the
+body, and the members a project type inherits from library supertypes. Which version the build
+uses is not in the shards: with several cached, the highest is used and the answer says which.
+A class → jar map is kept in the user cache (`libraries.sqlite`), built the first time it is
+needed (it lists every cached sources jar once, ~10–20 s) and refreshed incrementally. Gradle
+downloads sources jars when an IDE asks for them; without one, the answer says so.
+
 ### Whole-project tools (auxiliary index)
 
 Questions that follow call chains or look at everything use an on-disk index, built from the

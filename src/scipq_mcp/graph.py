@@ -269,6 +269,15 @@ class Graph:
                         if nxt is not None:
                             best = nxt
                     touched = True
+                    if S.is_type(best[1]) and ln < best[4]:
+                        # Above the declaration: annotations or javadoc of the class. They change
+                        # how frameworks treat it, not the API its users see.
+                        kind = "annotation" if line.startswith("@") else "documentation"
+                        out["class_level"].setdefault(best[1], {
+                            "source": src, "line": best[4] + 1, "changed": set(),
+                            "kind": set()})["changed"].add(ln + 1)
+                        out["class_level"][best[1]].setdefault("kind", set()).add(kind)
+                        continue
                     if S.is_type(best[1]) and ln > best[4] + _header_lines(text, best[4]):
                         out["class_level"].setdefault(best[1], {
                             "source": src, "line": best[4] + 1, "changed": set()})[
@@ -319,7 +328,7 @@ class Graph:
     def uses_between(self, scope: str, target_scope: str, limit: int = 200
                      ) -> tuple[list[tuple[str, str, str, list[int]]], int]:
         """Call sites where code in `scope` (package glob) uses symbols in `target_scope`
-        (package glob, or a symbol prefix such as `org/flowable/`): (caller, target, source,
+        (package glob, or a symbol prefix such as `org/apache/commons/`): (caller, target, source,
         lines)."""
         rows = self.con.execute("""
             SELECT cs.symbol, cs.pkg, ts.symbol, ts.pkg, r.shard_id, r.sites FROM refs r
@@ -345,7 +354,7 @@ class Graph:
     def dead_code(self, scope: str = "", public_is_api: bool = False,
                   include_tests: bool = False, entry_annotations=(), entry_supertypes=(),
                   entry_type_names=(), entry_packages=(), by_name_globs=DEAD_CODE_GLOBS,
-                  root: str = "") -> list[tuple]:
+                  by_name_exclude=(), root: str = "") -> list[tuple]:
         """Candidates: project definitions nobody references. Left out: overrides and what is
         overridden (dispatch), Lombok-generated members and fields with generated accessors that
         are used, main/serialization hooks, no-arg constructors of persistent classes, members
@@ -415,18 +424,34 @@ class Graph:
                     fnmatch.fnmatch(S.name_of(owner), g) for g in entry_type_names)):
                 continue
             out.append((sym, kind, src, line + 1, sig or ""))
+        self.suppressed = {}
         if out and root:
             aliases: dict[str, set[str]] = defaultdict(set)   # name in text -> candidate names
+            properties: set[str] = set()
             for x in out:
                 n = S.name_of(x[0])
                 aliases[n].add(n)
                 m = re.match(r"(get|set|is)([A-Z][\w$]*)$", n)
                 if m:  # templates and reports use the bean property: getActividad -> actividad
-                    aliases[m.group(2)[0].lower() + m.group(2)[1:]].add(n)
+                    prop = m.group(2)[0].lower() + m.group(2)[1:]
+                    aliases[prop].add(n)
+                    if prop not in {S.name_of(y[0]) for y in out}:
+                        properties.add(prop)
             names = sorted(a for a in aliases if len(a) > 2)
-            used_words = names_in_strings(root, names, list(by_name_globs))
-            used = {c for w in used_words for c in aliases.get(w, ())}
-            out = [x for x in out if S.name_of(x[0]) not in used]
+            seen = names_in_strings(root, names, list(by_name_globs), properties,
+                                    list(by_name_exclude))
+            used: dict[str, str] = {}
+            for w, src in seen.items():
+                for c in aliases.get(w, ()):
+                    used.setdefault(c, src)
+            kept = []
+            for x in out:
+                src = used.get(S.name_of(x[0]))
+                if src is None:
+                    kept.append(x)
+                else:
+                    self.suppressed[src] = self.suppressed.get(src, 0) + 1
+            out = kept
         out.sort(key=lambda x: (x[2], x[3]))
         return out
 
@@ -799,35 +824,104 @@ def git_untracked_java(root: str, paths: list[str]) -> list[str]:
             if p.endswith(b".java")]
 
 
-def names_in_strings(root: str, names: list[str], globs: list[str]) -> set[str]:
-    """Which of `names` appear inside a string literal of a .java file (or anywhere in other
-    files matching globs): one grep pass for all of them, then a set lookup per word."""
+MAX_TEXT_BYTES = 2_000_000  # bigger files are generated (graphs, dumps, minified bundles)
+DEFAULT_BY_NAME_EXCLUDE = (".idea/*", "*/.idea/*", ".vscode/*", "*/.vscode/*",
+                           "*/node_modules/*", "node_modules/*", "*.min.js")
+
+
+def candidate_files(root: str, globs: list[str], exclude: list[str] = (),
+                    max_bytes: int = MAX_TEXT_BYTES) -> list[str]:
+    """Files to search by name: tracked or untracked-but-not-ignored (git), matching globs, not
+    excluded, not huge. Without git: a walk that skips build and dependency directories."""
+    git = shutil.which("git")
+    paths: list[str] = []
+    if git:
+        try:
+            proc = subprocess.run([git, "-C", root, "ls-files", "-z", "--cached", "--others",
+                                   "--exclude-standard"], capture_output=True, timeout=60)
+            if proc.returncode == 0:
+                paths = [p.decode("utf-8", errors="replace") for p in proc.stdout.split(b"\0")
+                         if p]
+        except (OSError, subprocess.SubprocessError):
+            paths = []
+    if not paths:
+        skip = {".git", "build", "target", "out", "node_modules", ".gradle", ".idea", "venv",
+                ".venv", "dist"}
+        for d, dirs, files in os.walk(root):
+            dirs[:] = [x for x in dirs if x not in skip and not x.startswith(".")]
+            rel = os.path.relpath(d, root)
+            paths.extend(n if rel == "." else f"{rel}/{n}" for n in files)
+    out = []
+    exclude = list(exclude) + list(DEFAULT_BY_NAME_EXCLUDE)
+    for p in sorted(set(paths)):
+        base = p.rsplit("/", 1)[-1]
+        if not any(fnmatch.fnmatch(base, g) for g in globs):
+            continue
+        if any(fnmatch.fnmatch(p, x.replace("**", "*")) for x in exclude):
+            continue
+        try:
+            if os.path.getsize(os.path.join(root, p)) > max_bytes:
+                continue
+        except OSError:
+            continue
+        out.append(p)
+    return out
+
+
+def names_in_strings(root: str, names: list[str], globs: list[str],
+                     properties: set[str] = frozenset(), exclude: list[str] = ()
+                     ) -> dict[str, str]:
+    """{name: first file it was seen in} for the names that appear where code refers to members
+    by name: inside string literals of .java files, or anywhere in the other files matching
+    globs. Bean property names (`properties`, from getX/setX) only count in .java when the
+    literal is an annotation argument (e.g. @JsonProperty("x")): plain strings such as "name"
+    or "description" are too common. One grep pass over the candidate files."""
     if not names:
-        return set()
+        return {}
     grep = shutil.which("grep")
     wanted = set(names)
     in_string = re.compile(r'"(?:[^"\\]|\\.)*"')
     ident = re.compile(r"[A-Za-z_$][\w$]*")
-    found: set[str] = set()
-    if not grep:
+    found: dict[str, str] = {}
+    files = candidate_files(root, globs, list(exclude))
+    if not grep or not files:
         return found
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:
         fh.write("\n".join(names) + "\n")
         pat = fh.name
     try:
-        args = [grep, "-rIwF", "-f", pat, "--null", "-n"]
-        args += [f"--include={g}" for g in globs]
-        args += ["--exclude-dir=" + d for d in (".git", "build", "target", "out",
-                                                 "node_modules", ".gradle", ".idea")]
-        args += ["--", "."]
-        proc = subprocess.run(args, cwd=root, capture_output=True)
-        for rec in proc.stdout.split(b"\n"):
-            path, _, rest = rec.partition(b"\0")
-            text = rest.partition(b":")[2].decode("utf-8", errors="replace")
-            chunks = [m.group(0) for m in in_string.finditer(text)] \
-                if path.endswith(b".java") else [text]
-            for chunk in chunks:
-                found.update(w for w in ident.findall(chunk) if w in wanted)
+        base = [grep, "-IwF", "-f", pat, "--null", "-n", "--"]
+        for chunk in _chunked(files):
+            proc = subprocess.run(base + chunk, cwd=root, capture_output=True)
+            for rec in proc.stdout.split(b"\n"):
+                path, _, rest = rec.partition(b"\0")
+                if not rest:
+                    continue
+                text = rest.partition(b":")[2].decode("utf-8", errors="replace")
+                src = path.decode("utf-8", errors="replace")
+                if src.endswith(".java"):
+                    annotation_line = text.lstrip().startswith("@")
+                    for lit in in_string.finditer(text):
+                        for w in ident.findall(lit.group(0)):
+                            if w in wanted and (w not in properties or annotation_line):
+                                found.setdefault(w, src)
+                else:
+                    for w in ident.findall(text):
+                        if w in wanted:
+                            found.setdefault(w, src)
     finally:
         os.unlink(pat)
     return found
+
+
+def _chunked(paths: list[str], max_bytes: int = 120_000) -> list[list[str]]:
+    out, cur, size = [], [], 0
+    for p in paths:
+        if cur and size + len(p) + 1 > max_bytes:
+            out.append(cur)
+            cur, size = [], 0
+        cur.append(p)
+        size += len(p) + 1
+    if cur:
+        out.append(cur)
+    return out

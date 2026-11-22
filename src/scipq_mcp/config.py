@@ -70,6 +70,7 @@ class Settings:
     table: list[tuple[set[str], str]] = field(default_factory=list)   # (annotations, attribute)
     column: list[tuple[set[str], str]] = field(default_factory=list)
     by_name_globs: list[str] = field(default_factory=lambda: ["*.java"])
+    by_name_exclude: list[str] = field(default_factory=list)    # path globs
     by_name_patterns: list[str] = field(default_factory=list)
     concept_attributes: list[str] = field(default_factory=list)
     tests_filter: str = ""               # template: {module} {task} {fqcn} {simple} {classes}
@@ -200,7 +201,7 @@ def settings_for(root: str, config_file: str | None = None, home: str | None = N
         if best is None or rank < best[0]:
             best = (rank, entry, kind)
     s = Settings(warnings=warnings)
-    if best is not None:
+    if best is not None and "profiles" in best[1]:
         entry, kind = best[1], best[2]
         s.profiles = list(entry.get("profiles", []))
         s.source = f"{path} ({kind} = {entry['match'][kind]!r})"
@@ -211,7 +212,9 @@ def settings_for(root: str, config_file: str | None = None, home: str | None = N
                     for a in ep.get("annotations", [])}
             if anns & present:
                 s.profiles.append(name)
-        s.source = "auto (annotations found in the project)"
+        s.source = "auto (annotations found in the project)" + (
+            f"; project settings from {path} ({best[2]} = {best[1]['match'][best[2]]!r})"
+            if best is not None else "")
     for name in s.profiles:
         data = profiles.get(name)
         if data is None:
@@ -243,6 +246,7 @@ def _apply(s: Settings, data: dict) -> None:
     for g in bn.get("globs", []):
         if g not in s.by_name_globs:
             s.by_name_globs.append(g)
+    s.by_name_exclude += list(bn.get("exclude", []))
     s.by_name_patterns += list(bn.get("patterns", []))
     s.concept_attributes += list(data.get("concepts", {}).get("attributes", []))
     t = data.get("tests", {})

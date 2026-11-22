@@ -145,6 +145,16 @@ def test_changed(tmp_path, sample_root, cache):
     assert "Entity#setState()" in out and "changed 10–15 (2 lines)" in out, out
     assert "Entity  " not in out and "class body" not in out
     assert "--tests 'com.example.app.ServiceTest'" in out
+    # A class annotation changed: reported, not expanded to every user of the class.
+    snap = repo / "core/src/main/java/com/example/model/Snapshot.java"
+    snap.write_text(snap.read_text().replace("@Getter\n", "@Getter // reviewed\n", 1))
+    snap_shard = repo / ("build/scip-targetroot/core/compileJava/META-INF/scip/core/src/main/"
+                         "java/com/example/model/Snapshot.java.scip")
+    st2 = os.stat(snap)
+    os.utime(snap_shard, (st2.st_atime + 5, st2.st_mtime + 5))
+    out = Service(str(repo), cache_dir=cache).changed()
+    assert "Snapshot  core/src/main/java/com/example/model/Snapshot.java:8  class annotation " \
+           "(framework behavior, not its API) changed (7)" in out, out
     new_test = repo / "app/src/test/java/com/example/app/NewTest.java"
     new_test.write_text("package com.example.app;\nclass NewTest {}\n")
     assert "untracked .java included" in Service(str(repo), cache_dir=cache).changed()

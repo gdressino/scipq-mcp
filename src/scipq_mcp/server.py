@@ -172,7 +172,9 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
     @tool
     def definition(symbol: Symbol, project_root: ProjectRoot = "") -> str:
         """Where a symbol is defined, with kind, signature, javadoc and what it overrides or
-        extends (like goToDefinition + hover). Lombok members point at what generates them."""
+        extends (like goToDefinition + hover). Lombok members point at what generates them.
+        JDK and library symbols come from the JDK's src.zip and the -sources.jar files in the
+        Gradle/Maven caches, saying which version."""
         return service.definition(symbol, project_root)
 
     @tool
@@ -180,7 +182,8 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
                max_lines: Annotated[int, Field(ge=1, le=5000,
                                                description="Maximum source lines")] = 200) -> str:
         """The exact source of a definition (method, field, class) with line numbers, so you do
-        not have to read the whole file."""
+        not have to read the whole file; also for JDK and library symbols (from their sources
+        jars)."""
         return service.source(symbol, project_root, max_lines)
 
     @tool
@@ -207,7 +210,8 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
                     description="Include members inherited from supertypes")] = True,
                 offset: Offset = 0, limit: Limit(300) = 300) -> str:
         """Members of a type: its own, then those inherited from each supertype (not private,
-        not constructors, not overridden), marking overrides and generated (Lombok) ones."""
+        not constructors, not overridden), marking overrides and generated (Lombok) ones;
+        library supertypes are listed from their sources jars."""
         return service.members(symbol, project_root, inherited, offset, limit)
 
     @tool
@@ -362,7 +366,7 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
              scope: Annotated[str, Field(description="From: module or package (prefix or glob)")]
              = "",
              target: Annotated[str, Field(description="To: module/package, or a symbol prefix "
-                                                      "such as `org/flowable/` with sites")] = "",
+                                                      "such as `org/apache/commons/` with sites")] = "",
              cycles: Annotated[bool, Field(description="Report cycles")] = True,
              sites: Annotated[bool, Field(description="List the call sites from scope to "
                                                       "target instead of counts")] = False,
