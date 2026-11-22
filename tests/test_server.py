@@ -3,8 +3,9 @@ import sys
 import anyio
 from mcp import ClientSession, StdioServerParameters, stdio_client
 
-EXPECTED_TOOLS = {"find_symbols", "references", "definition", "implementations", "supertypes",
-                  "outline", "callers", "callees"}
+EXPECTED_TOOLS = {"setup", "find_symbols", "references", "definition", "source",
+                  "implementations", "supertypes", "members", "family", "overloads", "outline",
+                  "callers", "callees", "annotated", "typed", "tests", "index_status", "batch"}
 
 
 def test_stdio_server(sample_root):
@@ -21,5 +22,12 @@ def test_stdio_server(sample_root):
                 assert "7 references in 4 files" in text
                 res = await session.call_tool("find_symbols", {"name": "setState"})
                 assert "2 definitions" in res.content[0].text
+                res = await session.call_tool("batch", {"queries": [
+                    {"tool": "typed", "args": {"symbol": "Entity", "categories": ["field"]}},
+                    {"tool": "source", "args": {"symbol": "Entity#setState"}}]})
+                text = res.content[0].text
+                assert "field 2" in text and "this.state = state;" in text
+                prompts = await session.list_prompts()
+                assert "setup" in {p.name for p in prompts.prompts}
 
     anyio.run(run)

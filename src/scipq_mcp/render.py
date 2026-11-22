@@ -4,6 +4,7 @@ and the line of code where it helps. Written for agents: few tokens, no decorati
 from __future__ import annotations
 
 from collections import OrderedDict
+from typing import Sequence, TypeVar
 
 from . import symbols as S
 from .queries import (
@@ -19,6 +20,21 @@ from .queries import (
 from .workspace import Freshness, Workspace
 
 MAX_LISTED_FILES = 5
+T = TypeVar("T")
+
+
+def page(items: Sequence[T], offset: int, limit: int) -> tuple[Sequence[T], str]:
+    """(items on this page, header suffix such as " (showing 1–100; next offset 100)")."""
+    offset, limit = max(0, offset), max(1, limit)
+    shown = items[offset:offset + limit]
+    total = len(items)
+    if not offset and len(shown) == total:
+        return shown, ""
+    if not shown:
+        return shown, f" (offset {offset} is past the end)"
+    end = offset + len(shown)
+    return shown, f" (showing {offset + 1}–{end}" + (f"; next offset {end})" if end < total
+                                                      else ")")
 
 
 def loc(d: Definition) -> str:
@@ -27,13 +43,10 @@ def loc(d: Definition) -> str:
 
 def definition_row(d: Definition, full_symbol: bool = True) -> str:
     name = d.symbol if full_symbol else S.short(d.symbol)
+    if d.container and d.info and d.info.display_name:
+        name = f"{d.info.display_name} (anonymous class member, in {S.short(d.container)})"
     sig = signature_line(d.info)
-    extra = []
-    if d.generated:
-        extra.append("generated")
-    if d.container:
-        extra.append(f"local, in {S.short(d.container)}")
-    tail = f"  ({', '.join(extra)})" if extra else ""
+    tail = "  (generated)" if d.generated else ""
     return f"{loc(d)}  {d.kind}  {name}" + (f"  — {sig}" if sig else "") + tail
 
 
@@ -46,58 +59,76 @@ def candidates(r: Resolution, limit: int = 30) -> str:
     return "\n".join(lines)
 
 
-def find(text: str, found: list[Definition], limit: int) -> str:
+def find(text: str, found: list[Definition], offset: int, limit: int) -> str:
     if not found:
         return f"no symbol defined in this project matches {text!r}"
-    head = f"{len(found)} definition{'s' if len(found) != 1 else ''} match {text!r}"
-    lines = [head + (f" (showing {limit})" if len(found) > limit else "")]
-    lines += [definition_row(d) for d in found[:limit]]
+    shown, suffix = page(found, offset, limit)
+    lines = [f"{len(found)} definition{'s' if len(found) != 1 else ''} match {text!r}{suffix}"]
+    lines += [definition_row(d) for d in shown]
     return "\n".join(lines)
 
 
+def container_label(symbol: str) -> str:
+    if not symbol:
+        return ""
+    k = S.kind_of(symbol)
+    if k == "type":
+        return f"{S.short(symbol)} initializer"
+    return S.short(symbol)
+
+
 def references(ws: Workspace, symbol: str, refs: list[Reference], defs: list[Definition],
-               offset: int, limit: int, include_definitions: bool) -> str:
-    files = OrderedDict()
-    for r in refs:
-        files.setdefault(r.location.source, []).append(r)
-    total = len(refs)
-    page = refs[offset:offset + limit]
-    head = (f"{S.short(symbol)} — {total} reference{'s' if total != 1 else ''} "
-            f"in {len(files)} file{'s' if len(files) != 1 else ''}")
-    if total > len(page) or offset:
-        end = offset + len(page)
-        head += f" (showing {offset + 1}–{end}" if page else " (offset past the end"
-        head += f"; next offset {end})" if end < total else ")"
+               offset: int, limit: int, include_definitions: bool,
+               show_containers: bool = True) -> str:
+    files = {r.location.source for r in refs}
+    shown, suffix = page(refs, offset, limit)
+    head = (f"{S.short(symbol)} — {len(refs)} reference{'s' if len(refs) != 1 else ''} "
+            f"in {len(files)} file{'s' if len(files) != 1 else ''}{suffix}")
     lines = [head]
     if include_definitions:
         for d in defs:
-            lines.append(f"defined at {loc(d)}")
+            lines.append(f"defined at {loc(d)}" + ("  (generated)" if d.generated else ""))
     by_file: OrderedDict[str, list[Reference]] = OrderedDict()
-    for r in page:
+    for r in shown:
         by_file.setdefault(r.location.source, []).append(r)
     for source, rs in by_file.items():
         lines.append(source)
         text = ws.source_lines(source, {r.location.range.start_line for r in rs})
-        counts: OrderedDict[int, int] = OrderedDict()
+        rows: OrderedDict[int, list[Reference]] = OrderedDict()
         for r in rs:
-            counts[r.location.range.start_line] = counts.get(r.location.range.start_line, 0) + 1
-        for line, n in counts.items():
-            mult = f" (×{n})" if n > 1 else ""
-            lines.append(f"  {line + 1}: {text.get(line, '')[:160]}{mult}")
+            rows.setdefault(r.location.range.start_line, []).append(r)
+        for line, group in rows.items():
+            mult = f" (×{len(group)})" if len(group) > 1 else ""
+            where = ""
+            if show_containers:
+                c = container_label(group[0].container)
+                if group[0].via_local:
+                    c += f" › {group[0].via_local}"
+                where = f"  [{c}]" if c else ""
+            lines.append(f"  {line + 1}: {text.get(line, '')[:160]}{mult}{where}")
     return "\n".join(lines)
 
 
-def definition(d: Definition | None, symbol: str) -> str:
+def definition(ws: Workspace, d: Definition | None, symbol: str) -> str:
     if d is None:
         return (f"{symbol} is not defined in this project (external, e.g. JDK or a dependency, "
                 "or its file was not compiled)")
-    lines = [d.symbol, f"{d.kind} at {loc(d)}" + ("  (generated)" if d.generated else "")]
-    if d.enclosing is not None:
-        lines[-1] += f", body {d.enclosing.start_line + 1}–{d.enclosing.end_line + 1}"
+    head = f"{d.kind} at {loc(d)}"
+    if d.generated_by is not None:
+        node = ws.source_lines(d.location.source, [d.generated_by.start_line]).get(
+            d.generated_by.start_line, "")
+        head += f"  (generated by: {node[:100]})" if node else "  (generated)"
+    elif d.generated:
+        head += "  (generated)"
+    elif d.enclosing is not None:
+        head += f", body {d.enclosing.start_line + 1}–{d.enclosing.end_line + 1}"
+    lines = [d.symbol, head]
+    if d.container:
+        lines.append(f"anonymous class member, in {d.container}")
     if d.info:
         if d.info.signature:
             lines.append(d.info.signature.strip())
-        if d.info.enclosing_symbol:
+        if d.info.enclosing_symbol and not S.is_local(d.info.enclosing_symbol):
             lines.append(f"enclosed by {d.info.enclosing_symbol}")
         impl = [r.symbol for r in d.info.relationships if r.is_implementation]
         if impl:
@@ -112,17 +143,15 @@ def definition(d: Definition | None, symbol: str) -> str:
 
 
 def implementations(symbol: str, impls: list[Implementation], direct_only: bool,
-                    limit: int) -> str:
-    shown = [i for i in impls if i.direct] if direct_only else impls
+                    offset: int, limit: int) -> str:
+    items = [i for i in impls if i.direct] if direct_only else impls
     n_direct = sum(1 for i in impls if i.direct)
     noun = "overrides" if S.is_method(symbol) else "subtypes"
     if not impls:
         return f"no {noun} of {S.short(symbol)} in this project"
-    head = f"{S.short(symbol)} — {len(impls)} {noun} ({n_direct} direct)"
-    if len(shown) > limit:
-        head += f" (showing {limit})"
-    lines = [head]
-    for i in shown[:limit]:
+    shown, suffix = page(items, offset, limit)
+    lines = [f"{S.short(symbol)} — {len(impls)} {noun} ({n_direct} direct){suffix}"]
+    for i in shown:
         row = definition_row(i.definition, full_symbol=False)
         if not i.direct:
             row += "  via " + ", ".join(S.short(v) for v in i.via[:3])
@@ -132,7 +161,8 @@ def implementations(symbol: str, impls: list[Implementation], direct_only: bool,
 
 def supertypes(symbol: str, d: Definition | None, supers: list[Supertype]) -> str:
     if d is None:
-        return definition(None, symbol)
+        return (f"{symbol} is not defined in this project (external, e.g. JDK or a dependency, "
+                "or its file was not compiled)")
     noun = "overrides" if S.is_method(symbol) else "supertypes"
     if not supers:
         return f"{S.short(symbol)} has no {noun} recorded (besides java.lang.Object)"
@@ -145,9 +175,10 @@ def supertypes(symbol: str, d: Definition | None, supers: list[Supertype]) -> st
     return "\n".join(lines)
 
 
-def outline(source: str, defs: list[Definition]) -> str:
-    lines = [f"{source} — {len(defs)} definitions"]
-    for d in defs:
+def outline(source: str, defs: list[Definition], offset: int, limit: int) -> str:
+    shown, suffix = page(defs, offset, limit)
+    lines = [f"{source} — {len(defs)} definitions{suffix}"]
+    for d in shown:
         depth = max(0, sum(1 for x in S.parse(d.symbol) if x.suffix == S.TYPE)
                     - (1 if S.is_type(d.symbol) else 0))
         sig = signature_line(d.info) or S.short(d.symbol)
@@ -156,7 +187,7 @@ def outline(source: str, defs: list[Definition]) -> str:
     return "\n".join(lines)
 
 
-def callers(root: CallNode, depth: int) -> str:
+def callers(root: CallNode, depth: int, offset: int, limit: int) -> str:
     total_nodes = 0
     total_sites = 0
 
@@ -170,38 +201,45 @@ def callers(root: CallNode, depth: int) -> str:
     count(root)
     if not root.children:
         return f"no callers of {S.short(root.symbol)} in this project"
+    shown, suffix = page(root.children, offset, limit)
     lines = [f"callers of {S.short(root.symbol)} (depth {depth}): {total_nodes} callers, "
-             f"{total_sites} call sites"]
+             f"{total_sites} call sites; {len(root.children)} direct{suffix}"]
 
-    def walk(n: CallNode, indent: int):
-        for c in n.children:
-            sites = c.sites
-            src = sites[0].location.source if sites else ""
-            nums = ", ".join(str(s.location.line) + (f" (in {s.via_local})" if s.via_local else "")
-                             for s in sites)
-            label = S.short(c.symbol)
-            kind = S.kind_of(c.symbol)
-            if kind == "type":
-                label += " (initializer block)"
-            elif kind == "term":
-                label += " (field initializer)"
-            via = f"  via {S.short(c.via)}" if c.via else ""
-            lines.append(f"{'  ' * indent}{label}  {src}:{nums}{via}")
-            walk(c, indent + 1)
-        if n.truncated:
-            lines.append(f"{'  ' * indent}… truncated (max_nodes)")
+    def row(c: CallNode, indent: int):
+        sites = c.sites
+        src = sites[0].location.source if sites else ""
+        nums = ", ".join(str(s.location.line) + (f" (in {s.via_local})" if s.via_local else "")
+                         for s in sites)
+        label = S.short(c.symbol)
+        kind = S.kind_of(c.symbol)
+        if kind == "type":
+            label += " (initializer block)"
+        elif kind == "term":
+            label += " (field initializer)"
+        via = f"  via {S.short(c.via)}" if c.via else ""
+        lines.append(f"{'  ' * indent}{label}  {src}:{nums}{via}")
+        for g in c.children:
+            row(g, indent + 1)
+        if c.truncated:
+            lines.append(f"{'  ' * (indent + 1)}… truncated (max_nodes)")
 
-    walk(root, 0)
+    for c in shown:
+        row(c, 0)
+    if root.truncated:
+        lines.append("… truncated (max_nodes)")
     return "\n".join(lines)
 
 
-def callees(symbol: str, d: Definition | None, out: list[Callee]) -> str:
+def callees(symbol: str, d: Definition | None, out: list[Callee], offset: int,
+            limit: int) -> str:
     if d is None:
-        return definition(None, symbol)
+        return (f"{symbol} is not defined in this project (external, e.g. JDK or a dependency, "
+                "or its file was not compiled)")
     if not out:
         return f"{S.short(symbol)} references no methods{'' if d.enclosing else ' (no body range)'}"
-    lines = [f"{S.short(symbol)} ({loc(d)}) — {len(out)} callees"]
-    for c in out:
+    shown, suffix = page(out, offset, limit)
+    lines = [f"{S.short(symbol)} ({loc(d)}) — {len(out)} callees{suffix}"]
+    for c in shown:
         lines.append(f"  {S.short(c.symbol)}  " + ", ".join(str(s.line) for s in c.sites))
     return "\n".join(lines)
 
@@ -221,9 +259,189 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None) -> st
         lines.append(f"WARNING: {len(f.uncompiled)} .java file{'s' if len(f.uncompiled) != 1 else ''} "
                      "created after the last compilation of their module, not indexed: "
                      + _some(f.uncompiled))
+    if f.tasks:
+        lines.append("  recompile to refresh: " + ", ".join(sorted(f.tasks)[:6])
+                     + (" …" if len(f.tasks) > 6 else "") + " (scipq-mcp does not build)")
     return "\n".join(lines)
 
 
 def _some(items: list[str]) -> str:
     more = f" (+{len(items) - MAX_LISTED_FILES} more)" if len(items) > MAX_LISTED_FILES else ""
     return ", ".join(items[:MAX_LISTED_FILES]) + more
+
+
+# --- extras ------------------------------------------------------------------------------------
+
+def source(src, symbol: str) -> str:
+    if src is None:
+        return (f"{symbol} is not defined in this project (external, e.g. JDK or a dependency, "
+                "or its file was not compiled)")
+    d = src.definition
+    head = f"{d.symbol} — {loc(d)}"
+    if d.generated:
+        head += "  (generated: no source body; this is the node that generates it)"
+    out = [head]
+    width = len(str(src.lines[-1][0])) if src.lines else 1
+    out += [f"{n:>{width}}  {t}" for n, t in src.lines]
+    if src.truncated:
+        out.append(f"… truncated; the body ends at line {src.end_line} (raise max_lines)")
+    return "\n".join(out)
+
+
+def members(type_symbol: str, groups, external: list[str], offset: int, limit: int) -> str:
+    rows: list[str] = []
+    own = groups[0]
+    for g in groups:
+        if g is own:
+            rows.append(f"own ({len(g.members)}):")
+        else:
+            hidden = f", {g.hidden} overridden" if g.hidden else ""
+            where = f"  {loc(g.definition)}" if g.definition else ""
+            rows.append(f"from {S.short(g.owner)} ({len(g.members)}{hidden}):{where}")
+        for m in g.members:
+            sig = signature_line(m.info) or S.short(m.symbol)
+            extra = []
+            if m.generated:
+                extra.append("generated")
+            over = g.overrides.get(m.symbol)
+            if over:
+                extra.append("overrides " + ", ".join(S.short(o) for o in over[:2]))
+            tail = f"  ({'; '.join(extra)})" if extra else ""
+            rows.append(f"  {m.location.line:>5}  {m.kind}: {sig}{tail}")
+    total = sum(len(g.members) for g in groups)
+    shown, suffix = page(rows, offset, limit)
+    lines = [f"{S.short(type_symbol)} — {len(own.members)} own members, "
+             f"{total - len(own.members)} inherited{suffix}"]
+    lines += list(shown)
+    if external:
+        lines.append("external supertypes (members not indexed): "
+                     + ", ".join(S.short(e) for e in external))
+    return "\n".join(lines)
+
+
+def annotated(annotation: str, items, offset: int, limit: int) -> str:
+    if not items:
+        return f"nothing in this project is annotated with {S.short(annotation)}"
+    shown, suffix = page(items, offset, limit)
+    lines = [f"@{S.short(annotation)} — {len(items)} uses{suffix}"]
+    for a in shown:
+        if a.definition is not None:
+            d = a.definition
+            name = S.short(d.symbol) if not S.is_local(d.symbol) else (
+                (d.info.display_name if d.info else d.symbol) + f" in {S.short(d.container)}")
+            lines.append(f"{a.location.source}:{a.location.line}  {d.kind} {name}  — {a.text}")
+        else:
+            lines.append(f"{a.location.source}:{a.location.line}  — {a.text}")
+    return "\n".join(lines)
+
+
+def typed(type_symbol: str, uses, categories: list[str] | None, offset: int, limit: int) -> str:
+    if categories:
+        uses = [u for u in uses if u.category in categories]
+    if not uses:
+        return f"no uses of {S.short(type_symbol)} in this project"
+    counts = OrderedDict()
+    for u in uses:
+        counts[u.category] = counts.get(u.category, 0) + 1
+    shown, suffix = page(uses, offset, limit)
+    lines = [f"{S.short(type_symbol)} — {len(uses)} uses: "
+             + ", ".join(f"{c} {n}" for c, n in counts.items()) + suffix]
+    current = None
+    for u in shown:
+        if u.category != current:
+            current = u.category
+            lines.append(f"{current}:")
+        owner = f"{S.short(u.owner)}  " if u.owner and u.category != "import" else ""
+        lines.append(f"  {u.location.source}:{u.location.line}  {owner}— {u.detail[:140]}")
+    return "\n".join(lines)
+
+
+def family(method: str, fam, ws: Workspace, offset: int, limit: int,
+           show_uses: bool = True) -> str:
+    if not fam:
+        return f"{S.short(method)}: no override family found"
+    total_uses = sum(len(m.uses) for m in fam)
+    lines = [f"{S.short(method)} — family of {len(fam)} methods, {total_uses} uses in total"]
+    for m in fam:
+        where = loc(m.definition) if m.definition else "external"
+        sig = signature_line(m.definition.info) if m.definition else ""
+        lines.append(f"  {m.relation:<10} {S.short(m.symbol)}  {where}  {len(m.uses)} uses"
+                     + (f"  — {sig}" if sig else ""))
+    if show_uses:
+        flat = [(m, r) for m in fam for r in m.uses]
+        shown, suffix = page(flat, offset, limit)
+        lines.append(f"uses{suffix}:")
+        texts: dict[str, dict[int, str]] = {}
+        for _m, r in shown:
+            texts.setdefault(r.location.source, set()).add(r.location.range.start_line)
+        texts = {s: ws.source_lines(s, ls) for s, ls in texts.items()}
+        current = None
+        for m, r in shown:
+            if m.symbol != current:
+                current = m.symbol
+                lines.append(f"  {S.short(m.symbol)}:")
+            t = texts[r.location.source].get(r.location.range.start_line, "")
+            lines.append(f"    {r.location.source}:{r.location.line}: {t[:140]}"
+                         + (f"  [{container_label(r.container)}]" if r.container else ""))
+    return "\n".join(lines)
+
+
+def overloads(method: str, items, ws: Workspace, offset: int, limit: int) -> str:
+    if not items:
+        return f"no overloads of {S.short(method)} found"
+    return family(method, items, ws, offset, limit).replace(
+        f"— family of {len(items)} methods", f"— {len(items)} overloads", 1)
+
+
+def by_name(hits, names: list[str]) -> str:
+    if not hits:
+        return f"possible uses by name ({', '.join(names)}): none"
+    lines = [f"possible uses by name, not in the index — check by hand ({', '.join(names)}): "
+             f"{len(hits)}"]
+    for h in hits:
+        lines.append(f"  {h.source}:{h.line}: {h.text}")
+    return "\n".join(lines)
+
+
+def status(st, root: str) -> str:
+    lines = [f"index of {root}: {st.shards} shards in {len(st.tasks)} compile tasks"]
+    for task, n in st.tasks:
+        lines.append(f"  {task}: {n}")
+    if st.orphans:
+        lines.append(f"orphan shards (source deleted, ignored): {len(st.orphans)}")
+    lines.append(f"stale (source edited after its shard): {len(st.stale)}"
+                 + (": " + _some(st.stale) if st.stale else ""))
+    lines.append(f"new since the last compilation, not indexed: {len(st.uncompiled)}"
+                 + (": " + _some(st.uncompiled) if st.uncompiled else ""))
+    if st.without_shard is None:
+        lines.append("files without a shard: unknown (not a git repository)")
+    else:
+        lines.append(f"git-tracked .java files without a shard: {len(st.without_shard)}"
+                     + (": " + _some(st.without_shard) if st.without_shard else "")
+                     + (" (some may be legitimately excluded: not in a source set, or "
+                        "empty/commented out)" if st.without_shard else ""))
+    if st.refresh:
+        lines.append("recompile to refresh: " + ", ".join(st.refresh)
+                     + " (scipq-mcp does not build)")
+    return "\n".join(lines)
+
+
+def tests(symbol: str, uses, task_of) -> str:
+    if not uses:
+        return f"no test class uses {S.short(symbol)} directly"
+    lines = [f"{S.short(symbol)} — used directly by {len(uses)} test classes"]
+    by_task: OrderedDict[str, list] = OrderedDict()
+    for t in uses:
+        by_task.setdefault(task_of(t.module), []).append(t)
+        lines.append(f"  {t.test_class}  {t.source}:" + ", ".join(map(str, t.lines)))
+    lines.append("run them (scipq-mcp does not):")
+    for task, ts in by_task.items():
+        if task.startswith(":"):
+            lines.append(f"  gradle {task} " + " ".join(f"--tests '{t.test_class}'" for t in ts))
+        elif task.endswith("/testCompile"):
+            module = task.rsplit("/", 1)[0]
+            names = ",".join(t.test_class.rsplit(".", 1)[-1] for t in ts)
+            lines.append(f"  mvn -pl {module} test -Dtest='{names}'")
+        else:
+            lines.append(f"  {task}: " + " ".join(t.test_class for t in ts))
+    return "\n".join(lines)

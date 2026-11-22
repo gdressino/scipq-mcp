@@ -483,6 +483,13 @@ class Document:
         b = self.buf
         return [decode_symbol_info(b, sp) for sp in self._containing(3, positions)]
 
+    def occurrences_matching(self, regex) -> list[Occurrence]:
+        """Occurrences that contain a match of the compiled bytes `regex`."""
+        start, end = self.span
+        positions = [m.start() for m in regex.finditer(self.buf, start, end)]
+        b = self.buf
+        return [decode_occurrence(b, sp) for sp in self._containing(2, positions)]
+
     def definitions(self) -> list[Occurrence]:
         """Definition occurrences. Peeks at symbol_roles without decoding the ranges of the
         (much more numerous) references."""

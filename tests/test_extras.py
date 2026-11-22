@@ -1,0 +1,135 @@
+import os
+
+import pytest
+
+from scipq_mcp import extras as X
+from scipq_mcp.queries import Navigator
+from scipq_mcp.service import Service
+from scipq_mcp.workspace import Workspace, build_task
+
+SET_STATE = "com/example/model/Entity#setState()."
+
+
+@pytest.fixture
+def nav(sample_root):
+    return Navigator(Workspace(sample_root))
+
+
+def test_source_keeps_indentation(nav):
+    src = X.source(nav, SET_STATE)
+    assert [n for n, _ in src.lines] == [14, 15, 16]
+    assert src.lines[1][1] == "        this.state = state;"
+    gen = X.source(nav, "com/example/model/Snapshot#getChangedAt().")
+    assert gen.definition.generated and gen.lines == [(9, "    protected Date changedAt;")]
+
+
+def test_members(nav):
+    groups, external = X.members(nav, "com/example/model/SubAccount#")
+    own = groups[0]
+    assert {m.symbol for m in own.members} == {"com/example/model/SubAccount#`<init>`().",
+                                               "com/example/model/SubAccount#uid()."}
+    entity = [g for g in groups if g.owner == "com/example/model/Entity#"][0]
+    names = {m.symbol.rsplit("#", 1)[1] for m in entity.members}
+    assert names == {"setState().", "getState().", "findById()."}  # uid() is overridden
+    assert entity.hidden == 1
+    assert external == []
+
+
+def test_annotated(nav):
+    items = X.annotated(nav, "java/lang/Override#")
+    assert {a.definition.symbol for a in items if a.definition and not
+            a.definition.symbol.startswith("local")} == {
+        "com/example/model/Account#uid().", "com/example/model/Entity#uid().",
+        "com/example/model/Group#uid().", "com/example/model/SubAccount#uid()."}
+    getter = X.annotated(nav, "lombok/Getter#")
+    assert [a.definition.symbol for a in getter] == ["com/example/model/Snapshot#"]
+
+
+def test_typed(nav):
+    uses = X.typed(nav, "com/example/model/Entity#")
+    cats = {}
+    for u in uses:
+        cats.setdefault(u.category, set()).add((os.path.basename(u.location.source),
+                                                u.location.line))
+    assert cats["field"] == {("Service.java", 10), ("Group.java", 7)}
+    assert ("Group.java", 9) in cats["parameter"]
+    assert cats["return type"] == {("Entity.java", 22)}
+    assert cats["supertype"] == {("Account.java", 3), ("Group.java", 6)}
+    assert cats["local variable"] == {("ServiceTest.java", 9)}
+    assert ("ServiceTest.java", 9) in cats["method body"]  # Entity.findById(…) initializer
+    assert len(cats["import"]) == 2
+
+
+def test_family_and_overloads(nav):
+    fam = {m.symbol: m.relation for m in X.family(nav, "com/example/model/Account#uid().")}
+    assert fam == {"com/example/model/Account#uid().": "this",
+                   "com/example/model/Entity#uid().": "ancestor",
+                   "com/example/model/Identifiable#uid().": "ancestor",
+                   "com/example/model/SubAccount#uid().": "descendant",
+                   "com/example/model/Group#uid().": "sibling"}
+    over = X.overloads(nav, "com/example/app/Service#process().")
+    assert [m.symbol for m in over] == ["com/example/app/Service#process().",
+                                        "com/example/app/Service#process(+1)."]
+    assert [len(m.uses) for m in over] == [1, 0]
+
+
+def test_uses_by_name(sample_copy):
+    path = os.path.join(sample_copy, "app/src/main/java/com/example/app/Keys.java")
+    with open(path, "w") as fh:
+        fh.write('class Keys { String k = "changedAt"; String other = "changedAtX"; }\n')
+    hits = X.uses_by_name(sample_copy, X.property_names(
+        "com/example/model/Snapshot#getChangedAt()."), ["*.java"], set())
+    assert [(h.source, h.line, h.name) for h in hits] == [
+        ("app/src/main/java/com/example/app/Keys.java", 1, "changedAt")]
+    assert X.property_names("com/example/model/Snapshot#isArchived().") == ["isArchived",
+                                                                            "archived"]
+
+
+def test_tests_and_tasks(nav):
+    uses = X.tests_using(nav, SET_STATE)
+    assert [(t.test_class, t.module, t.lines) for t in uses] == [
+        ("com.example.app.ServiceTest", "app/compileTestJava", [11])]
+    assert build_task("core/compileJava") == ":core:compileJava"
+    assert build_task("_root/compileJava") == ":compileJava"
+    assert build_task("a/b/compileQaTestJava") == ":a:b:compileQaTestJava"
+    assert X.test_task("app/compileTestJava") == ":app:test"
+    assert X.test_task("app/compileQaTestJava") == ":app:qaTest"
+
+
+def test_index_status(nav):
+    st = X.index_status(nav)
+    assert st.shards == 11
+    assert st.orphans == ["core/src/main/java/com/example/model/Gone.java"]
+    assert dict(st.tasks) == {"app/compileJava": 2, "app/compileTestJava": 1,
+                              "core/compileJava": 8}
+
+
+def test_generated_member_located_at_generating_node(nav):
+    d = nav.definition("com/example/model/Snapshot#isArchived().")
+    assert d.generated and d.location.line == 10 and d.generated_by is not None
+
+
+def test_pagination_and_batch(sample_root):
+    svc = Service(sample_root)
+    assert "(showing 3–4)" in svc.implementations("Identifiable#uid", limit=2, offset=2)
+    assert "(showing 1–1; next offset 1)" in svc.find("setState", limit=1)
+    out = svc.batch([{"tool": "references", "args": {"symbol": "Entity#setState"}},
+                     {"tool": "definition", "args": {"symbol": "Entity"}},
+                     {"tool": "nope"}])
+    assert "### 1. references Entity#setState" in out and "7 references" in out
+    assert "### 2. definition Entity" in out and "class at core/" in out
+    assert "unknown tool 'nope'" in out
+
+
+def test_setup(sample_root, tmp_path, monkeypatch):
+    monkeypatch.setenv("GRADLE_USER_HOME", str(tmp_path / "gradle-home"))
+    ready = Service(sample_root).setup()
+    assert "The tools are ready" in ready
+    (tmp_path / "settings.gradle").write_text("rootProject.name = 'shop'\n")
+    out = Service(str(tmp_path)).setup()
+    assert "Build: Gradle, root project 'shop'" in out
+    assert 'PROJECTS = ["shop"]' in out and "-Xplugin:scip" in out
+    (tmp_path / "settings.gradle").unlink()
+    (tmp_path / "pom.xml").write_text("<project/>")
+    assert "maven-compiler-plugin" in Service(str(tmp_path)).setup()
+    assert "Call the `setup` tool" in Service(str(tmp_path)).references("X")

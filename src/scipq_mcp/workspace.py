@@ -49,6 +49,7 @@ class Shard:
 class Freshness:
     stale: list[str] = field(default_factory=list)       # source newer than its shard
     uncompiled: list[str] = field(default_factory=list)  # .java with no shard, newer than its module's shards
+    tasks: set[str] = field(default_factory=set)         # compile tasks that would refresh them
 
     def __bool__(self) -> bool:
         return bool(self.stale or self.uncompiled)
@@ -80,9 +81,7 @@ class Workspace:
         self.root = os.path.abspath(root)
         self.shards_dir = os.path.join(self.root, shards_dir or DEFAULT_SHARDS_DIR)
         if not os.path.isdir(self.shards_dir):
-            raise WorkspaceError(
-                f"no SCIP shards under {self.shards_dir}: compile the project with the "
-                "scip-javac plugin enabled (run `scipq-mcp gradle-init` for a Gradle init script)")
+            raise WorkspaceError(f"no SCIP shards under {self.shards_dir}")
         self._scip_roots: list[tuple[str, str]] | None = None
         self._files: list[tuple[int, str]] | None = None
         self._root_prefixes: list[str] | None = None
@@ -286,15 +285,26 @@ class Workspace:
             newest[k] = max(newest.get(k, 0.0), mt)
             shard_of[source] = max(shard_of.get(source, 0.0), mt)
             task_of_dir.setdefault(source.rpartition("/")[0], k)
+        task_of_source: dict[str, int] = {}
+        for rel, _mt in shard_mtimes.items():
+            prefix, sep, source = rel.partition("/META-INF/scip/")
+            k = roots.get(prefix + "/META-INF/scip/") if sep else None
+            if k is not None:
+                task_of_source[source[:-len(SUFFIX)]] = k
+        modules = [m for _r, m in self.scip_roots()]
         for source, mt in java_mtimes.items():
             sm = shard_of.get(source)
             if sm is not None:
                 if mt > sm:
                     result.stale.append(source)
+                    k = task_of_source.get(source)
+                    if k is not None:
+                        result.tasks.add(build_task(modules[k]))
             else:
                 k = task_of_dir.get(source.rpartition("/")[0])
                 if k is not None and mt > newest.get(k, 0.0):
                     result.uncompiled.append(source)
+                    result.tasks.add(build_task(modules[k]))
         result.stale.sort()
         result.uncompiled.sort()
         return result
@@ -313,6 +323,7 @@ class Workspace:
                 sm = os.stat(os.path.join(self.scip_roots()[k][0], rel)).st_mtime
                 if os.stat(os.path.join(self.root, source)).st_mtime > sm:
                     result.stale.append(source)
+                    result.tasks.add(build_task(self.scip_roots()[k][1]))
             except OSError:
                 pass
         result.stale = sorted(set(result.stale))
@@ -492,6 +503,16 @@ def _gnu_find() -> str | None:
         return find if b"GNU findutils" in proc.stdout else None
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def build_task(module: str) -> str:
+    """Gradle task path for a "<module>/<task>" shards directory written by the init template
+    ("core/compileJava" -> ":core:compileJava", "_root/compileJava" -> ":compileJava");
+    other layouts are returned as they are."""
+    mod, _, task = module.rpartition("/")
+    if task.startswith("compile") and task.endswith("Java"):
+        return f":{task}" if mod in ("", "_root") else f":{mod.replace('/', ':')}:{task}"
+    return module
 
 
 GREP_JOBS = max(1, min(8, os.cpu_count() or 1))

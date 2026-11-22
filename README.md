@@ -54,12 +54,28 @@ one run with `-Pscip=false`. It only affects local builds that load the script (
 `~/.gradle/init.d`). It works with Lombok and other annotation processors, and with the Gradle
 build cache (the shards are declared as task outputs).
 
+### Maven
+
+Add the plugin configuration that `setup` prints (also in
+`src/scipq_mcp/templates/maven-compiler-plugin.xml`) to `maven-compiler-plugin`, and keep any
+other annotation processors (e.g. Lombok) listed in `annotationProcessorPaths`. Shards land in
+`build/scip-targetroot/<artifactId>/<compile|testCompile>/` under the directory that holds
+`.mvn/` (create an empty `.mvn/` at the repository root if there is none).
+
 ### Other builds
 
 Any build that runs `javac` can produce the same layout: put
 `org.scip-code:scip-javac` on the annotation processor path and pass
 `-Xplugin:scip -sourceroot:<project root> -targetroot:<root>/build/scip-targetroot/<module>/<task>`.
-A Maven template is planned.
+
+### First use from an agent
+
+An agent that has the server installed but a project without shards gets an answer that says
+so and points to the **`setup`** tool. `setup` inspects the build (Gradle or Maven, the root
+project name, the wrapper, init scripts already in `~/.gradle/init.d` and whether they apply)
+and returns the exact steps with the init script or pom snippet to add. The server
+instructions tell the agent to ask the user before changing the build. In Claude Code, the
+`setup` prompt (`/mcp__scipq__setup`) does the same on demand.
 
 ## Install
 
@@ -99,16 +115,27 @@ Server options: `--root DIR` (default project), `--shards-dir` (default
 
 | Tool | What it answers | Like |
 |---|---|---|
+| `setup` | how this project produces shards, whether they are fresh, the steps to enable them | — |
 | `find_symbols(name)` | definitions whose trailing names match | workspace/symbol |
-| `references(symbol, offset, limit, include_definitions)` | every use, grouped by file, with the line of code | findReferences |
+| `references(symbol, exclude_imports, by_name)` | every use, grouped by file, with the line of code and the enclosing method; optionally possible uses by name in strings | findReferences |
 | `definition(symbol)` | location, kind, signature, javadoc, what it overrides or extends | definition + hover |
+| `source(symbol)` | the exact source of a definition, with line numbers | — |
 | `implementations(symbol, direct_only)` | subtypes of a type or overrides of a method, at any depth; anonymous classes included | implementation |
 | `supertypes(symbol)` | supertypes of a type, or the methods a method overrides, direct first | type hierarchy |
+| `members(symbol, inherited)` | own and inherited members of a type, marking overrides and generated ones | — |
+| `family(symbol)` | a method's override family (ancestors, descendants, siblings) and the uses of each | — |
+| `overloads(symbol)` | every overload of a method and the uses of each | — |
 | `outline(file)` | definitions in a file, nested, with signatures; takes a path or a type name | documentSymbol |
 | `callers(symbol, depth, include_overridden)` | incoming calls grouped by enclosing method | incomingCalls |
 | `callees(symbol, include_fields, include_types)` | methods called from a body | outgoingCalls |
+| `annotated(annotation)` | definitions carrying an annotation, with its line (attribute values) | — |
+| `typed(symbol, categories)` | where a type is used: fields, parameters, return types, locals, supertypes, bodies, imports | — |
+| `tests(symbol)` | test classes that use a symbol directly, with a ready `--tests` / `-Dtest` filter | — |
+| `index_status()` | shards per task, stale and uncompiled files, tracked files without a shard, what to recompile | — |
+| `batch(queries)` | several of the above in one call | — |
 
-All tools are read-only and take an optional `project_root`.
+All tools are read-only and take an optional `project_root`. Lists take `offset`/`limit` and
+say `next offset N` when there is more.
 
 ### Naming symbols
 
@@ -123,6 +150,7 @@ Pass a name or an exact SCIP symbol:
 | `setState(+1)` | the second overload (SCIP numbers overloads `()`, `(+1)`, `(+2)`…) |
 | `Account#<init>` | constructors |
 | `com/example/model/Account#setState().` | the exact symbol, as printed by `find_symbols` |
+| `PersistenceManager#evict` | JDK and library symbols, found among the references |
 
 A name that matches one symbol is resolved, and the answer starts with
 `-- Account#setState → com/example/model/Account#setState().`. An ambiguous name returns the
@@ -150,8 +178,12 @@ the answer; `off` disables it.
   each type and method. A result is *direct* unless it also implements another result.
 - Callers: uses inside lambdas and anonymous classes count for the enclosing method; field
   initializers for the field; initializer blocks (static or instance) for the class.
-- Lombok: generated members are reported at their field and marked *generated*; the
-  references inside generated bodies are left out.
+- Lombok: generated members are located at the node that generates them (the field, or a
+  class-level `@Getter`/`@Setter`) and marked *generated*; the references inside generated
+  bodies are left out.
+- `references(by_name=true)` lists, separately, lines where the name (or its bean property
+  name) appears inside string literals or other files: map keys, query strings, templates. The
+  index cannot see those; check them by hand.
 
 ## Command line
 

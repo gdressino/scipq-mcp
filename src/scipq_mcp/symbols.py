@@ -165,6 +165,39 @@ def short(symbol: str) -> str:
     return "".join(out) or symbol
 
 
+def _format_name(name: str) -> str:
+    if name and all(c.isalnum() or c in "_$+-" for c in name):
+        return name
+    return "`" + name.replace("`", "``") + "`"
+
+
+def format_descriptors(descs: list[Descriptor]) -> str:
+    """Inverse of parse() for the descriptor part of a symbol."""
+    out = []
+    for d in descs:
+        if d.suffix == PARAMETER:
+            out.append(f"({_format_name(d.name)})")
+        elif d.suffix == TYPE_PARAMETER:
+            out.append(f"[{_format_name(d.name)}]")
+        elif d.suffix == METHOD:
+            out.append(f"{_format_name(d.name)}({d.disambiguator}).")
+        else:
+            out.append(_format_name(d.name) + d.suffix)
+    return "".join(out)
+
+
+def parent(symbol: str) -> str:
+    """The symbol that owns this one: ``…/Account#`` for ``…/Account#number.``,
+    ``…/Account#`` for ``…/Account#Builder#``; "" at the top."""
+    d = parse(symbol)
+    return format_descriptors(d[:-1]) if len(d) > 1 else ""
+
+
+def name_of(symbol: str) -> str:
+    d = parse(symbol)
+    return d[-1].name if d else symbol
+
+
 def package_of(symbol: str) -> str:
     return ".".join(x.name for x in parse(symbol) if x.suffix == NAMESPACE)
 
@@ -270,6 +303,11 @@ def definition_regex(q: Query) -> bytes:
     else:
         end = rb"(#|\.|\((\+[0-9]+)?\)\.)"
     return rb"(^|[^A-Za-z0-9_$])" + body + end + b"[\x28\x32\x1a\x22]"
+
+
+def occurrence_regex(q: Query) -> bytes:
+    """Like definition_regex, for occurrences (the tag after Occurrence.symbol)."""
+    return definition_regex(q)[:-len(b"[\x28\x32\x1a\x22]")] + b"[\x42\x18\x4a]"
 
 
 def definition_regex_exact(symbol: str) -> bytes:

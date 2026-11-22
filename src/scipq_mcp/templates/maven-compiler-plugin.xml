@@ -1,0 +1,38 @@
+<!-- scipq-mcp: write per-file SCIP shards on every compilation (scip-javac plugin).
+     Shards land in <root>/build/scip-targetroot/<artifactId>/<compile|testCompile>/.
+     ${maven.multiModuleProjectDirectory} is the directory holding .mvn/ (create an empty
+     .mvn/ at the repository root if there is none), so paths stay relative to the root even
+     when Maven runs in a submodule. -->
+<plugin>
+  <groupId>org.apache.maven.plugins</groupId>
+  <artifactId>maven-compiler-plugin</artifactId>
+  <configuration>
+    <annotationProcessorPaths combine.children="append">
+      <path>
+        <groupId>org.scip-code</groupId>
+        <artifactId>scip-javac</artifactId>
+        <version>0.14.2</version>
+      </path>
+      <!-- Listing processor paths turns off discovery on the classpath: add the others you
+           use here as well, e.g. org.projectlombok:lombok. -->
+    </annotationProcessorPaths>
+  </configuration>
+  <executions>
+    <execution>
+      <id>default-compile</id>
+      <configuration>
+        <compilerArgs combine.children="append">
+          <arg>-Xplugin:scip -sourceroot:${maven.multiModuleProjectDirectory} -targetroot:${maven.multiModuleProjectDirectory}/build/scip-targetroot/${project.artifactId}/compile</arg>
+        </compilerArgs>
+      </configuration>
+    </execution>
+    <execution>
+      <id>default-testCompile</id>
+      <configuration>
+        <compilerArgs combine.children="append">
+          <arg>-Xplugin:scip -sourceroot:${maven.multiModuleProjectDirectory} -targetroot:${maven.multiModuleProjectDirectory}/build/scip-targetroot/${project.artifactId}/testCompile</arg>
+        </compilerArgs>
+      </configuration>
+    </execution>
+  </executions>
+</plugin>

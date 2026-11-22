@@ -31,64 +31,81 @@ def _query_parser(sub) -> None:
                         "(results), or none (off)")
     t = q.add_subparsers(dest="tool", required=True)
 
-    p = t.add_parser("find")
-    p.add_argument("name")
-    p.add_argument("--limit", type=int, default=50)
+    def add(name, *positional, **flags):
+        sp = t.add_parser(name)
+        for a in positional:
+            sp.add_argument(a)
+        for flag, kw in flags.items():
+            sp.add_argument("--" + flag.replace("_", "-"), **kw)
+        return sp
 
-    p = t.add_parser("refs")
-    p.add_argument("symbol")
-    p.add_argument("--offset", type=int, default=0)
-    p.add_argument("--limit", type=int, default=100)
-    p.add_argument("--defs", action="store_true", help="also print the definition")
-
-    p = t.add_parser("def")
-    p.add_argument("symbol")
-
-    p = t.add_parser("impl")
-    p.add_argument("symbol")
-    p.add_argument("--direct", action="store_true")
-    p.add_argument("--limit", type=int, default=200)
-
-    p = t.add_parser("supertypes")
-    p.add_argument("symbol")
-
-    p = t.add_parser("outline")
-    p.add_argument("file")
-
-    p = t.add_parser("callers")
-    p.add_argument("symbol")
-    p.add_argument("--depth", type=int, default=1)
-    p.add_argument("--overridden", action="store_true",
-                   help="include calls to the methods it overrides")
-    p.add_argument("--max-nodes", type=int, default=200)
-
-    p = t.add_parser("callees")
-    p.add_argument("symbol")
-    p.add_argument("--fields", action="store_true")
-    p.add_argument("--types", action="store_true")
+    paging = {"offset": {"type": int, "default": 0}, "limit": {"type": int, "default": 100}}
+    add("find", "name", **paging)
+    add("refs", "symbol", **paging, defs={"action": "store_true"},
+        no_imports={"action": "store_true"}, by_name={"action": "store_true"},
+        globs={"nargs": "*", "default": None})
+    add("def", "symbol")
+    add("source", "symbol", max_lines={"type": int, "default": 200})
+    add("impl", "symbol", **paging, direct={"action": "store_true"})
+    add("supertypes", "symbol")
+    add("members", "symbol", **paging, own={"action": "store_true"})
+    add("family", "symbol", **paging, no_uses={"action": "store_true"})
+    add("overloads", "symbol", **paging)
+    add("outline", "file", **paging)
+    add("callers", "symbol", **paging, depth={"type": int, "default": 1},
+        overridden={"action": "store_true"}, max_nodes={"type": int, "default": 200})
+    add("callees", "symbol", **paging, fields={"action": "store_true"},
+        types={"action": "store_true"})
+    add("annotated", "annotation", **paging)
+    add("typed", "symbol", **paging, only={"nargs": "*", "default": None})
+    add("tests", "symbol")
+    add("status")
+    add("setup", no_template={"action": "store_true"})
 
 
 def _run_query(a) -> str:
     svc = Service(a.root, a.shards_dir, freshness=a.freshness)
-    if a.tool == "find":
-        return svc.find(a.name, limit=a.limit)
-    if a.tool == "refs":
+    t = a.tool
+    if t == "find":
+        return svc.find(a.name, limit=a.limit, offset=a.offset)
+    if t == "refs":
         return svc.references(a.symbol, offset=a.offset, limit=a.limit,
-                              include_definitions=a.defs)
-    if a.tool == "def":
+                              include_definitions=a.defs, exclude_imports=a.no_imports,
+                              by_name=a.by_name, by_name_globs=a.globs)
+    if t == "def":
         return svc.definition(a.symbol)
-    if a.tool == "impl":
-        return svc.implementations(a.symbol, direct_only=a.direct, limit=a.limit)
-    if a.tool == "supertypes":
+    if t == "source":
+        return svc.source(a.symbol, max_lines=a.max_lines)
+    if t == "impl":
+        return svc.implementations(a.symbol, direct_only=a.direct, limit=a.limit,
+                                   offset=a.offset)
+    if t == "supertypes":
         return svc.supertypes(a.symbol)
-    if a.tool == "outline":
-        return svc.outline(a.file)
-    if a.tool == "callers":
+    if t == "members":
+        return svc.members(a.symbol, inherited=not a.own, offset=a.offset, limit=a.limit)
+    if t == "family":
+        return svc.family(a.symbol, offset=a.offset, limit=a.limit, show_uses=not a.no_uses)
+    if t == "overloads":
+        return svc.overloads(a.symbol, offset=a.offset, limit=a.limit)
+    if t == "outline":
+        return svc.outline(a.file, offset=a.offset, limit=a.limit)
+    if t == "callers":
         return svc.callers(a.symbol, depth=a.depth, include_overridden=a.overridden,
-                           max_nodes=a.max_nodes)
-    if a.tool == "callees":
-        return svc.callees(a.symbol, include_fields=a.fields, include_types=a.types)
-    raise SystemExit(f"unknown tool {a.tool}")
+                           max_nodes=a.max_nodes, offset=a.offset, limit=a.limit)
+    if t == "callees":
+        return svc.callees(a.symbol, include_fields=a.fields, include_types=a.types,
+                           offset=a.offset, limit=a.limit)
+    if t == "annotated":
+        return svc.annotated(a.annotation, offset=a.offset, limit=a.limit)
+    if t == "typed":
+        return svc.typed(a.symbol, categories=a.only, offset=a.offset, limit=a.limit)
+    if t == "tests":
+        return svc.tests(a.symbol)
+    if t == "status":
+        return svc.index_status()
+    if t == "setup":
+        return svc.setup(include_template=not a.no_template)
+    raise SystemExit(f"unknown tool {t}")
 
 
 def main(argv: list[str] | None = None) -> None:

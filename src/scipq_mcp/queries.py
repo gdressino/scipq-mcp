@@ -46,6 +46,9 @@ class Definition:
     enclosing: Range | None = None
     container: str = ""      # for locals (anonymous classes): nearest non-local definition
     generated: bool = False
+    # Generated members (Lombok) are located at the node that generates them: the field, or
+    # a class-level annotation such as @Setter. `location` points there.
+    generated_by: Range | None = None
 
     @property
     def kind(self) -> str:
@@ -61,6 +64,7 @@ class Reference:
     roles: int
     container: str = ""      # enclosing non-local definition (the "caller")
     via_local: str = ""      # display name of a local definition in between (anonymous class method)
+    module: str = ""         # <module>/<task> of the shard (e.g. "app/compileTestJava")
 
 
 @dataclass(slots=True)
@@ -177,7 +181,21 @@ class DocView:
             return sym, via, bool(generated)
         return "", via, bool(generated)
 
+    def innermost(self, rng: Range) -> tuple[Range, str, bool, bool] | None:
+        """Innermost definition (locals included) whose enclosing range contains rng."""
+        for c in self.containers():
+            if c[0].contains(rng):
+                return c
+        return None
+
     def _make(self, o: Occurrence, info: SymbolInfo | None) -> Definition:
+        if self.structurally_generated(o):
+            # scip-javac puts the definition of a generated member at the first textual
+            # occurrence of its name after the generating node (possibly a call elsewhere in
+            # the file); the enclosing range is the node itself.
+            d = Definition(o.symbol, Location(self.source, o.enclosing), info, None,
+                           generated=True, generated_by=o.enclosing)
+            return d
         d = Definition(o.symbol, Location(self.source, o.range), info, o.enclosing,
                        generated=self.is_generated(o, info))
         if S.is_local(o.symbol):
@@ -299,9 +317,34 @@ class Navigator:
         syms = sorted({d.symbol for d in found})
         if len(syms) == 1:
             return Resolution(syms[0], found, f"{text} → {syms[0]}")
-        if not syms:
-            return Resolution(None, [], f"no symbol defined in this project matches {text!r}")
-        return Resolution(None, found, f"{text!r} matches {len(syms)} symbols; pass one of them")
+        if syms:
+            return Resolution(None, found,
+                              f"{text!r} matches {len(syms)} symbols; pass one of them")
+        external = self.find_external(text)
+        if len(external) == 1:
+            return Resolution(external[0], [], f"{text} → {external[0]} (external)")
+        if external:
+            shown = ", ".join(external[:20]) + (" …" if len(external) > 20 else "")
+            return Resolution(None, [], f"{text!r} matches {len(external)} external symbols "
+                                        f"(not defined in this project); pass one of: {shown}")
+        return Resolution(None, [], f"no symbol in this project matches {text!r}")
+
+    def find_external(self, text: str, max_docs: int = 200) -> list[str]:
+        """Symbols referenced but not defined in the project (JDK, libraries) whose names match:
+        looked up among occurrences, since they have no SymbolInformation in the shards."""
+        q = S.parse_query(text)
+        if not q.names:
+            return []
+        regex = S.occurrence_regex(q)
+        compiled = re.compile(regex)
+        found: set[str] = set()
+        for n, v in enumerate(self._views(self.ws.grep_regex(regex))):
+            if n >= max_docs:
+                break
+            for o in v.doc.occurrences_matching(compiled):
+                if S.matches(o.symbol, q):
+                    found.add(o.symbol)
+        return sorted(found)
 
     def require(self, text: str) -> str:
         r = self.resolve(text)
@@ -311,36 +354,60 @@ class Navigator:
 
     # --- references / definition ------------------------------------------------------------
 
+    def scan(self, syms: set[str]) -> Iterable[tuple[DocView, list[Occurrence]]]:
+        """(document, occurrences of `syms` in it) for every shard that mentions them."""
+        syms = {s for s in syms if s and not S.is_local(s)}
+        if not syms:
+            return
+        if len(syms) == 1:
+            mode, pat = S.reference_search(next(iter(syms)))
+            shards = self.ws.grep([pat]) if mode == "fixed" else self.ws.grep_regex(pat)
+        else:
+            needles = []
+            for s in syms:
+                if s.endswith("#"):
+                    needles.extend(s.encode() + t for t in OCCURRENCE_TAGS)
+                else:
+                    needles.append(s.encode())
+            shards = self.ws.grep(needles)
+        for v in self._views(shards):
+            occs = v.doc.occurrences_of(syms)
+            if occs:
+                yield v, occs
+
+    def _references(self, syms: set[str], with_definitions: bool = False
+                    ) -> tuple[list[Reference], list[Definition]]:
+        refs: list[Reference] = []
+        defs: list[Definition] = []
+        seen = set()
+        for v, occs in self.scan(syms):
+            defined = set()
+            for o in occs:
+                key = (o.symbol, v.source, o.range.start_line, o.range.start_char, o.is_definition)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if o.is_definition:
+                    defined.add(o.symbol)
+                    continue
+                container, via, generated = v.container_of(o.range)
+                if generated:
+                    continue
+                refs.append(Reference(o.symbol, Location(v.source, o.range), o.roles, container,
+                                      via, v.shard.module))
+            if with_definitions and defined:
+                defs.extend(v.definitions_of(defined))
+        refs.sort(key=lambda r: (r.location.source, r.location.range.start_line,
+                                 r.location.range.start_char))
+        defs.sort(key=lambda d: (d.location.source, d.location.range.start_line))
+        return refs, defs
+
     def references(self, symbol: str) -> tuple[list[Reference], list[Definition]]:
         """(references, definitions) of an exact symbol. Occurrences inside generated code
         (e.g. the body of a Lombok getter, reported at its field) are left out."""
         if S.is_local(symbol):
             raise QueryError("locals are only meaningful inside one file; use a global symbol")
-        mode, pat = S.reference_search(symbol)
-        shards = self.ws.grep([pat]) if mode == "fixed" else self.ws.grep_regex(pat)
-        refs: list[Reference] = []
-        defs: list[Definition] = []
-        seen = set()
-        for v in self._views(shards):
-            has_def = False
-            for o in v.doc.occurrences_of([symbol]):
-                key = (v.source, o.range.start_line, o.range.start_char, o.is_definition)
-                if key in seen:
-                    continue
-                seen.add(key)
-                if o.is_definition:
-                    has_def = True
-                    continue
-                container, via, generated = v.container_of(o.range)
-                if generated:
-                    continue
-                refs.append(Reference(symbol, Location(v.source, o.range), o.roles, container, via))
-            if has_def:
-                defs.extend(v.definitions_of([symbol]))
-        refs.sort(key=lambda r: (r.location.source, r.location.range.start_line,
-                                 r.location.range.start_char))
-        defs.sort(key=lambda d: (d.location.source, d.location.range.start_line))
-        return refs, defs
+        return self._references({symbol}, with_definitions=True)
 
     def definition(self, symbol: str) -> Definition | None:
         if S.is_local(symbol):
@@ -457,30 +524,9 @@ class Navigator:
         return root
 
     def _references_many(self, syms: set[str]) -> dict[str, list[Reference]]:
-        if len(syms) == 1:
-            s = next(iter(syms))
-            return {s: self.references(s)[0]}
-        needles = []
-        for s in syms:
-            if s.endswith("#"):
-                needles.extend(s.encode() + t for t in OCCURRENCE_TAGS)
-            else:
-                needles.append(s.encode())
         out: dict[str, list[Reference]] = {}
-        seen = set()
-        for v in self._views(self.ws.grep(needles)):
-            for o in v.doc.occurrences_of(syms):
-                if o.is_definition:
-                    continue
-                key = (o.symbol, v.source, o.range.start_line, o.range.start_char)
-                if key in seen:
-                    continue
-                seen.add(key)
-                container, via, generated = v.container_of(o.range)
-                if generated:
-                    continue
-                out.setdefault(o.symbol, []).append(
-                    Reference(o.symbol, Location(v.source, o.range), o.roles, container, via))
+        for r in self._references(syms)[0]:
+            out.setdefault(r.symbol, []).append(r)
         return out
 
     def callees(self, symbol: str, include_fields: bool = False,
