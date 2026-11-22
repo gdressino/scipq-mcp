@@ -80,7 +80,22 @@ def _new_server(instructions: str) -> Any:
         return _Server("scipq", instructions=instructions)
 
 
-def build(service: Service, active: bool = True) -> Any:
+CORE_TOOLS = {"setup", "find_symbols", "references", "definition", "source", "implementations",
+              "supertypes", "members", "callers", "callees", "outline", "tests", "index_status",
+              "batch"}
+
+
+def tool_selection(spec: str) -> set[str] | None:
+    """--tools: "all" (None: everything), "core", or a comma-separated list of tool names."""
+    spec = (spec or "all").strip()
+    if spec == "all":
+        return None
+    if spec == "core":
+        return set(CORE_TOOLS)
+    return {t.strip() for t in spec.split(",") if t.strip()} | {"setup"}
+
+
+def build(service: Service, active: bool = True, tools: set[str] | None = None) -> Any:
     """The MCP server. With active=False (not a Java project) it registers no tools, so a
     server installed for every project costs nothing where it does not apply."""
     if not active:
@@ -89,6 +104,8 @@ def build(service: Service, active: bool = True) -> Any:
 
     def tool(fn: Callable[..., str]) -> Callable[..., str]:
         """Registers an async wrapper that runs the blocking query in a worker thread."""
+        if tools is not None and fn.__name__ not in tools:
+            return fn
 
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs) -> str:
@@ -136,19 +153,21 @@ def build(service: Service, active: bool = True) -> Any:
         exclude_imports: Annotated[bool | None, Field(
             description="Leave out import lines (default: yes for types, no otherwise)")] = None,
         by_name: Annotated[bool, Field(
-            description="Append possible uses by name that the index cannot see: the name (or "
-                        "bean property name) inside string literals of .java files and in "
-                        "other files matching by_name_globs")] = False,
+            description="Append what the index cannot see: the name (or bean property name) "
+                        "inside string literals of .java files and in other files matching "
+                        "by_name_globs, and javadoc {@link}/@see mentions")] = False,
         by_name_globs: Annotated[list[str] | None, Field(
             description="File globs for by_name, e.g. ['*.java', '*.xml']. Default *.java")]
         = None,
+        scope: Annotated[str, Field(description="Only results in this package (prefix or glob) "
+                                                "or, with '/', source path glob")] = "",
     ) -> str:
         """Every use of a symbol (like findReferences), grouped by file, with the line of code
         and [the enclosing method]. Exact: only this symbol, not same-named members of other
         types. Overrides are separate symbols: see family / callers. Large results open with a
         summary."""
         return service.references(symbol, project_root, offset, limit, include_definitions,
-                                  exclude_imports, by_name, by_name_globs)
+                                  exclude_imports, by_name, by_name_globs, scope)
 
     @tool
     def definition(symbol: Symbol, project_root: ProjectRoot = "") -> str:
@@ -229,13 +248,15 @@ def build(service: Service, active: bool = True) -> Any:
             "Stop after this many callers in the whole tree"))] = 200,
         offset: Offset = 0,
         limit: Limit(100) = 100,
+        scope: Annotated[str, Field(description="Only results in this package (prefix or glob) "
+                                                "or, with '/', source path glob")] = "",
     ) -> str:
         """Incoming calls / uses grouped by the enclosing method (like incomingCalls). Exact:
         only this symbol, not same-named members of other types. Calls in lambdas and anonymous
         classes count for the enclosing method; field initializers for the field; initializer
         blocks for the class. offset/limit page the direct callers."""
         return service.callers(symbol, project_root, depth, include_overridden, max_nodes,
-                               offset, limit)
+                               offset, limit, scope)
 
     @tool
     def callees(
@@ -260,10 +281,12 @@ def build(service: Service, active: bool = True) -> Any:
         project_root: ProjectRoot = "",
         offset: Offset = 0,
         limit: Limit(100) = 100,
+        scope: Annotated[str, Field(description="Only results in this package (prefix or glob) "
+                                                "or, with '/', source path glob")] = "",
     ) -> str:
         """Classes, methods, fields and parameters carrying an annotation, with the annotation's
         line (which holds its attribute values)."""
-        return service.annotated(annotation, project_root, offset, limit)
+        return service.annotated(annotation, project_root, offset, limit, scope)
 
     @tool
     def typed(
@@ -275,11 +298,16 @@ def build(service: Service, active: bool = True) -> Any:
                         "initializer, import, other")] = None,
         offset: Offset = 0,
         limit: Limit(100) = 100,
+        scope: Annotated[str, Field(description="Only results in this package (prefix or glob) "
+                                                "or, with '/', source path glob")] = "",
+        modifiers: Annotated[list[str] | None, Field(
+            description="Only uses whose declaration has all these modifiers, e.g. "
+                        "['static'] with categories=['field']")] = None,
     ) -> str:
         """Where a type is used, by kind: fields, parameters, return types, local variables,
         try-with-resources, supertype clauses, method bodies (new, casts, static calls) and
         imports."""
-        return service.typed(symbol, project_root, categories, offset, limit)
+        return service.typed(symbol, project_root, categories, offset, limit, scope, modifiers)
 
     @tool
     def tests(symbol: Symbol, project_root: ProjectRoot = "",
@@ -421,7 +449,8 @@ def _slim_schemas(mcp: Any) -> None:
 
 def serve(root: str | None = None, shards_dir: str | None = None,
           freshness: str = "full", always: bool = False, cache_dir: str | None = None,
-          index_external: str = "all", config_file: str | None = None) -> None:
+          index_external: str = "all", config_file: str | None = None,
+          tools: str = "all") -> None:
     import os
     import sys
 
@@ -439,7 +468,7 @@ def serve(root: str | None = None, shards_dir: str | None = None,
         except (OSError, CacheError):
             pass
     build(Service(root, shards_dir, freshness, cache_dir, index_external, config_file),
-          active).run("stdio")
+          active, tool_selection(tools)).run("stdio")
 
 
 __all__ = ["build", "serve", "__version__"]

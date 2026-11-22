@@ -13,8 +13,19 @@ version and date when releasing.
   `tests(transitive=true)`.
 - `scipq-mcp cache status|prune|clear`; `--cache-dir`, `--index-external`.
 - Profiles (`junit`, `spring`, `jaxrs`, `vaadin`, `cucumber`, `jpa`, `jdo`) and a TOML project
-  configuration (`--config`, `$XDG_CONFIG_HOME/scipq/config.toml`): entry points for dead code,
-  entity tables, globs for uses by name, the command that runs tests.
+  configuration (`--config`, `$XDG_CONFIG_HOME/scipq/config.toml`): entry points (annotations,
+  supertypes, type names, packages) for dead code, entity tables, globs for uses by name, the
+  command that runs tests (`{module}`, `{task}`, `{tests}`, `{fqcn}`…).
+- `scope` on references, callers, typed and annotated (package, module, directory or path
+  glob); `modifiers` on typed (e.g. static fields); javadoc `{@link}`/`@see` mentions in
+  `references(by_name=true)`.
+- `--tools all|core|names` to expose fewer tools.
+
+### Fixed
+
+- Types that scip-javac reports at a string holding their name (e.g. `@Label("Invoice")`
+  above `class Invoice`) are located at their declaration; their annotations are found.
+- `callers` counts distinct callers (and tree nodes separately).
 
 ## 0.1.0 — 2026-11-22
 

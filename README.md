@@ -117,7 +117,8 @@ through `project_root`.
 
 Server options: `--root DIR` (default project), `--shards-dir` (default
 `build/scip-targetroot`), `--freshness full|results|off` (see below), `--always`,
-`--cache-dir DIR`, `--index-external all|methods|none`, `--config FILE`.
+`--cache-dir DIR`, `--index-external all|methods|none`, `--config FILE`,
+`--tools all|core|name,name…` (fewer tools, less context; `core` keeps the navigation basics).
 
 ## Tools
 
@@ -183,7 +184,8 @@ match = { root_project = "shop" }   # or { path = "~/src/shop*" } (worktrees), {
 profiles = ["jpa", "spring", "junit"]
 
 [project.tests]
-filter = "./run-tests.sh {task} --tests '{fqcn}'"   # {module} {task} {fqcn} {simple} {classes}
+filter = "./run-tests.sh {task} {tests}"   # {module} {task}; {tests} {classes} per module,
+                                           # or {fqcn} {simple} for one line per class
 
 [project.by_name]
 globs = ["*.java", "*.xml"]

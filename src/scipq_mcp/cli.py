@@ -52,7 +52,7 @@ def _query_parser(sub) -> None:
         no_imports={"action": "store_const", "const": True, "default": None},
         with_imports={"action": "store_const", "const": False, "dest": "no_imports"},
         by_name={"action": "store_true"},
-        globs={"nargs": "*", "default": None})
+        globs={"nargs": "*", "default": None}, scope={"default": ""})
     add("def", "symbol")
     add("source", "symbol", max_lines={"type": int, "default": 200})
     add("impl", "symbol", **paging, direct={"action": "store_true"})
@@ -62,11 +62,13 @@ def _query_parser(sub) -> None:
     add("overloads", "symbol", **paging)
     add("outline", "file", **paging)
     add("callers", "symbol", **paging, depth={"type": int, "default": 1},
-        overridden={"action": "store_true"}, max_nodes={"type": int, "default": 200})
+        overridden={"action": "store_true"}, max_nodes={"type": int, "default": 200},
+        scope={"default": ""})
     add("callees", "symbol", **paging, fields={"action": "store_true"},
         types={"action": "store_true"})
-    add("annotated", "annotation", **paging)
-    add("typed", "symbol", **paging, only={"nargs": "*", "default": None})
+    add("annotated", "annotation", **paging, scope={"default": ""})
+    add("typed", "symbol", **paging, only={"nargs": "*", "default": None},
+        scope={"default": ""}, modifiers={"nargs": "*", "default": None})
     add("tests", "symbol", transitive={"action": "store_true"},
         depth={"type": int, "default": 3})
     add("impact", "symbol", **paging, depth={"type": int, "default": 3},
@@ -75,7 +77,7 @@ def _query_parser(sub) -> None:
     add("path", "source", "target", max_depth={"type": int, "default": 6},
         limit={"type": int, "default": 3})
     add("changed", base={"default": "HEAD"}, staged={"action": "store_true"},
-        paths={"nargs": "*", "default": None}, depth={"type": int, "default": 2})
+        paths={"nargs": "*", "default": None}, depth={"type": int, "default": 3})
     add("deps", **paging, level={"choices": ["module", "package"], "default": "module"},
         scope={"default": ""}, target={"default": ""}, no_cycles={"action": "store_true"},
         sites={"action": "store_true"})
@@ -97,7 +99,7 @@ def _run_query(a) -> str:
     if t == "refs":
         return svc.references(a.symbol, offset=a.offset, limit=a.limit,
                               include_definitions=a.defs, exclude_imports=a.no_imports,
-                              by_name=a.by_name, by_name_globs=a.globs)
+                              by_name=a.by_name, by_name_globs=a.globs, scope=a.scope)
     if t == "def":
         return svc.definition(a.symbol)
     if t == "source":
@@ -117,14 +119,16 @@ def _run_query(a) -> str:
         return svc.outline(a.file, offset=a.offset, limit=a.limit)
     if t == "callers":
         return svc.callers(a.symbol, depth=a.depth, include_overridden=a.overridden,
-                           max_nodes=a.max_nodes, offset=a.offset, limit=a.limit)
+                           max_nodes=a.max_nodes, offset=a.offset, limit=a.limit,
+                           scope=a.scope)
     if t == "callees":
         return svc.callees(a.symbol, include_fields=a.fields, include_types=a.types,
                            offset=a.offset, limit=a.limit)
     if t == "annotated":
-        return svc.annotated(a.annotation, offset=a.offset, limit=a.limit)
+        return svc.annotated(a.annotation, offset=a.offset, limit=a.limit, scope=a.scope)
     if t == "typed":
-        return svc.typed(a.symbol, categories=a.only, offset=a.offset, limit=a.limit)
+        return svc.typed(a.symbol, categories=a.only, offset=a.offset, limit=a.limit,
+                         scope=a.scope, modifiers=a.modifiers)
     if t == "tests":
         return svc.tests(a.symbol, transitive=a.transitive, depth=a.depth)
     if t == "impact":
@@ -205,6 +209,9 @@ def main(argv: list[str] | None = None) -> None:
                    help="references to JDK/library symbols kept in the index (default: all)")
     s.add_argument("--config", help="project configuration file (default: "
                                     "$XDG_CONFIG_HOME/scipq/config.toml)")
+    s.add_argument("--tools", default="all",
+                   help="tools to expose: all (default), core (the navigation basics), or a "
+                        "comma-separated list of names; fewer tools cost less context")
     s.add_argument("--always", action="store_true",
                    help="expose the tools even when started outside a Java project (by default "
                         "the server stays idle there, with no tools)")
@@ -226,7 +233,7 @@ def main(argv: list[str] | None = None) -> None:
         serve(getattr(a, "root", None), getattr(a, "shards_dir", None),
               getattr(a, "freshness", "full"), getattr(a, "always", False),
               getattr(a, "cache_dir", None), getattr(a, "index_external", "all"),
-              getattr(a, "config", None))
+              getattr(a, "config", None), getattr(a, "tools", "all"))
     elif a.command == "gradle-init":
         sys.stdout.write(_template())
     elif a.command == "query":

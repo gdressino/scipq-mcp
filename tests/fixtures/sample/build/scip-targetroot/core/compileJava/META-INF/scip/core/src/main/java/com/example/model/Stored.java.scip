@@ -1,0 +1,12 @@
+ç
+0core/src/main/java/com/example/model/Stored.javajava/B
+java/lang/Bjava/lang/annotation/B)java/lang/annotation/Retention#B%java/B
+java/lang/Bjava/lang/annotation/B/%java/lang/annotation/RetentionPolicy#B+)java/lang/annotation/Retention#B
+/%java/lang/annotation/RetentionPolicy#B7-java/lang/annotation/RetentionPolicy#RUNTIME.B"-com/example/model/Stored#BZ
+ java/lang/String#B
+5!com/example/model/Stored#table().BR6"com/example/model/Stored#cached().B	R	#Ê
+com/example/model/Stored#SA persistence marker for the fixture: an entity annotation with a table attribute. "$
+ java/lang/annotation/Annotation#(2Stored:D"java*<@Retention(RetentionPolicy.RUNTIME)
+public @interface StoredT
+!com/example/model/Stored#table().(B2table:&"java*public abstract String table()X
+"com/example/model/Stored#cached().(B2cached:("java* public abstract boolean cached()"java

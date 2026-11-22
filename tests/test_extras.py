@@ -99,10 +99,10 @@ def test_tests_and_tasks(nav):
 
 def test_index_status(nav):
     st = X.index_status(nav)
-    assert st.shards == 15
+    assert st.shards == 18
     assert st.orphans == ["core/src/main/java/com/example/model/Gone.java"]
     assert dict(st.tasks) == {"app/compileJava": 3, "app/compileTestJava": 1,
-                              "core/compileJava": 11}
+                              "core/compileJava": 14}
 
 
 def test_generated_member_located_at_generating_node(nav):
@@ -231,3 +231,26 @@ def test_type_references_drop_imports_by_default(sample_root):
 def test_ambiguity_tip(sample_root):
     out = Service(sample_root).references("setState")
     assert "tip: add the owner type" in out
+
+
+def test_scope_filters(sample_root):
+    svc = Service(sample_root)
+    assert "in com.example.app: 6 references in 3 files" in svc.references(
+        "Entity#setState", scope="com.example.app")
+    out = svc.callers("Entity#setState", scope="core/*")
+    assert "Account#<init>()" in out and "Service#" not in out
+    assert "Store#load()" in svc.annotated("Deprecated", scope="com.example.model")
+    assert "nothing" in svc.annotated("Deprecated", scope="com.example.app") or \
+        "0 uses" in svc.annotated("Deprecated", scope="com.example.app")
+
+
+def test_typed_modifiers(nav):
+    svc = Service(nav.ws.root)
+    out = svc.typed("Entity", categories=["field"], modifiers=["static"])
+    assert "Service#DEFAULT" in out and "Group#members" not in out
+
+
+def test_javadoc_mentions(nav):
+    hits = X.javadoc_mentions(nav.ws.root, "com/example/model/Session#")
+    assert [(os.path.basename(h.source), h.line) for h in hits] == [("Store.java", 4)]
+    assert "javadoc mentions" in Service(nav.ws.root).references("Session", by_name=True)

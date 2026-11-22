@@ -27,7 +27,7 @@ from .cachedir import default_base, entry_dir
 from .scip import DEFINITION, KIND_NAMES, read_documents
 from .workspace import SUFFIX, Workspace
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
@@ -140,17 +140,26 @@ def extract(path: str, source: str, root: str) -> dict:
             if not o.roles & DEFINITION or not o.symbol:
                 continue
             gen = o.enclosing is not None and not o.enclosing.contains(o.range)
+            name_pos = (o.range.start_line, o.range.start_char)
+            if S.is_type(o.symbol) and o.enclosing is not None:
+                decl = declaration_line(lines(), o.enclosing.start_line, S.name_of(o.symbol))
+                if decl is not None and decl != o.range.start_line:
+                    name_pos = (decl, 0)
             if o.enclosing is not None:
                 e = o.enclosing
                 containers.append((e.start_line, e.start_char, e.end_line, e.end_char, o.symbol,
-                                   S.is_local_like(o.symbol), gen,
-                                   (o.range.start_line, o.range.start_char)))
+                                   S.is_local_like(o.symbol), gen, name_pos))
             if S.is_local_like(o.symbol) or o.symbol in defs_by_symbol:
                 continue
             info = infos.get(o.symbol)
             sig = info.signature if info else ""
             generated = gen or any(m in sig for m in _GENERATED)
             loc = o.enclosing if gen else o.range
+            if S.is_type(o.symbol) and o.enclosing is not None:
+                decl = declaration_line(lines(), o.enclosing.start_line, S.name_of(o.symbol))
+                if decl is not None and decl != o.range.start_line:
+                    from .scip import Range as _R
+                    loc = _R(decl, 0, decl, 0)
             kind = (KIND_NAMES.get(info.kind, "") if info else "") or S.kind_of(o.symbol)
             if S.is_type(o.symbol) and info is not None and not re.search(
                     r"\b(class|interface|enum|record|@interface)\b", sig):
@@ -219,6 +228,20 @@ def extract(path: str, source: str, root: str) -> dict:
                         out["anns"].append((o.symbol, target[4], r.start_line))
         out["refs"].extend((s, c, ",".join(v)) for (s, c), v in agg.items())
     return out
+
+
+_DECLARATION = r"\b(class|interface|enum|record|@\s*interface)\s+{name}\b"
+
+
+def declaration_line(lines: list[str], start: int, name: str, span: int = 80) -> int | None:
+    """0-based line of `class|interface|enum|record <name>` from `start`: scip-javac sometimes
+    reports a type at the first textual occurrence of its name (e.g. inside an annotation
+    string above the declaration)."""
+    rx = re.compile(_DECLARATION.format(name=re.escape(name)))
+    for k in range(start, min(start + span, len(lines))):
+        if rx.search(lines[k]):
+            return k
+    return None
 
 
 def _contains(c, start, end) -> bool:

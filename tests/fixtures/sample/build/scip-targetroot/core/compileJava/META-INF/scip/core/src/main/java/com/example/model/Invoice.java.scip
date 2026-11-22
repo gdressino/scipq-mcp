@@ -1,0 +1,12 @@
+õ
+1core/src/main/java/com/example/model/Invoice.java"com/example/model/Label#B.com/example/model/Invoice#BZ #com/example/model/Stored#B,"com/example/model/Stored#cached().B+!com/example/model/Stored#table().B1%com/example/model/Invoice#`<init>`().B	5!com/example/model/Invoice#number.B
+R
+<&com/example/model/Invoice#getNumber().BZ +!com/example/model/Invoice#number.BŸ
+com/example/model/Invoice#š scip-javac reports this type at the first textual occurrence of its name after the start of
+ its range: the string in @Label below, not the declaration.
+(2Invoice:Y"java*Q@Label("Invoice")
+@Stored(cached = true, table = "INVOICES")
+public class InvoiceK
+%com/example/model/Invoice#`<init>`().(	2<init>:"java*public Invoice()J
+!com/example/model/Invoice#number.(2number:"java*private long numberV
+&com/example/model/Invoice#getNumber().(2	getNumber:"java*public long getNumber()"java

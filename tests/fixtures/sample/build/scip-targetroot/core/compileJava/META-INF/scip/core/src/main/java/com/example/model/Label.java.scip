@@ -1,0 +1,10 @@
+Ÿ
+/core/src/main/java/com/example/model/Label.javajava/B
+java/lang/Bjava/lang/annotation/B)java/lang/annotation/Retention#B%java/B
+java/lang/Bjava/lang/annotation/B/%java/lang/annotation/RetentionPolicy#B+)java/lang/annotation/Retention#B
+/%java/lang/annotation/RetentionPolicy#B7-java/lang/annotation/RetentionPolicy#RUNTIME.B",com/example/model/Label#BZ java/lang/String#B
+4 com/example/model/Label#value().BRŽ
+com/example/model/Label#"$
+ java/lang/annotation/Annotation#(2Label:C"java*;@Retention(RetentionPolicy.RUNTIME)
+public @interface LabelS
+ com/example/model/Label#value().(B2value:&"java*public abstract String value()"java

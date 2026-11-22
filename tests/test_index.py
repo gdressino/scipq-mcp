@@ -30,7 +30,7 @@ def graph(sample_root, cache):
 def test_build_and_incremental_update(sample_copy, cache):
     ix = Index(Workspace(sample_copy), cache)
     first = ix.update()
-    assert first.built_from_scratch and first.processed == 14 and first.shards == 15
+    assert first.built_from_scratch and first.processed == 17 and first.shards == 18
     assert ix.update().processed == 0
     shard = os.path.join(sample_copy, "build/scip-targetroot/core/compileJava/META-INF/scip/"
                                       "core/src/main/java/com/example/model/Group.java.scip")
@@ -41,7 +41,7 @@ def test_build_and_incremental_update(sample_copy, cache):
     gone = Index(Workspace(sample_copy), cache).update()
     assert gone.removed == 1
     st = ix.status()
-    assert st["shards"] == 14 and st["refs"] > 0
+    assert st["shards"] == 17 and st["refs"] > 0
 
 
 def test_index_recreated_when_deleted(sample_root, cache):
@@ -84,9 +84,15 @@ def test_deps_and_cycles(graph):
     assert set(graph.deps("module")) == {("app", "core")}
     assert ("com.example.app", "com.example.model") in graph.deps("package")
     assert cycles([("a", "b"), ("b", "c"), ("c", "a"), ("c", "d")]) == [["a", "b", "c"]]
-    sites = graph.uses_between("com.example.app", "com.example.model")
+    sites, total = graph.uses_between("com.example.app", "com/example/model/")
+    assert total >= len(sites) > 0
     assert any(c == "com/example/app/Service#activate()." and t == SET_STATE
                for c, t, _src, _l in sites)
+    # Slashes or dots, and external targets with an explicit target.
+    assert graph.deps("package", "com/example/app/", "com/example/model/") == \
+        graph.deps("package", "com.example.app", "com.example.model")
+    assert ("com.example.model", "java.util") in graph.deps("package", "com.example.model",
+                                                           "java.util")
 
 
 def test_dead_code(graph, sample_root):
@@ -128,10 +134,20 @@ def test_changed(tmp_path, sample_root, cache):
                     "com/example/model/Entity.java.scip")
     st = os.stat(src)
     os.utime(shard, (st.st_atime + 5, st.st_mtime + 5))
+    # A javadoc line counts for the member it documents, not for the class (same line count,
+    # so the shard still matches the source).
+    text = src.read_text().replace("Changes the lifecycle state.", "Changes the state, now.")
+    src.write_text(text)
+    st = os.stat(src)
+    os.utime(shard, (st.st_atime + 5, st.st_mtime + 5))
     out = Service(str(repo), cache_dir=cache).changed()
-    assert "1 files, 1 definitions" in out
-    assert "Entity#setState()" in out and "changed 15" in out
+    assert "1 .java files, 1 definitions" in out, out
+    assert "Entity#setState()" in out and "changed 10–15 (2 lines)" in out, out
+    assert "Entity  " not in out and "class body" not in out
     assert "--tests 'com.example.app.ServiceTest'" in out
+    new_test = repo / "app/src/test/java/com/example/app/NewTest.java"
+    new_test.write_text("package com.example.app;\nclass NewTest {}\n")
+    assert "untracked .java included" in Service(str(repo), cache_dir=cache).changed()
     os.utime(src, (st.st_atime + 50, st.st_mtime + 50))  # edited again, not recompiled
     assert "stale" in Service(str(repo), cache_dir=cache).changed()
 
@@ -171,3 +187,44 @@ def test_prune_and_entries(sample_copy, cache):
     shutil.rmtree(sample_copy)
     removed = C.prune(cache)
     assert len(removed) == 1 and C.entries(cache) == []
+
+
+def test_type_reported_inside_annotation_string(sample_root, cache, tmp_path):
+    # scip-javac places Invoice at the "Invoice" string of @Label (line 7), above the
+    # declaration (line 10): definitions, annotations and the census use the declaration.
+    from scipq_mcp.queries import Navigator
+    nav = Navigator(Workspace(sample_root))
+    assert nav.definition("com/example/model/Invoice#").location.line == 10
+    ix = Index(Workspace(sample_root), cache)
+    ix.update()
+    g = Graph(ix)
+    assert [x[0] for x in g.annotated_with("com/example/model/Stored#")] == [
+        "com/example/model/Invoice#"]
+    g.close()
+    home = tmp_path / "home"
+    (home / "profiles").mkdir(parents=True)
+    (home / "profiles" / "fixture.toml").write_text(
+        '[profile]\nname = "fixture"\n[persistence]\nentity = ["com.example.model.Stored"]\n'
+        'table = { annotation = ["com.example.model.Stored"], attribute = "table" }\n')
+    (home / "config.toml").write_text(f'[[project]]\nmatch = {{ path = "{sample_root}" }}\n'
+                                      'profiles = ["fixture"]\n')
+    import os as _os
+    old = _os.environ.get("XDG_CONFIG_HOME")
+    _os.environ["XDG_CONFIG_HOME"] = str(tmp_path)
+    try:
+        (tmp_path / "scipq").symlink_to(home)
+        out = Service(sample_root, cache_dir=cache).census(category="entities")
+    finally:
+        if old is None:
+            del _os.environ["XDG_CONFIG_HOME"]
+        else:
+            _os.environ["XDG_CONFIG_HOME"] = old
+    assert "Invoice  INVOICES  core/src/main/java/com/example/model/Invoice.java:10" in out
+
+
+def test_dead_code_scopes(sample_root, cache):
+    svc = Service(sample_root, cache_dir=cache)
+    for scope in ("com.example.app", "com/example/app", "app", "app/src", "*/app/*"):
+        out = svc.dead_code(scope=scope)
+        assert "Report.java" in out and "Point.java" not in out, (scope, out)
+    assert "matches no definition" in svc.dead_code(scope="nope")

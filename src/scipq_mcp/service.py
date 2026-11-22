@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import fnmatch
 import os
+import re
 import sqlite3
 import threading
 from collections import OrderedDict
@@ -158,7 +159,8 @@ class Service:
 
     def _b_references(self, symbol: str, offset: int = 0, limit: int = DEFAULT_LIMIT,
                       include_definitions: bool = False, exclude_imports: bool | None = None,
-                      by_name: bool = False, by_name_globs: list[str] | None = None) -> Body:
+                      by_name: bool = False, by_name_globs: list[str] | None = None,
+                      scope: str = "") -> Body:
         def body(nav: Navigator):
             sym, note, (refs, defs) = self._resolved(nav, symbol, nav.references)
             accessor = X.record_accessor(nav, sym, defs)
@@ -171,7 +173,11 @@ class Service:
             drop_imports = S.is_type(sym) if exclude_imports is None else exclude_imports
             if drop_imports:  # by default for types: import lines are noise
                 refs = _drop_imports(nav, refs)
+            if scope:
+                refs = [r for r in refs if X.in_scope(r.container, r.location.source, scope)]
             text = render.references(nav.ws, sym, refs, defs, offset, limit, include_definitions)
+            if scope:
+                text = text.replace(" — ", f" — in {scope}: ", 1)
             if by_name:
                 names = X.property_names(sym)
                 exclude = {(r.location.source, r.location.line) for r in refs}
@@ -179,6 +185,8 @@ class Service:
                 globs = by_name_globs or self.settings(nav.ws.root).by_name_globs
                 hits = X.uses_by_name(nav.ws.root, names, globs, exclude)
                 text += "\n" + render.by_name(hits, names)
+                mentions = X.javadoc_mentions(nav.ws.root, sym)
+                text += "\n" + render.javadoc_mentions(mentions, sym)
             return note + text, {r.location.source for r in refs}
         return body
 
@@ -219,11 +227,15 @@ class Service:
         return body
 
     def _b_callers(self, symbol: str, depth: int = 1, include_overridden: bool = False,
-                   max_nodes: int = 200, offset: int = 0, limit: int = DEFAULT_LIMIT) -> Body:
+                   max_nodes: int = 200, offset: int = 0, limit: int = DEFAULT_LIMIT,
+                   scope: str = "") -> Body:
         def body(nav: Navigator):
             d = max(1, min(depth, 5))
             sym, note, root = self._resolved(
                 nav, symbol, lambda s: nav.callers(s, d, include_overridden, max(1, max_nodes)))
+            if scope:
+                root.children = [c for c in root.children if c.sites and X.in_scope(
+                    c.symbol, c.sites[0].location.source, scope)]
             srcs = set()
             stack = [root]
             while stack:
@@ -258,17 +270,28 @@ class Service:
             return note + render.members(sym, groups, external, offset, limit), srcs
         return body
 
-    def _b_annotated(self, annotation: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> Body:
+    def _b_annotated(self, annotation: str, offset: int = 0, limit: int = DEFAULT_LIMIT,
+                     scope: str = "") -> Body:
         def body(nav: Navigator):
             sym, note, items = self._resolved(nav, annotation, lambda s: X.annotated(nav, s))
+            if scope:
+                items = [a for a in items if X.in_scope(
+                    a.definition.symbol if a.definition else "", a.location.source, scope)]
             return (note + render.annotated(sym, items, offset, limit),
                     {a.location.source for a in items})
         return body
 
     def _b_typed(self, symbol: str, categories: list[str] | None = None, offset: int = 0,
-                 limit: int = DEFAULT_LIMIT) -> Body:
+                 limit: int = DEFAULT_LIMIT, scope: str = "",
+                 modifiers: list[str] | None = None) -> Body:
         def body(nav: Navigator):
             sym, note, uses = self._resolved(nav, symbol, lambda s: X.typed(nav, s))
+            if scope:
+                uses = [u for u in uses if X.in_scope(u.owner, u.location.source, scope)]
+            if modifiers:
+                want = [m.strip() for m in modifiers if m.strip()]
+                uses = [u for u in uses if all(re.search(r"\b" + re.escape(m) + r"\b", u.detail)
+                                               for m in want)]
             return (note + render.typed(sym, uses, categories, offset, limit),
                     {u.location.source for u in uses})
         return body
@@ -306,6 +329,10 @@ class Service:
                 sym, note = self._resolve(nav, symbol)
                 with self._graph(nav) as (g, stats):
                     nodes, _trunc = g.impact(sym, max(1, min(depth, 8)))
+                    st = self.settings(nav.ws.root, g)
+                    keep = self._test_classes(g, nodes, st)
+                allowed = {c for cs in keep.values() for c in cs}
+                nodes = [n for n in nodes if not n.test or _fqcn(n.symbol) in allowed]
                 text = render.tests_transitive(sym, nodes, depth, X.test_task, gradle, template)
                 return render.index_note(stats) + note + text, {n.source for n in nodes if n.test}
             sym, note, uses = self._resolved(nav, symbol, lambda s: X.tests_using(nav, s))
@@ -348,8 +375,38 @@ class Service:
             return render.index_note(stats) + note_a + note_b + render.path(a, b, paths), set()
         return body
 
+    def _test_classes(self, g, nodes, settings) -> OrderedDict[str, set[str]]:
+        """{module: {test class FQCN}} among the nodes that live in test code. With a test
+        profile active (e.g. junit), only classes that have a test-annotated member count."""
+        out: OrderedDict[str, set[str]] = OrderedDict()
+        real = g.classes_with(settings.test_annotations) if settings.test_annotations else None
+        for n in nodes:
+            if not n.test:
+                continue
+            top, pkg = S.top_level_type_name(n.symbol), S.package_of(n.symbol)
+            fqcn = f"{pkg}.{top}" if pkg else top
+            if real is not None and fqcn not in real:
+                continue
+            out.setdefault(n.module, set()).add(fqcn)
+        return out
+
+    def _tests_line(self, root: str, tests: OrderedDict[str, set[str]], template: str) -> str:
+        if not tests:
+            return ""
+        gradle = "./gradlew" if os.path.exists(os.path.join(root, "gradlew")) else "gradle"
+        if template:
+            body = [render.format_test_filter(template, mod, sorted(names))
+                    for mod, names in tests.items()]
+        else:
+            body = []
+            for mod, names in tests.items():
+                task = "test" if mod in (".", "") else ":" + mod.replace("/", ":") + ":test"
+                body.append(f"{gradle} {task} " + " ".join(f"--tests '{c}'"
+                                                          for c in sorted(names)))
+        return "tests to run (scipq-mcp does not):\n  " + "\n  ".join(body)
+
     def _b_changed(self, base: str = "HEAD", staged: bool = False,
-                   paths: list[str] | None = None, depth: int = 2) -> Body:
+                   paths: list[str] | None = None, depth: int = 3) -> Body:
         def body(nav: Navigator):
             with self._graph(nav) as (g, stats):
                 try:
@@ -358,31 +415,20 @@ class Service:
                     raise QueryError(str(e)) from e
                 nodes: dict[str, object] = {}
                 for sym in res["definitions"]:
-                    for n in g.impact(sym, max(1, min(depth, 6)))[0]:
+                    for n in g.impact(sym, max(1, min(depth, 8)))[0]:
                         nodes.setdefault(n.symbol, n)
-            gradle = "./gradlew" if os.path.exists(os.path.join(nav.ws.root, "gradlew")) \
-                else "gradle"
-            tests: OrderedDict[str, set[str]] = OrderedDict()
-            for n in nodes.values():
-                if n.test:
-                    top = S.top_level_type_name(n.symbol)
-                    pkg = S.package_of(n.symbol)
-                    tests.setdefault(n.module, set()).add(f"{pkg}.{top}" if pkg else top)
-            tests_line = ""
-            template = self.settings(nav.ws.root).tests_filter
-            if tests and template:
-                tests_line = "tests to run (scipq-mcp does not):\n  " + "\n  ".join(
-                    render.format_test_filter(template, mod, sorted(names))
-                    for mod, names in tests.items())
-            elif tests:
-                parts = []
-                for mod, names in tests.items():
-                    task = "test" if mod in (".", "") else ":" + mod.replace("/", ":") + ":test"
-                    parts.append(f"{gradle} {task} " + " ".join(f"--tests '{c}'"
-                                                              for c in sorted(names)))
-                tests_line = "tests to run (scipq-mcp does not):\n  " + "\n  ".join(parts)
+                st = self.settings(nav.ws.root, g)
+                # Changed test code is itself to be run.
+                for sym, e in res["definitions"].items():
+                    if e.get("test") and sym not in nodes:
+                        mod = next((m for _s, (src, m, _t) in g.shards().items()
+                                    if src == e["source"]), "")
+                        nodes[sym] = G.Node(sym, 0, "", e["source"], e["line"],
+                                            G.module_of(mod), True)
+                tests = self._test_classes(g, nodes.values(), st)
+            tests_line = self._tests_line(nav.ws.root, tests, st.tests_filter)
             text = render.changed(res, base if not staged else f"{base} (staged)",
-                                  list(nodes.values()), tests_line)
+                                  [n for n in nodes.values() if n.depth > 0], tests_line, depth)
             return render.index_note(stats) + text, {e["source"] for e in
                                                      res["definitions"].values()}
         return body
@@ -397,12 +443,13 @@ class Service:
                 if sites:
                     if not scope or not target:
                         raise QueryError("sites=true needs both scope and target")
-                    rows = g.uses_between(scope, target, max(1, limit))
+                    rows, total = g.uses_between(scope, target, max(1, limit))
                     return render.index_note(stats) + render.uses_between(scope, target, rows,
-                                                                          limit), set()
+                                                                          total), set()
                 edges = g.deps(level, scope, target)
                 cyc = G.cycles(edges.keys()) if cycles else None
-            return render.index_note(stats) + render.deps(edges, level, cyc, offset, limit), set()
+            return render.index_note(stats) + render.deps(edges, level, cyc, offset, limit,
+                                                          target), set()
         return body
 
     def _b_dead_code(self, scope: str = "", public_is_api: bool = False,
@@ -411,11 +458,17 @@ class Service:
         def body(nav: Navigator):
             with self._graph(nav) as (g, stats):
                 st = self.settings(nav.ws.root, g)
+                if scope and not g.in_scope_count(scope):
+                    raise QueryError(f"scope {scope!r} matches no definition: use a package "
+                                     "(com.example.billing), a module or directory (billing, "
+                                     "billing/src) or a path glob (*/model/*)")
+                globs = tuple(dict.fromkeys(list(G.DEAD_CODE_GLOBS) + st.by_name_globs))
                 rows = g.dead_code(scope, public_is_api, include_tests,
                                    entry_annotations=st.entry_annotations,
                                    entry_supertypes=st.entry_supertypes,
                                    entry_type_names=st.entry_type_names,
-                                   by_name_globs=st.by_name_globs, root=nav.ws.root)
+                                   entry_packages=st.entry_packages,
+                                   by_name_globs=globs, root=nav.ws.root)
             note = f"-- profiles: {', '.join(st.profiles) or 'none'} ({st.source or 'none'})\n"
             return render.index_note(stats) + note + render.dead_code(rows, offset, limit), set()
         return body
@@ -462,9 +515,10 @@ class Service:
     def references(self, symbol: str, project_root: str | None = None, offset: int = 0,
                    limit: int = DEFAULT_LIMIT, include_definitions: bool = False,
                    exclude_imports: bool | None = None, by_name: bool = False,
-                   by_name_globs: list[str] | None = None) -> str:
+                   by_name_globs: list[str] | None = None, scope: str = "") -> str:
         return self._run(project_root, self._b_references(
-            symbol, offset, limit, include_definitions, exclude_imports, by_name, by_name_globs))
+            symbol, offset, limit, include_definitions, exclude_imports, by_name, by_name_globs,
+            scope))
 
     def definition(self, symbol: str, project_root: str | None = None) -> str:
         return self._run(project_root, self._b_definition(symbol))
@@ -483,9 +537,9 @@ class Service:
 
     def callers(self, symbol: str, project_root: str | None = None, depth: int = 1,
                 include_overridden: bool = False, max_nodes: int = 200, offset: int = 0,
-                limit: int = DEFAULT_LIMIT) -> str:
+                limit: int = DEFAULT_LIMIT, scope: str = "") -> str:
         return self._run(project_root, self._b_callers(symbol, depth, include_overridden,
-                                                       max_nodes, offset, limit))
+                                                       max_nodes, offset, limit, scope))
 
     def callees(self, symbol: str, project_root: str | None = None,
                 include_fields: bool = False, include_types: bool = False, offset: int = 0,
@@ -501,13 +555,15 @@ class Service:
         return self._run(project_root, self._b_members(symbol, inherited, offset, limit))
 
     def annotated(self, annotation: str, project_root: str | None = None, offset: int = 0,
-                  limit: int = DEFAULT_LIMIT) -> str:
-        return self._run(project_root, self._b_annotated(annotation, offset, limit))
+                  limit: int = DEFAULT_LIMIT, scope: str = "") -> str:
+        return self._run(project_root, self._b_annotated(annotation, offset, limit, scope))
 
     def typed(self, symbol: str, project_root: str | None = None,
               categories: list[str] | None = None, offset: int = 0,
-              limit: int = DEFAULT_LIMIT) -> str:
-        return self._run(project_root, self._b_typed(symbol, categories, offset, limit))
+              limit: int = DEFAULT_LIMIT, scope: str = "",
+              modifiers: list[str] | None = None) -> str:
+        return self._run(project_root, self._b_typed(symbol, categories, offset, limit, scope,
+                                                     modifiers))
 
     def family(self, symbol: str, project_root: str | None = None, offset: int = 0,
                limit: int = DEFAULT_LIMIT, show_uses: bool = True) -> str:
@@ -532,7 +588,7 @@ class Service:
         return self._run(project_root, self._b_path(source, target, max_depth, limit))
 
     def changed(self, project_root: str | None = None, base: str = "HEAD", staged: bool = False,
-                paths: list[str] | None = None, depth: int = 2) -> str:
+                paths: list[str] | None = None, depth: int = 3) -> str:
         return self._run(project_root, self._b_changed(base, staged, paths, depth))
 
     def deps(self, project_root: str | None = None, level: str = "module", scope: str = "",
@@ -596,6 +652,11 @@ class Service:
         if not bodies:
             return "error: no queries"
         return self._run(project_root, *bodies)
+
+
+def _fqcn(symbol: str) -> str:
+    top, pkg = S.top_level_type_name(symbol), S.package_of(symbol)
+    return f"{pkg}.{top}" if pkg else top
 
 
 def _drop_imports(nav: Navigator, refs: list) -> list:

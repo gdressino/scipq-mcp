@@ -246,9 +246,28 @@ class DocView:
                        generated=self.is_generated(o, info))
         if S.is_local(o.symbol):
             d.container = self.container_of(o.range)[0]
+        if S.is_type(o.symbol) and o.enclosing is not None:
+            decl = self.declaration_line(o)
+            if decl is not None and decl != o.range.start_line:
+                d.location = Location(self.source, Range(decl, 0, decl, 0))
         if info is not None and S.is_type(o.symbol) and not _DECL_KEYWORD.search(info.signature):
             self._fix_type_declaration(d)
         return d
+
+    def declaration_line(self, o: Occurrence) -> int | None:
+        """Where a type is really declared (scip-javac may report the first textual occurrence
+        of its name, e.g. inside an annotation string above the declaration)."""
+        if not self.root or o.enclosing is None:
+            return None
+        from .index import declaration_line
+
+        try:
+            with open(os.path.join(self.root, self.source), encoding="utf-8",
+                      errors="replace") as fh:
+                lines = fh.read().split("\n")
+        except OSError:
+            return None
+        return declaration_line(lines, o.enclosing.start_line, S.name_of(o.symbol))
 
     def _fix_type_declaration(self, d: Definition) -> None:
         """scip-javac writes records as `public static final Name`, without the keyword or the

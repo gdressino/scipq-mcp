@@ -64,6 +64,8 @@ class Settings:
     entry_annotations: set[str] = field(default_factory=set)   # SCIP symbols
     entry_supertypes: set[str] = field(default_factory=set)
     entry_type_names: list[str] = field(default_factory=list)  # globs on simple names
+    entry_packages: list[str] = field(default_factory=list)    # packages used from outside
+    test_annotations: set[str] = field(default_factory=set)    # entry points of kind "test"
     entity_annotations: set[str] = field(default_factory=set)
     table: list[tuple[set[str], str]] = field(default_factory=list)   # (annotations, attribute)
     column: list[tuple[set[str], str]] = field(default_factory=list)
@@ -224,6 +226,9 @@ def settings_for(root: str, config_file: str | None = None, home: str | None = N
 def _apply(s: Settings, data: dict) -> None:
     for ep in data.get("entry_points", []):
         s.entry_annotations |= {to_symbol(a) for a in ep.get("annotations", [])}
+        s.entry_packages += list(ep.get("packages", []))
+        if ep.get("kind") == "test":
+            s.test_annotations |= {to_symbol(a) for a in ep.get("annotations", [])}
         s.entry_supertypes |= {to_symbol(t) for t in ep.get("supertypes", [])}
         s.entry_type_names += list(ep.get("type_names", []))
     p = data.get("persistence", {})

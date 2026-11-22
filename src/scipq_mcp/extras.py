@@ -71,6 +71,55 @@ def record_accessor(nav: Navigator, symbol: str, defs: list[Definition]) -> str:
     return S.parent(symbol) + S.format_descriptors([S.Descriptor(S.name_of(symbol), S.METHOD)])
 
 
+def in_scope(symbol: str, source: str, scope: str) -> bool:
+    """`scope` is a package (prefix, e.g. `com.example.billing`, or glob) or, when it contains
+    a '/', a source path glob (`*/billing/*`, `core/src/**`)."""
+    if not scope:
+        return True
+    if "/" in scope or scope.endswith(".java"):
+        pattern = scope.replace("**", "*")
+        return fnmatch.fnmatch(source, pattern) or source.startswith(scope.rstrip("*"))
+    pkg = S.package_of(symbol) if symbol else ""
+    if any(c in scope for c in "*?["):
+        return fnmatch.fnmatch(pkg, scope.replace("**", "*"))
+    return pkg == scope or pkg.startswith(scope + ".")
+
+
+_JAVADOC_TAG = re.compile(r"(\{@(?:link|linkplain)\s+|@see\s+|@throws\s+|@exception\s+)"
+                          r"([\w.$]*(?:#[\w$]+(?:\([^)]*\))?)?)")
+
+
+def javadoc_mentions(root: str, symbol: str, limit: int = 100) -> list[NameHit]:
+    """{@link X}, {@link X#m}, @see X… that point at the symbol: javadoc is not indexed."""
+    d = S.parse(symbol)
+    if not d:
+        return []
+    if S.is_type(symbol):
+        type_name, member = d[-1].name, ""
+    else:
+        type_name = S.name_of(S.parent(symbol)) if S.parent(symbol) else ""
+        member = S.name_of(symbol)
+    needle = member or type_name
+    if not needle:
+        return []
+    out = []
+    for source, line, text in _grep_words(root, [needle], ["*.java"]):
+        for m in _JAVADOC_TAG.finditer(text):
+            ref = m.group(2)
+            target, _, mem = ref.partition("#")
+            simple = target.rsplit(".", 1)[-1]
+            if member:
+                ok = mem.split("(")[0] == member and simple in ("", type_name)
+            else:
+                ok = simple == type_name
+            if ok:
+                out.append(NameHit(source, line, text.strip()[:160], ref))
+                break
+        if len(out) >= limit:
+            break
+    return out
+
+
 # --- members ----------------------------------------------------------------------------------
 
 @dataclass
@@ -162,8 +211,14 @@ def annotated(nav: Navigator, annotation: str) -> list[Annotated]:
                 continue
             best = None
             for dd in defs:
-                if dd.enclosing.contains(o.range) and (dd.range.start_line, dd.range.start_char) \
-                        > (o.range.start_line, o.range.start_char):
+                if not dd.enclosing.contains(o.range):
+                    continue
+                pos = (dd.range.start_line, dd.range.start_char)
+                if S.is_type(dd.symbol):
+                    decl = v.declaration_line(dd)
+                    if decl is not None and decl != dd.range.start_line:
+                        pos = (decl, 0)
+                if pos > (o.range.start_line, o.range.start_char):
                     if best is None or dd.enclosing.size() < best.enclosing.size():
                         best = dd
             definition = v._make(best, v.info(best.symbol)) if best is not None else None

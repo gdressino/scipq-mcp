@@ -61,3 +61,11 @@ def test_active_in_uncompiled_java_project(tmp_path):
     (tmp_path / "pom.xml").write_text("<project/>")
     tools, _ = _tools(["serve"], cwd=str(tmp_path))
     assert "setup" in tools and "references" in tools
+
+
+def test_tools_selection(sample_root):
+    core, _ = _tools(["serve", "--root", sample_root, "--tools", "core"], cwd=sample_root)
+    assert "references" in core and "impact" not in core and "setup" in core
+    some, _ = _tools(["serve", "--root", sample_root, "--tools", "impact,references"],
+                     cwd=sample_root)
+    assert some == {"impact", "references", "setup"}

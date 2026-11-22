@@ -251,9 +251,18 @@ def callers(root: CallNode, depth: int, offset: int, limit: int) -> str:
     count(root)
     if not root.children:
         return f"no callers of {S.short(root.symbol)} in this project"
+    distinct = set()
+
+    def collect(n: CallNode):
+        for c in n.children:
+            distinct.add(c.symbol)
+            collect(c)
+
+    collect(root)
     shown, suffix = page(root.children, offset, limit)
-    lines = [f"callers of {S.short(root.symbol)} (depth {depth}): {total_nodes} callers, "
-             f"{total_sites} call sites; {len(root.children)} direct{suffix}"]
+    nodes = f" ({total_nodes} tree nodes)" if total_nodes != len(distinct) else ""
+    lines = [f"callers of {S.short(root.symbol)} (depth {depth}): {len(distinct)} distinct "
+             f"callers{nodes}, {total_sites} call sites; {len(root.children)} direct{suffix}"]
 
     def row(c: CallNode, indent: int):
         sites = c.sites
@@ -493,15 +502,18 @@ def status(st, root: str) -> str:
 
 
 def format_test_filter(template: str, module: str, classes: list[str]) -> str:
-    """A configured test command: {module} (`a:b`), {task} (`:a:b:test`), and per class
-    {fqcn} / {simple}, or {classes} (all FQCNs, space-separated) for one line per module."""
+    """A configured test command: {module} (`a:b`), {task} (`:a:b:test`); per class {fqcn} /
+    {simple} (one line per class); or, for one line per module, {classes} (FQCNs separated by
+    spaces) or {tests} (`--tests 'A' --tests 'B'`)."""
     mod = module.replace("/", ":") if module not in (".", "") else ""
     task = f":{mod}:test" if mod else "test"
+    tests = " ".join(f"--tests '{c}'" for c in classes)
     if "{fqcn}" in template or "{simple}" in template:
-        return "\n  ".join(template.format(module=mod, task=task, fqcn=c,
+        return "\n  ".join(template.format(module=mod, task=task, fqcn=c, tests=f"--tests '{c}'",
                                             simple=c.rsplit(".", 1)[-1], classes=c)
                            for c in classes)
-    return template.format(module=mod, task=task, classes=" ".join(classes), fqcn="", simple="")
+    return template.format(module=mod, task=task, classes=" ".join(classes), tests=tests,
+                           fqcn="", simple="")
 
 
 def tests(symbol: str, uses, task_of, gradle: str = "gradle", template: str = "") -> str:
@@ -621,14 +633,27 @@ def tests_transitive(symbol: str, nodes, depth: int, task_of, gradle: str,
     return "\n".join(lines)
 
 
-def changed(result: dict, base: str, impact_nodes, tests_line: str) -> str:
+def changed(result: dict, base: str, impact_nodes, tests_line: str, depth: int = 3) -> str:
     defs = result["definitions"]
-    lines = [f"changed since {base or 'the index'}: {result['files']} files, "
-             f"{len(defs)} definitions"]
+    java = result.get("java_files", result["files"])
+    other = result["files"] - java
+    lines = [f"changed since {base or 'the index'}: {java} .java files"
+             + (f" (+{other} other files)" if other else "") + f", {len(defs)} definitions"]
     for sym, e in defs.items():
         ch = sorted(e["changed"])
         span = f"{ch[0]}" if len(ch) == 1 else f"{ch[0]}–{ch[-1]} ({len(ch)} lines)"
-        lines.append(f"  {S.short(sym)}  {e['source']}:{e['line']}  changed {span}")
+        test = "  [test]" if e.get("test") else ""
+        lines.append(f"  {S.short(sym)}  {e['source']}:{e['line']}  changed {span}{test}")
+    for sym, e in result.get("class_level", {}).items():
+        ch = sorted(e["changed"])
+        lines.append(f"  {S.short(sym)}  {e['source']}:{e['line']}  class body outside members "
+                     f"changed ({', '.join(map(str, ch[:5]))}{' …' if len(ch) > 5 else ''}); "
+                     "not expanded to the class's users")
+    if result.get("untracked"):
+        lines.append(f"untracked .java included: {_some(result['untracked'])}")
+    if result.get("trivial_hunks"):
+        lines.append(f"{result['trivial_hunks']} hunks only touch imports or blank lines "
+                     "(ignored)")
     if result["unmapped_deletions"]:
         lines.append(f"{len(result['unmapped_deletions'])} hunks only delete code, which is not "
                      "in the index (cannot map them): " + _some(result["unmapped_deletions"]))
@@ -639,16 +664,19 @@ def changed(result: dict, base: str, impact_nodes, tests_line: str) -> str:
         lines.append("not indexed (new, or never compiled): " + _some(result["not_indexed"]))
     if impact_nodes is not None:
         n_tests = sum(1 for n in impact_nodes if n.test)
-        lines.append(f"callers of the changed definitions: {len(impact_nodes)} "
-                     f"({n_tests} in tests)")
+        lines.append(f"callers of the changed definitions (depth ≤ {depth}): "
+                     f"{len(impact_nodes)} ({n_tests} in tests)")
     if tests_line:
         lines.append(tests_line)
     return "\n".join(lines)
 
 
-def deps(edges: dict, level: str, cycles_found, offset: int, limit: int) -> str:
+def deps(edges: dict, level: str, cycles_found, offset: int, limit: int,
+         target: str = "") -> str:
     if not edges:
-        return f"no dependencies between {level}s in scope"
+        hint = "" if level == "package" or not target else \
+            " (module level counts project modules only; try level=package or sites=true)"
+        return f"no dependencies between {level}s in scope{hint}"
     rows = sorted(edges.items(), key=lambda kv: -kv[1])
     shown, suffix = page(rows, offset, limit)
     lines = [f"{len(rows)} {level} dependencies (references counted){suffix}"]
@@ -663,11 +691,11 @@ def deps(edges: dict, level: str, cycles_found, offset: int, limit: int) -> str:
     return "\n".join(lines)
 
 
-def uses_between(scope: str, target: str, rows, limit: int) -> str:
+def uses_between(scope: str, target: str, rows, total: int) -> str:
     if not rows:
         return f"no uses of {target} from {scope}"
-    lines = [f"uses of {target} from {scope}: {len(rows)}"
-             + (f" (first {limit})" if len(rows) >= limit else "")]
+    lines = [f"uses of {target} from {scope}: {total}"
+             + (f" (showing {len(rows)})" if len(rows) < total else "")]
     for caller, tgt, src, sites in rows:
         lines.append(f"  {S.short(caller)} → {S.short(tgt)}  {src}:{', '.join(map(str, sites[:5]))}")
     return "\n".join(lines)
@@ -739,3 +767,11 @@ def settings_lines(st) -> list[str]:
     for w in st.warnings:
         out.append(f"config warning: {w}")
     return out
+
+
+def javadoc_mentions(hits, symbol: str) -> str:
+    if not hits:
+        return f"javadoc mentions ({{@link}}, @see) of {S.short(symbol)}: none"
+    lines = [f"javadoc mentions ({{@link}}, @see), not in the index: {len(hits)}"]
+    lines += [f"  {h.source}:{h.line}: {h.text}" for h in hits]
+    return "\n".join(lines)

@@ -21,6 +21,12 @@ class GraphError(Exception):
     pass
 
 
+# A false "dead" costs more than an extra "maybe used": dead_code looks for names in more files
+# than references(by_name) does.
+DEAD_CODE_GLOBS = ("*.java", "*.xml", "*.jrxml", "*.properties", "*.html", "*.jsp", "*.ftl",
+                   "*.vm", "*.yml", "*.yaml", "*.json", "*.feature", "*.sql", "*.kt", "*.groovy")
+
+
 @dataclass
 class Node:
     symbol: str
@@ -205,15 +211,25 @@ class Graph:
     def changed(self, root: str, base: str = "HEAD", staged: bool = False,
                 paths: list[str] | None = None) -> dict:
         """Definitions covering the lines changed since `base` (working tree, or the index with
-        staged=True), from `git diff -U0`. Hunks that only delete lines cannot be mapped (the
-        deleted code is not in the index) and are reported as such."""
+        staged=True), from `git diff -U0`, plus untracked .java files (working tree only).
+
+        Javadoc, annotations and comments count for the member that follows them; blank lines
+        and import lines are skipped. Changes inside a class body but outside any member are
+        reported for the class without making it "changed" for its users unless the class
+        declaration itself (its header) changed. Hunks that only delete lines cannot be mapped
+        (the deleted code is not in the index) and are reported as such."""
         hunks = git_diff_hunks(root, base, staged, paths or [])
+        untracked = [] if staged else git_untracked_java(root, paths or [])
+        for u in untracked:
+            hunks.setdefault(u, [(1, 10 ** 6)])  # every line is new
         sh = self.shards()
         by_source = defaultdict(list)
         for sid, (src, _mod, _t) in sh.items():
             by_source[src].append(sid)
         out = {"definitions": OrderedDict(), "unmapped_deletions": [], "not_indexed": [],
-               "stale": [], "files": len(hunks)}
+               "stale": [], "files": len(hunks),
+               "java_files": sum(1 for h in hunks if h.endswith(".java")),
+               "untracked": untracked, "trivial_hunks": 0, "class_level": OrderedDict()}
         for src, ranges in hunks.items():
             if not src.endswith(".java"):
                 continue
@@ -224,26 +240,46 @@ class Graph:
             if _is_stale(root, src, self.con, shard_ids[0]):
                 out["stale"].append(src)
                 continue
+            try:
+                with open(os.path.join(root, src), encoding="utf-8", errors="replace") as fh:
+                    text = fh.read().split("\n")
+            except OSError:
+                text = []
             q = ",".join("?" * len(shard_ids))
-            defs = list(self.con.execute(
+            defs = [d for d in self.con.execute(
                 f"SELECT d.symbol_id, s.symbol, d.body_start, d.body_end, d.line FROM defs d "
-                f"JOIN symbols s ON s.id = d.symbol_id WHERE d.shard_id IN ({q})", shard_ids))
+                f"JOIN symbols s ON s.id = d.symbol_id WHERE d.shard_id IN ({q})", shard_ids)
+                if d[2] is not None]
             for start, count in ranges:
                 if count == 0:
                     out["unmapped_deletions"].append(f"{src}:{start}")
                     continue
-                lines = range(start - 1, start - 1 + count)  # 0-based
-                for ln in lines:
-                    best = None
-                    for sid, sym, b0, b1, dline in defs:
-                        if b0 is None or not (b0 <= ln <= b1):
-                            continue
-                        if best is None or (b1 - b0) < (best[3] - best[2]):
-                            best = (sid, sym, b0, b1, dline)
-                    if best is not None:
-                        entry = out["definitions"].setdefault(best[1], {
-                            "source": src, "line": best[4] + 1, "changed": set()})
-                        entry["changed"].add(ln + 1)
+                touched = False
+                last = min(start - 1 + count, len(text)) if text else start - 1 + count
+                for ln in range(start - 1, last):  # 0-based
+                    line = text[ln].strip() if ln < len(text) else ""
+                    if not line or line in ("}", "};", "{") or \
+                            line.startswith(("import ", "package ")):
+                        continue
+                    best = _innermost(defs, ln)
+                    if best is None:
+                        continue
+                    if S.is_type(best[1]) and ln >= best[4] + 1 and _is_preamble(line):
+                        nxt = _next_member(defs, best, ln)
+                        if nxt is not None:
+                            best = nxt
+                    touched = True
+                    if S.is_type(best[1]) and ln > best[4] + _header_lines(text, best[4]):
+                        out["class_level"].setdefault(best[1], {
+                            "source": src, "line": best[4] + 1, "changed": set()})[
+                            "changed"].add(ln + 1)
+                        continue
+                    entry = out["definitions"].setdefault(best[1], {
+                        "source": src, "line": best[4] + 1, "changed": set(),
+                        "test": bool(sh[shard_ids[0]][2])})
+                    entry["changed"].add(ln + 1)
+                if not touched:
+                    out["trivial_hunks"] += 1
         return out
 
     # dependencies ----------------------------------------------------------------------------
@@ -253,12 +289,16 @@ class Graph:
         """Edges between modules (from shard directories) or packages, with reference counts.
         Only references to symbols defined in the project count."""
         if level == "package":
-            rows = self.con.execute("""
+            scope = _as_package(scope)
+            target_scope = _as_package(target_scope)
+            # With a target, external packages count too (e.g. what a package uses of a library).
+            project_only = "" if target_scope else \
+                "AND EXISTS (SELECT 1 FROM defs d WHERE d.symbol_id = r.symbol_id)"
+            rows = self.con.execute(f"""
                 SELECT cs.pkg, ts.pkg, count(*) FROM refs r
                 JOIN symbols cs ON cs.id = r.caller_id
                 JOIN symbols ts ON ts.id = r.symbol_id
-                WHERE r.caller_id != 0 AND cs.pkg != ts.pkg
-                  AND EXISTS (SELECT 1 FROM defs d WHERE d.symbol_id = r.symbol_id)
+                WHERE r.caller_id != 0 AND cs.pkg != ts.pkg {project_only}
                 GROUP BY cs.pkg, ts.pkg""")
             edges = {(a, b): n for a, b, n in rows}
         else:
@@ -277,7 +317,7 @@ class Graph:
                 if v >= min_count and _in_scope(k[0], scope) and _in_scope(k[1], target_scope)}
 
     def uses_between(self, scope: str, target_scope: str, limit: int = 200
-                     ) -> list[tuple[str, str, str, list[int]]]:
+                     ) -> tuple[list[tuple[str, str, str, list[int]]], int]:
         """Call sites where code in `scope` (package glob) uses symbols in `target_scope`
         (package glob, or a symbol prefix such as `org/flowable/`): (caller, target, source,
         lines)."""
@@ -288,21 +328,24 @@ class Graph:
             WHERE r.caller_id != 0""")
         sh = self.shards()
         out = []
+        total = 0
+        pkg_scope, pkg_target = _as_package(scope), _as_package(target_scope)
         for caller, cpkg, target, tpkg, shard_id, sites in rows:
-            if shard_id not in sh or not _in_scope(cpkg, scope):
+            if shard_id not in sh or not _in_scope(cpkg, pkg_scope):
                 continue
-            if not (_in_scope(tpkg, target_scope) or target.startswith(target_scope)):
+            if not (_in_scope(tpkg, pkg_target) or target.startswith(target_scope)):
                 continue
-            out.append((caller, target, sh[shard_id][0], _lines(sites)))
-            if len(out) >= limit:
-                break
-        return out
+            total += 1
+            if len(out) < limit:
+                out.append((caller, target, sh[shard_id][0], _lines(sites)))
+        return out, total
 
     # dead code -------------------------------------------------------------------------------
 
     def dead_code(self, scope: str = "", public_is_api: bool = False,
                   include_tests: bool = False, entry_annotations=(), entry_supertypes=(),
-                  entry_type_names=(), by_name_globs=("*.java",), root: str = "") -> list[tuple]:
+                  entry_type_names=(), entry_packages=(), by_name_globs=DEAD_CODE_GLOBS,
+                  root: str = "") -> list[tuple]:
         """Candidates: project definitions nobody references. Left out: overrides and what is
         overridden (dispatch), Lombok-generated members and fields with generated accessors that
         are used, main/serialization hooks, no-arg constructors of persistent classes, members
@@ -335,7 +378,7 @@ class Graph:
             if sh[shard_id][2] and not include_tests:
                 continue  # test code is run by the test framework
             src = sh[shard_id][0]
-            if scope and not (_in_scope(S.package_of(sym), scope) or fnmatch.fnmatch(src, scope)):
+            if scope and not scope_matches(scope, S.package_of(sym), src):
                 continue
             if flags & FLAG_GENERATED:
                 continue
@@ -365,17 +408,39 @@ class Graph:
                 continue  # record component read through its implicit accessor
             if anns & entry:
                 continue
+            if entry_packages and any(_in_scope(S.package_of(sym), p) for p in entry_packages):
+                continue  # declared API for code outside the repository
             owner = sym if k == "type" else S.parent(sym)
             if owner in entry_types or (k in ("type", "constructor") and any(
                     fnmatch.fnmatch(S.name_of(owner), g) for g in entry_type_names)):
                 continue
             out.append((sym, kind, src, line + 1, sig or ""))
         if out and root:
-            names = sorted({S.name_of(x[0]) for x in out if len(S.name_of(x[0])) > 2})
-            used = names_in_strings(root, names, list(by_name_globs))
+            aliases: dict[str, set[str]] = defaultdict(set)   # name in text -> candidate names
+            for x in out:
+                n = S.name_of(x[0])
+                aliases[n].add(n)
+                m = re.match(r"(get|set|is)([A-Z][\w$]*)$", n)
+                if m:  # templates and reports use the bean property: getActividad -> actividad
+                    aliases[m.group(2)[0].lower() + m.group(2)[1:]].add(n)
+            names = sorted(a for a in aliases if len(a) > 2)
+            used_words = names_in_strings(root, names, list(by_name_globs))
+            used = {c for w in used_words for c in aliases.get(w, ())}
             out = [x for x in out if S.name_of(x[0]) not in used]
         out.sort(key=lambda x: (x[2], x[3]))
         return out
+
+    def in_scope_count(self, scope: str) -> int:
+        """How many live definitions a scope covers (to tell "nothing dead" from "no match")."""
+        sh = self.shards()
+        n = 0
+        for (sym, shard_id) in self.con.execute(
+                "SELECT s.symbol, d.shard_id FROM defs d JOIN symbols s ON s.id = d.symbol_id"):
+            if shard_id in sh and scope_matches(scope, S.package_of(sym), sh[shard_id][0]):
+                n += 1
+                if n > 0:
+                    break
+        return n
 
     def _subtypes_of(self, types: set[str]) -> set[str]:
         ids = self.ids(types)
@@ -387,6 +452,20 @@ class Graph:
                                 (REL_IMPLEMENTATION, *ids.values()))
         return {x for (x,) in rows}
 
+    def classes_with(self, annotations: set[str]) -> set[str]:
+        """Top-level types (as `pkg.Type`) that have a member carrying one of the annotations."""
+        ids = self.ids(annotations)
+        if not ids:
+            return set()
+        q = ",".join("?" * len(ids))
+        out = set()
+        for (sym,) in self.con.execute(
+                f"SELECT DISTINCT s.symbol FROM annotations a JOIN symbols s ON s.id = a.def_id "
+                f"WHERE a.annotation_id IN ({q})", list(ids.values())):
+            pkg, top = S.package_of(sym), S.top_level_type_name(sym)
+            out.add(f"{pkg}.{top}" if pkg else top)
+        return out
+
     def annotations_present(self) -> set[str]:
         return {a for (a,) in self.con.execute(
             "SELECT DISTINCT s.symbol FROM annotations a JOIN symbols s "
@@ -395,26 +474,50 @@ class Graph:
     def entities(self, entity_annotations: set[str], table_specs, root: str
                  ) -> list[tuple[str, str, int, str]]:
         """(entity type, source, line, table) for types carrying an entity annotation; the table
-        comes from the annotation text in the source (attribute values are not indexed)."""
+        is read from the annotation's own text in the source (attribute values are not
+        indexed)."""
+        ent_ids = self.ids(entity_annotations)
+        if not ent_ids:
+            return []
+        table_ids = {}
+        for anns, attr in table_specs:
+            for a, aid in self.ids(anns).items():
+                table_ids[aid] = (attr, S.name_of(a))
+        sh = self.shards()
+        q = ",".join("?" * len(ent_ids))
+        entities = list(self.con.execute(
+            f"SELECT DISTINCT a.def_id, a.shard_id FROM annotations a "
+            f"WHERE a.annotation_id IN ({q})", list(ent_ids.values())))
+        names = self.names({d for d, _ in entities})
+        defs = self.definitions({d for d, _ in entities})
+        texts: dict[str, list[str]] = {}
         out = []
-        for ann in sorted(entity_annotations):
-            for sym, src, line, _sig in self.annotated_with(ann):
-                if not S.is_type(sym):
+        for def_id, shard_id in entities:
+            sym = names.get(def_id, "")
+            if shard_id not in sh or not S.is_type(sym):
+                continue
+            src = sh[shard_id][0]
+            if src not in texts:
+                try:
+                    with open(os.path.join(root, src), encoding="utf-8", errors="replace") as fh:
+                        texts[src] = fh.read().split("\n")
+                except OSError:
+                    texts[src] = []
+            table = ""
+            for aid, line in self.con.execute(
+                    "SELECT annotation_id, line FROM annotations WHERE def_id = ? AND shard_id = ?",
+                    (def_id, shard_id)):
+                spec = table_ids.get(aid)
+                if spec is None:
                     continue
-                table = ""
-                text = _annotation_text(root, src, line)
-                for anns, attr in table_specs:
-                    for a in anns:
-                        m = re.search(r"@\s*(?:[\w.]+\.)?" + re.escape(S.name_of(a))
-                                      + r"\s*\(([^)]*)\)", text, re.S)
-                        if m:
-                            v = re.search(re.escape(attr) + r'\s*=\s*"([^"]*)"', m.group(1))
-                            if v:
-                                table = v.group(1)
-                                break
-                    if table:
-                        break
-                out.append((sym, src, line, table))
+                attr, ann_name = spec
+                args = _annotation_args(texts[src], line, ann_name)
+                v = re.search(r"\b" + re.escape(attr) + r'\s*=\s*"([^"]*)"', args)
+                if v:
+                    table = v.group(1)
+                    break
+            d = defs.get(def_id)
+            out.append((sym, src, d[1] if d else 0, table))
         return sorted(set(out), key=lambda x: (x[1], x[2]))
 
     def _referenced(self, symbol: str) -> bool:
@@ -532,6 +635,30 @@ def cycles(edges) -> list[list[str]]:
     return sorted(out, key=lambda c: (-len(c), c))
 
 
+def _annotation_args(lines: list[str], line: int, name: str, max_lines: int = 40) -> str:
+    """The text between the parentheses of annotation `name` on `line` (0-based), across lines,
+    balancing nested parentheses outside string literals; "" when it has no arguments."""
+    text = "\n".join(lines[line:line + max_lines])
+    m = re.search(r"@\s*(?:[\w$]+\s*\.\s*)*" + re.escape(name) + r"\b\s*", text)
+    if not m or m.end() >= len(text) or text[m.end()] != "(":
+        return ""
+    start = m.end()
+    depth, in_str, k = 0, False, start
+    while k < len(text):
+        ch = text[k]
+        if ch == '"' and (k == 0 or text[k - 1] != "\\"):
+            in_str = not in_str
+        elif not in_str:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    return text[start + 1:k]
+        k += 1
+    return text[start + 1:]
+
+
 def _annotation_text(root: str, source: str, def_line: int, before: int = 25) -> str:
     """The source text above a definition (its annotations), joined."""
     try:
@@ -551,6 +678,25 @@ def _lines(sites: str) -> list[int]:
         if s:
             out.append(int(s.split(":", 1)[0]) + 1)
     return sorted(set(out))
+
+
+def scope_matches(scope: str, package: str, source: str) -> bool:
+    """A scope may be a package (`com.example.billing`, `com/example/billing`, globs), a module
+    or a directory (`billing`, `billing/src`), or a source path glob (`*/model/*.java`)."""
+    if not scope:
+        return True
+    s = scope.strip().rstrip("/")
+    if any(c in s for c in "*?["):
+        return fnmatch.fnmatch(source, s.replace("**", "*")) or \
+            fnmatch.fnmatch(package, s.replace("/", ".").replace("**", "*"))
+    return source == s or source.startswith(s + "/") or _in_scope(package, s.replace("/", "."))
+
+
+def _as_package(scope: str) -> str:
+    """`dev/example/impl/` and `dev.example.impl` both mean the package dev.example.impl."""
+    if not scope or any(c in scope for c in "*?[") and "/" not in scope:
+        return scope
+    return scope.strip("/").replace("/", ".")
 
 
 def _in_scope(name: str, pattern: str) -> bool:
@@ -605,6 +751,52 @@ def git_diff_hunks(root: str, base: str, staged: bool, paths: list[str]
                 count = int(m.group(2)) if m.group(2) is not None else 1
                 out[current].append((start, count))
     return out
+
+
+def _innermost(defs, ln):
+    best = None
+    for d in defs:
+        if d[2] <= ln <= d[3] and (best is None or (d[3] - d[2]) < (best[3] - best[2])):
+            best = d
+    return best
+
+
+def _next_member(defs, owner, ln):
+    """The member of `owner` that starts first after line ln (javadoc/annotations belong to it)."""
+    best = None
+    for d in defs:
+        if d is owner or not (owner[2] <= d[2] <= owner[3]) or S.parent(d[1]) != owner[1]:
+            continue
+        start = min(d[2], d[4])
+        if start >= ln and (best is None or start < min(best[2], best[4])):
+            best = d
+    return best
+
+
+def _is_preamble(line: str) -> bool:
+    return line.startswith(("/**", "/*", "*", "//", "@")) or line == "*/"
+
+
+def _header_lines(text: list[str], decl_line: int) -> int:
+    """Lines of a type declaration from its name to the opening brace (extends, implements…)."""
+    for k in range(decl_line, min(decl_line + 15, len(text))):
+        if "{" in text[k]:
+            return k - decl_line
+    return 0
+
+
+def git_untracked_java(root: str, paths: list[str]) -> list[str]:
+    git = shutil.which("git")
+    if not git:
+        return []
+    cmd = [git, "-C", root, "ls-files", "--others", "--exclude-standard", "-z", "--"]
+    cmd += paths or ["*.java"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [p.decode("utf-8", errors="replace") for p in proc.stdout.split(b"\0")
+            if p.endswith(b".java")]
 
 
 def names_in_strings(root: str, names: list[str], globs: list[str]) -> set[str]:
