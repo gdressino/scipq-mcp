@@ -18,7 +18,8 @@ from .workspace import SUFFIX, build_task
 SKIP_DIRS = {".git", ".gradle", ".idea", ".vscode", "build", "target", "out", "node_modules",
              ".mvn", "bin", ".venv", "__pycache__"}
 TEST_TASK = re.compile(r"test", re.IGNORECASE)
-TEST_PATH = re.compile(r"(^|/)(src/)?[A-Za-z]*[tT]est[A-Za-z]*/")
+TEST_PATH = re.compile(r"(^|/)src/[A-Za-z]*[tT]est[A-Za-z]*/")
+_PACKAGE = re.compile(r"^\s*package\s+([\w.]+)\s*;")
 
 
 # --- source -----------------------------------------------------------------------------------
@@ -60,6 +61,16 @@ def read_raw_lines(root: str, source: str, first: int, last: int) -> list[str]:
     return out
 
 
+def record_accessor(nav: Navigator, symbol: str, defs: list[Definition]) -> str:
+    """For a record component (a field of a record), its implicit accessor symbol, else ""."""
+    if S.kind_of(symbol) != "term" or not defs:
+        return ""
+    owner = nav.definition(S.parent(symbol))
+    if owner is None or owner.kind != "record":
+        return ""
+    return S.parent(symbol) + S.format_descriptors([S.Descriptor(S.name_of(symbol), S.METHOD)])
+
+
 # --- members ----------------------------------------------------------------------------------
 
 @dataclass
@@ -73,7 +84,7 @@ class MemberGroup:
 
 def _own_members(nav: Navigator, type_symbol: str, d: Definition) -> list[Definition]:
     for v in nav._views(nav.ws.shards_for_source(d.location.source)[:1]):
-        return sorted(v.definitions(lambda sym, _i: not S.is_local(sym)
+        return sorted(v.definitions(lambda sym, _i: not S.is_local_like(sym)
                                     and S.parent(sym) == type_symbol),
                       key=lambda x: (x.location.range.start_line, x.location.range.start_char))
     return []
@@ -95,7 +106,7 @@ def members(nav: Navigator, type_symbol: str, inherited: bool = True
 
     def note_overrides(g: MemberGroup):
         for m in g.members:
-            if m.info:
+            if m.info and S.is_method(m.symbol):
                 over = [r.symbol for r in m.info.relationships if r.is_implementation]
                 if over:
                     g.overrides[m.symbol] = over
@@ -143,9 +154,11 @@ def annotated(nav: Navigator, annotation: str) -> list[Annotated]:
     out: list[Annotated] = []
     for v, occs in nav.scan({annotation}):
         defs = [o for o in v.doc.definitions() if o.enclosing is not None]
-        lines = nav.ws.source_lines(v.source, {o.range.start_line for o in occs})
+        raw = _raw_lines(nav.ws.root, v.source, {o.range.start_line for o in occs})
+        lines = {k: t.strip() for k, t in raw.items()}
         for o in occs:
-            if o.is_definition or lines.get(o.range.start_line, "").startswith("import "):
+            if o.is_definition or not is_annotation_use(raw.get(o.range.start_line, ""),
+                                                        o.range.start_char):
                 continue
             best = None
             for dd in defs:
@@ -160,9 +173,42 @@ def annotated(nav: Navigator, annotation: str) -> list[Annotated]:
     return out
 
 
+_ANNOTATION_BEFORE = re.compile(r"@\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*$")
+
+
+def is_annotation_use(line: str, col: int) -> bool:
+    """Whether the type name at `col` is written as an annotation: `@Name` or `@pkg.Name`, not
+    inside a comment (javadoc `{@link Name}` and `{@code @Name}` do not count)."""
+    before = line[:col]
+    if not _ANNOTATION_BEFORE.search(before):
+        return False
+    stripped = before.lstrip()
+    if stripped.startswith(("*", "/*", "//")) or "//" in before or "/*" in before:
+        return False
+    return not re.search(r"\{\s*@(code|link|linkplain|literal)\b[^}]*$", before)
+
+
+def _raw_lines(root: str, source: str, lines) -> dict[int, str]:
+    want = set(lines)
+    out: dict[int, str] = {}
+    if not want:
+        return out
+    last = max(want)
+    try:
+        with open(os.path.join(root, source), encoding="utf-8", errors="replace") as fh:
+            for i, t in enumerate(fh):
+                if i in want:
+                    out[i] = t.rstrip("\n")
+                if i >= last:
+                    break
+    except OSError:
+        pass
+    return out
+
+
 # --- typed ------------------------------------------------------------------------------------
 
-TYPED_ORDER = ("field", "parameter", "return type", "local variable", "supertype",
+TYPED_ORDER = ("field", "parameter", "return type", "local variable", "resource", "supertype",
                "method body", "initializer", "import", "other")
 
 
@@ -201,6 +247,10 @@ def typed(nav: Navigator, type_symbol: str) -> list[TypedUse]:
                     (name_occ.range.start_line, name_occ.range.start_char)
                 if kind in ("method", "constructor", "abstract method") or after_name:
                     cat, detail = "method body", line
+                elif not S.is_local(sym):
+                    # scip-javac gives try-with-resources variables a global symbol under the
+                    # method (…#load().pm.): a local resource, not a field.
+                    cat, detail = "resource", (signature_line(info) or line).strip()
                 elif kind == "variable":
                     cat, detail = "local variable", (info.signature if info else line).strip()
                 else:
@@ -283,7 +333,7 @@ def overloads(nav: Navigator, method: str) -> list[FamilyMember]:
     found: list[Definition] = []
     if d is not None:
         for v in nav._views(nav.ws.shards_for_source(d.location.source)[:1]):
-            found = v.definitions(lambda sym, _i: not S.is_local(sym) and S.is_method(sym)
+            found = v.definitions(lambda sym, _i: not S.is_local_like(sym) and S.is_method(sym)
                                   and S.parent(sym) == owner and S.name_of(sym) == name)
     if not found:
         return []
@@ -461,7 +511,8 @@ def tests_using(nav: Navigator, symbol: str) -> list[TestUse]:
             continue
         t = by_file.get(r.location.source)
         if t is None:
-            pkg = S.package_of(r.container) if r.container else ""
+            pkg = _package_of_file(nav.ws.root, r.location.source) or (
+                S.package_of(r.container) if r.container else "")
             cls = os.path.basename(r.location.source).rsplit(".", 1)[0]
             t = TestUse(f"{pkg}.{cls}" if pkg else cls, r.module, r.location.source, [])
             by_file[r.location.source] = t
@@ -469,10 +520,26 @@ def tests_using(nav: Navigator, symbol: str) -> list[TestUse]:
     return sorted(by_file.values(), key=lambda t: (t.module, t.test_class))
 
 
+def _package_of_file(root: str, source: str) -> str:
+    try:
+        with open(os.path.join(root, source), encoding="utf-8", errors="replace") as fh:
+            for i, line in enumerate(fh):
+                m = _PACKAGE.match(line)
+                if m:
+                    return m.group(1)
+                if i > 200:
+                    break
+    except OSError:
+        pass
+    return ""
+
+
 def test_task(module: str) -> str:
     """Gradle test task for a compile task: compileTestJava -> :m:test,
     compileQaTestJava -> :m:qaTest."""
     path = build_task(module)
+    if not path:
+        return ""
     if not path.startswith(":"):
         return module
     head, _, task = path.rpartition(":")

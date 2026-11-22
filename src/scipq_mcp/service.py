@@ -128,6 +128,13 @@ class Service:
                       by_name: bool = False, by_name_globs: list[str] | None = None) -> Body:
         def body(nav: Navigator):
             sym, note, (refs, defs) = self._resolved(nav, symbol, nav.references)
+            accessor = X.record_accessor(nav, sym, defs)
+            if accessor:
+                more, _ = nav.references(accessor)
+                refs = sorted(refs + more, key=lambda r: (r.location.source,
+                                                          r.location.range.start_line,
+                                                          r.location.range.start_char))
+                note += f"-- record component: includes the uses of its accessor {S.short(accessor)}\n"
             if exclude_imports:
                 texts = {}
                 kept = []
@@ -266,7 +273,9 @@ class Service:
     def _b_tests(self, symbol: str) -> Body:
         def body(nav: Navigator):
             sym, note, uses = self._resolved(nav, symbol, lambda s: X.tests_using(nav, s))
-            return note + render.tests(sym, uses, X.test_task), {t.source for t in uses}
+            gradle = "./gradlew" if os.path.exists(os.path.join(nav.ws.root, "gradlew")) \
+                else "gradle"
+            return note + render.tests(sym, uses, X.test_task, gradle), {t.source for t in uses}
         return body
 
     def _b_index_status(self) -> Body:

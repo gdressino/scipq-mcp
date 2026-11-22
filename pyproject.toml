@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "scipq-mcp"
-version = "0.1.0"
+dynamic = ["version"]
 description = "MCP server for Java code navigation over the per-file SCIP shards written by scip-javac, with no index held in memory."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "Germán Dressino" }]
 keywords = ["mcp", "model-context-protocol", "scip", "java", "code-navigation", "lsp"]
 classifiers = [
@@ -20,10 +20,10 @@ classifiers = [
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Java",
     "Topic :: Software Development",
 ]
@@ -39,11 +39,14 @@ scipq-mcp = "scipq_mcp.cli:main"
 [dependency-groups]
 dev = ["pytest>=8"]
 
+[tool.hatch.version]
+path = "src/scipq_mcp/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/scipq_mcp"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "README.md", "LICENSE", "CHANGELOG.md"]
+include = ["src", "tests", "docs", "README.md", "LICENSE", "CHANGELOG.md"]
 exclude = ["tests/fixtures/.jars"]
 
 [tool.pytest.ini_options]

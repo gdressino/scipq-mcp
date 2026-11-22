@@ -24,6 +24,20 @@ GENERATED_MARKERS = ("@Generated", "@lombok.Generated", "@javax.annotation.Gener
                      "@javax.annotation.processing.Generated")
 
 
+_DECL_KEYWORD = re.compile(r"\b(class|interface|enum|record|@interface)\b")
+
+
+def _read_line(path: str, line: int) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for i, text in enumerate(fh):
+                if i == line:
+                    return text
+    except OSError:
+        pass
+    return ""
+
+
 class QueryError(Exception):
     pass
 
@@ -49,9 +63,12 @@ class Definition:
     # Generated members (Lombok) are located at the node that generates them: the field, or
     # a class-level annotation such as @Setter. `location` points there.
     generated_by: Range | None = None
+    kind_override: str = ""
 
     @property
     def kind(self) -> str:
+        if self.kind_override:
+            return self.kind_override
         if self.info and self.info.kind_name:
             return self.info.kind_name
         return S.kind_of(self.symbol)
@@ -72,6 +89,7 @@ class Resolution:
     symbol: str | None
     candidates: list[Definition] = field(default_factory=list)
     note: str = ""
+    externals: list[str] = field(default_factory=list)  # matching symbols not defined here
 
 
 @dataclass(slots=True)
@@ -115,13 +133,41 @@ def signature_line(info: SymbolInfo | None) -> str:
     return lines[-1] if lines else ""
 
 
+def declared_supertypes(d: Definition) -> set[str]:
+    """Simple names after `extends` / `implements` (and `permits` excluded) in a type's
+    declaration: its direct supertypes."""
+    sig = signature_line(d.info) if d.info else ""
+    names: set[str] = set()
+    for kw in ("extends", "implements"):
+        m = re.search(r"\b" + kw + r"\b(.*?)(?=\b(?:extends|implements|permits)\b|\{|$)", sig)
+        if not m:
+            continue
+        depth, cur = 0, ""
+        for ch in m.group(1) + ",":
+            if ch == "<":
+                depth += 1
+            elif ch == ">":
+                depth -= 1
+            elif ch == "," and depth == 0:
+                name = cur.strip().split("(")[0].strip()
+                if name:
+                    names.add(name.split(".")[-1].strip())
+                cur = ""
+                continue
+            if depth == 0 and ch not in "<>":
+                cur += ch
+    return names
+
+
+
 class DocView:
     """One document plus the lookups the queries need, decoding as little as possible."""
 
-    def __init__(self, shard: Shard, doc: Document):
+    def __init__(self, shard: Shard, doc: Document, root: str = ""):
         self.shard = shard
         self.doc = doc
         self.source = shard.source
+        self.root = root
         self._infos: dict[str, SymbolInfo] | None = None
         self._containers: list[tuple[Range, str, bool, bool]] | None = None
 
@@ -156,7 +202,7 @@ class DocView:
             out = []
             for o in self.doc.definitions():
                 if o.enclosing is not None:
-                    out.append((o.enclosing, o.symbol, S.is_local(o.symbol),
+                    out.append((o.enclosing, o.symbol, S.is_local_like(o.symbol),
                                 self.structurally_generated(o)))
             out.sort(key=lambda t: t[0].size())
             self._containers = out
@@ -200,7 +246,23 @@ class DocView:
                        generated=self.is_generated(o, info))
         if S.is_local(o.symbol):
             d.container = self.container_of(o.range)[0]
+        if info is not None and S.is_type(o.symbol) and not _DECL_KEYWORD.search(info.signature):
+            self._fix_type_declaration(d)
         return d
+
+    def _fix_type_declaration(self, d: Definition) -> None:
+        """scip-javac writes records as `public static final Name`, without the keyword or the
+        components: take the declaration from the source line instead."""
+        if not self.root:
+            return
+        line = _read_line(os.path.join(self.root, self.source), d.location.range.start_line)
+        m = re.search(r"\b(record|class|interface|enum)\s+" + re.escape(S.name_of(d.symbol))
+                      + r"\b", line)
+        if not m:
+            return
+        decl = line.strip().rstrip("{").strip()
+        d.kind_override = m.group(1)
+        d.info.signature = decl
 
     def definitions_of(self, symbols: Iterable[str],
                        infos: dict[str, SymbolInfo] | None = None) -> list[Definition]:
@@ -246,7 +308,7 @@ class Navigator:
             except (OSError, ValueError):
                 continue
             for doc in docs:
-                yield DocView(sh, doc)
+                yield DocView(sh, doc, self.ws.root)
 
     def _definitions_of(self, wanted_symbols: set[str]) -> dict[str, Definition]:
         """Definitions of exact global symbols, looking first at the file named after their
@@ -305,7 +367,7 @@ class Navigator:
         found = set()
         for v in self._views(self.ws.shards_by_basename({head + ".java"})):
             for info in v.doc.symbols:
-                if not S.is_local(info.symbol) and S.matches(info.symbol, q):
+                if not S.is_local_like(info.symbol) and S.matches(info.symbol, q):
                     found.add(info.symbol)
         return found.pop() if len(found) == 1 else None
 
@@ -313,21 +375,34 @@ class Navigator:
         text = text.strip()
         if S.looks_like_symbol(text):
             return Resolution(text)
-        found = [d for d in self.find(text) if not S.is_local(d.symbol)]
+        found = [d for d in self.find(text) if not S.is_local_like(d.symbol)]
         syms = sorted({d.symbol for d in found})
-        if len(syms) == 1:
+        q = S.parse_query(text)
+        # A bare name may also be a JDK or library type used everywhere (e.g. `Button`).
+        external = [e for e in self.find_external(text) if e not in syms] \
+            if (not syms or len(q.names) == 1) else []
+        external = [e for e in external if not self._implicit_member(e)] if syms else external
+        if len(syms) == 1 and not external:
             return Resolution(syms[0], found, f"{text} → {syms[0]}")
         if syms:
-            return Resolution(None, found,
-                              f"{text!r} matches {len(syms)} symbols; pass one of them")
-        external = self.find_external(text)
+            n = len(syms) + len(external)
+            return Resolution(None, found, f"{text!r} matches {n} symbols; pass one of them",
+                              external)
         if len(external) == 1:
-            return Resolution(external[0], [], f"{text} → {external[0]} (external)")
+            label = "implicit, not declared in source" if self._implicit_member(external[0]) \
+                else "external"
+            return Resolution(external[0], [], f"{text} → {external[0]} ({label})")
         if external:
             shown = ", ".join(external[:20]) + (" …" if len(external) > 20 else "")
             return Resolution(None, [], f"{text!r} matches {len(external)} external symbols "
                                         f"(not defined in this project); pass one of: {shown}")
         return Resolution(None, [], f"no symbol in this project matches {text!r}")
+
+    def _implicit_member(self, symbol: str) -> bool:
+        """A member with no declaration whose owner is a project type: record accessors, enum
+        values()/valueOf(), default constructors."""
+        owner = S.parent(symbol)
+        return bool(owner) and S.is_type(owner) and self.definition(owner) is not None
 
     def find_external(self, text: str, max_docs: int = 200) -> list[str]:
         """Symbols referenced but not defined in the project (JDK, libraries) whose names match:
@@ -454,10 +529,16 @@ class Navigator:
             sd = defs.get(s)
             reach[s] = ({r.symbol for r in sd.info.relationships if r.is_implementation}
                         if sd and sd.info else set())
+        declared = declared_supertypes(d) if S.is_type(symbol) else set()
         out = []
         for s in supers:
-            indirect = any(s in reach[o] for o in supers if o != s)
-            out.append(Supertype(s, not indirect, defs.get(s)))
+            if declared:
+                # The declaration is authoritative, and the only source for external chains
+                # (scip-javac records every supertype, transitively).
+                direct = S.name_of(s) in declared
+            else:
+                direct = not any(s in reach[o] for o in supers if o != s)
+            out.append(Supertype(s, direct, defs.get(s)))
         out.sort(key=lambda x: (not x.direct, x.definition is None))
         return d, out
 
@@ -471,7 +552,7 @@ class Navigator:
                              "project")
         out = []
         for v in self._views(shards[:1]):
-            out.extend(v.definitions(lambda sym, _i: not S.is_local(sym)))
+            out.extend(v.definitions(lambda sym, _i: not S.is_local_like(sym)))
         out.sort(key=lambda d: (d.location.range.start_line, d.location.range.start_char))
         return out
 

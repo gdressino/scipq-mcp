@@ -34,6 +34,15 @@ def is_local(symbol: str) -> bool:
     return symbol.startswith("local ")
 
 
+def is_local_like(symbol: str) -> bool:
+    """Locals, plus the variables scip-javac gives a global symbol under a method (try-with-
+    resources variables: ``…/Dao#load().#pm.``) — not members of any type."""
+    if is_local(symbol):
+        return True
+    d = parse(symbol)
+    return len(d) >= 2 and d[-2].suffix == METHOD and d[-1].suffix in (TERM, TYPE)
+
+
 def _descriptor_part(symbol: str) -> str:
     # "scheme manager package-name version descriptors"; ' ' inside names is escaped as '  '.
     if " " not in symbol:
@@ -295,6 +304,9 @@ def definition_regex(q: Query) -> bytes:
     shards that only *mention* the name are skipped. It is a prefilter: candidates are decoded."""
     parts = [_escape("`<init>`" if n == CONSTRUCTOR else n) for n in q.names]
     body = b"[/#]".join(parts)
+    # A query that starts at a package root starts at the beginning of the symbol string, which
+    # is preceded by its length (any byte, digits and letters included): no boundary check.
+    start = b"" if len(q.names) > 1 and q.names[0][:1].islower() else rb"(^|[^A-Za-z0-9_$])"
     if q.method_only:
         if q.disambiguator:
             end = _escape(f"({q.disambiguator}).")
@@ -302,7 +314,7 @@ def definition_regex(q: Query) -> bytes:
             end = rb"\((\+[0-9]+)?\)\."
     else:
         end = rb"(#|\.|\((\+[0-9]+)?\)\.)"
-    return rb"(^|[^A-Za-z0-9_$])" + body + end + b"[\x28\x32\x1a\x22]"
+    return start + body + end + b"[\x28\x32\x1a\x22]"
 
 
 def occurrence_regex(q: Query) -> bytes:

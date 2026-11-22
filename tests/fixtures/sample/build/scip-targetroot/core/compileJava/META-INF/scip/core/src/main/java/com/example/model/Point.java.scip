@@ -1,0 +1,11 @@
+…	
+/core/src/main/java/com/example/model/Point.java,com/example/model/Point#BZ /#com/example/model/Point#`<init>`().Blocal 0B.com/example/model/Point#x.BRlocal 1B .com/example/model/Point#y.B R "com/example/model/Point#B7!com/example/model/Point#scaled().BZ local 2BR-#com/example/model/Point#`<init>`().B&com/example/model/Point#x().Blocal 2B $com/example/model/Point#y.B"#local 2B&'ù
+com/example/model/Point#GA record: scip-javac reports it without the keyword or its components. "
+java/lang/Record#2Point:"java*public final PointS
+#com/example/model/Point#`<init>`().(	2<init>:""java*public Point(int x, int y)@
+local 02x:"java*int xB#com/example/model/Point#`<init>`().@
+local 12y:"java*int yB#com/example/model/Point#`<init>`().>
+com/example/model/Point#x.(2x:"java*private final int x>
+com/example/model/Point#y.(2y:"java*private final int yQ
+!com/example/model/Point#scaled().(2scaled:""java*public Point scaled(int k)>
+local 22k:"java*int kB!com/example/model/Point#scaled()."java

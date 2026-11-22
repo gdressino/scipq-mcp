@@ -79,7 +79,7 @@ instructions tell the agent to ask the user before changing the build. In Claude
 
 ## Install
 
-Requirements: Python ≥ 3.10, Linux or macOS. GNU grep and GNU find are used when present
+Requirements: Python ≥ 3.11, Linux or macOS. GNU grep and GNU find are used when present
 (faster); otherwise scipq-mcp falls back to pure Python.
 
 ```sh
@@ -108,8 +108,15 @@ claude mcp add scipq -- uvx scipq-mcp
 The server serves the project it is started in (any directory inside it). Every tool also
 takes `project_root`, so one server can answer for several checkouts or git worktrees.
 
+Installed for every project (user scope), it stays out of the way where it does not apply:
+when the directory it starts in is not a Java project (no Gradle or Maven build files, no
+shards, no `.java` sources), it exposes **no tools** and a one-line instruction, so it costs
+no context. A Java project that was never compiled does get the tools (`setup` explains what
+to do). Start it with `--always` to expose the tools anyway, e.g. to query other checkouts
+through `project_root`.
+
 Server options: `--root DIR` (default project), `--shards-dir` (default
-`build/scip-targetroot`), `--freshness full|results|off` (see below).
+`build/scip-targetroot`), `--freshness full|results|off` (see below), `--always`.
 
 ## Tools
 
@@ -205,6 +212,19 @@ uv venv && uv pip install -e . pytest
 
 `tests/fixtures/sample` is a small two-module Java project; its shards are checked in, so the
 tests need no JDK. To regenerate them (JDK 17+): `tests/fixtures/build-sample.sh`.
+
+Design notes and the roadmap: [docs/design.md](docs/design.md).
+
+### Releasing
+
+Releases are published by GitHub Actions with
+[PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/): no API token exists in
+the repository, its secrets, or anyone's machine.
+
+1. Describe the changes under `## Unreleased` in `CHANGELOG.md` and commit.
+2. `scripts/release.sh [VERSION]` — sets the version, dates the changelog, runs the tests,
+   commits and tags `vVERSION`.
+3. `git push origin main vVERSION` — the `release` workflow tests, builds and publishes.
 
 ## License
 

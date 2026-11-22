@@ -49,7 +49,13 @@ def test_definition_regex_selects_definitions_only():
     as_reference = b"\x12" + bytes([len(sym)]) + sym + b"\x42\x02"     # Occurrence
     assert rx.search(as_definition)
     assert not rx.search(as_reference)
-    assert not re.compile(S.definition_regex(S.parse_query("tity#setState"))).search(as_definition)
+    other = b"com/example/model/SubEntity#setState()."
+    assert not rx.search(b"\x0a" + bytes([len(other)]) + other + b"\x28")
+    # From the package root, the byte before the symbol is its length, which may be a digit.
+    sym_digit_len = b"org/example/inventory/support/Formatter#formatAmount()."
+    assert bytes([len(sym_digit_len)]) == b'7'  # a digit
+    q = S.parse_query("org.example.inventory.support.Formatter.formatAmount()")
+    assert re.compile(S.definition_regex(q)).search(b"\x0a" + bytes([len(sym_digit_len)]) + sym_digit_len + b"\x28")
 
 
 def test_reference_search_for_types_skips_members():

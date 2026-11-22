@@ -47,7 +47,7 @@ def test_references(nav):
     refs, defs = nav.references(SET_STATE)
     assert lines(refs) == [("Account.java", 8), ("Group.java", 11), ("Service.java", 20),
                            ("Service.java", 25), ("Service.java", 33), ("Service.java", 38),
-                           ("ServiceTest.java", 11)]
+                           ("ServiceTest.java", 11), ("TestSupport.java", 8)]
     assert [d.location.line for d in defs] == [14]
     # The orphan Gone.java also calls setState: it must not show up.
     assert all("Gone" not in r.location.source for r in refs)
@@ -129,6 +129,7 @@ def test_callers(nav):
         "com/example/app/Service#activate().": [25],
         "com/example/app/Service#activateAll().": [33, 38],  # 33 is inside an anonymous class
         "com/example/app/ServiceTest#main().": [11],
+        "com/example/app/test/TestSupport#reset().": [8],
     }
     anon = [c for c in root.children if c.symbol.endswith("activateAll().")][0]
     assert anon.sites[0].via_local == "validate"
@@ -142,7 +143,7 @@ def test_callers_depth_and_initializers(nav):
     root = nav.callers("com/example/model/Entity#findById().")
     assert {c.symbol for c in root.children} == {
         "com/example/app/Service#",  # static initializer block
-        "com/example/app/ServiceTest#main()."}
+        "com/example/app/ServiceTest#main().", "com/example/model/Session#find()."}
 
 
 def test_callers_include_overridden(nav):
@@ -197,4 +198,4 @@ def test_service_text(sample_root):
 
 def test_project_root_from_subdirectory(sample_root):
     sub = os.path.join(sample_root, "app", "src")
-    assert "7 references" in Service().references("Entity#setState", project_root=sub)
+    assert "8 references" in Service().references("Entity#setState", project_root=sub)

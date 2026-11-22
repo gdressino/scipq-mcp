@@ -62,8 +62,23 @@ TYPED_CATEGORIES = Literal["field", "parameter", "return type", "local variable"
                            "method body", "initializer", "import", "other"]
 
 
-def build(service: Service) -> Any:
-    mcp = _Server("scipq", instructions=INSTRUCTIONS)
+INACTIVE_INSTRUCTIONS = ("scipq (Java code navigation) is idle: this is not a Java project, so it "
+                         "exposes no tools.")
+
+
+def _new_server(instructions: str) -> Any:
+    try:
+        return _Server("scipq", instructions=instructions, version=__version__)
+    except TypeError:  # mcp 1.x FastMCP has no version argument
+        return _Server("scipq", instructions=instructions)
+
+
+def build(service: Service, active: bool = True) -> Any:
+    """The MCP server. With active=False (not a Java project) it registers no tools, so a
+    server installed for every project costs nothing where it does not apply."""
+    if not active:
+        return _new_server(INACTIVE_INSTRUCTIONS)
+    mcp = _new_server(INSTRUCTIONS)
 
     def tool(fn: Callable[..., str]) -> Callable[..., str]:
         """Registers an async wrapper that runs the blocking query in a worker thread."""
@@ -276,8 +291,17 @@ def build(service: Service) -> Any:
 
 
 def serve(root: str | None = None, shards_dir: str | None = None,
-          freshness: str = "full") -> None:
-    build(Service(root, shards_dir, freshness)).run("stdio")
+          freshness: str = "full", always: bool = False) -> None:
+    import os
+    import sys
+
+    from .setup import java_project
+
+    active, why = (True, "--always") if always else java_project(root or os.getcwd())
+    if not active:
+        print(f"scipq-mcp: {why}; no tools exposed (start with --always to override)",
+              file=sys.stderr)
+    build(Service(root, shards_dir, freshness), active).run("stdio")
 
 
 __all__ = ["build", "serve", "__version__"]

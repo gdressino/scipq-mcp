@@ -40,7 +40,8 @@ def test_annotated(nav):
     assert {a.definition.symbol for a in items if a.definition and not
             a.definition.symbol.startswith("local")} == {
         "com/example/model/Account#uid().", "com/example/model/Entity#uid().",
-        "com/example/model/Group#uid().", "com/example/model/SubAccount#uid()."}
+        "com/example/model/Group#uid().", "com/example/model/SubAccount#uid().",
+        "com/example/model/Session#close()."}
     getter = X.annotated(nav, "lombok/Getter#")
     assert [a.definition.symbol for a in getter] == ["com/example/model/Snapshot#"]
 
@@ -53,11 +54,11 @@ def test_typed(nav):
                                                 u.location.line))
     assert cats["field"] == {("Service.java", 10), ("Group.java", 7)}
     assert ("Group.java", 9) in cats["parameter"]
-    assert cats["return type"] == {("Entity.java", 22)}
+    assert cats["return type"] == {("Entity.java", 22), ("Session.java", 4), ("Store.java", 10)}
     assert cats["supertype"] == {("Account.java", 3), ("Group.java", 6)}
     assert cats["local variable"] == {("ServiceTest.java", 9)}
     assert ("ServiceTest.java", 9) in cats["method body"]  # Entity.findById(…) initializer
-    assert len(cats["import"]) == 2
+    assert len(cats["import"]) == 3
 
 
 def test_family_and_overloads(nav):
@@ -98,10 +99,10 @@ def test_tests_and_tasks(nav):
 
 def test_index_status(nav):
     st = X.index_status(nav)
-    assert st.shards == 11
+    assert st.shards == 15
     assert st.orphans == ["core/src/main/java/com/example/model/Gone.java"]
-    assert dict(st.tasks) == {"app/compileJava": 2, "app/compileTestJava": 1,
-                              "core/compileJava": 8}
+    assert dict(st.tasks) == {"app/compileJava": 3, "app/compileTestJava": 1,
+                              "core/compileJava": 11}
 
 
 def test_generated_member_located_at_generating_node(nav):
@@ -116,7 +117,7 @@ def test_pagination_and_batch(sample_root):
     out = svc.batch([{"tool": "references", "args": {"symbol": "Entity#setState"}},
                      {"tool": "definition", "args": {"symbol": "Entity"}},
                      {"tool": "nope"}])
-    assert "### 1. references Entity#setState" in out and "7 references" in out
+    assert "### 1. references Entity#setState" in out and "8 references" in out
     assert "### 2. definition Entity" in out and "class at core/" in out
     assert "unknown tool 'nope'" in out
 
@@ -150,7 +151,7 @@ def test_single_root_layout(sample_copy):
     shutil.rmtree(base)
     os.rename(flat, base)
     svc = Service(sample_copy)
-    assert "7 references in 4 files" in svc.references("Entity#setState")
+    assert "8 references in 5 files" in svc.references("Entity#setState")
     assert "WARNING" not in svc.references("Entity#setState")
     group = os.path.join(sample_copy, "core/src/main/java/com/example/model/Group.java")
     os.utime(group, (1_700_000_500, 1_700_000_500))
@@ -158,3 +159,54 @@ def test_single_root_layout(sample_copy):
     assert "in these results: core/src/main/java/com/example/model/Group.java" in out
     assert "recompile the project to refresh" in out
     assert "com.example.app.ServiceTest" in svc.tests("Entity#setState")
+
+
+def test_tests_ignore_production_code_in_test_packages(nav):
+    # TestSupport lives in src/main/java/.../app/test/: production code, not a test.
+    assert [t.test_class for t in X.tests_using(nav, SET_STATE)] == ["com.example.app.ServiceTest"]
+
+
+def test_annotated_ignores_javadoc_comments_and_class_literals(nav):
+    items = X.annotated(nav, "java/lang/Deprecated#")
+    assert [(os.path.basename(a.location.source), a.location.line, a.definition.symbol)
+            for a in items] == [("Store.java", 9, "com/example/model/Store#load().")]
+    line = "    @javax.annotation.Nonnull String"
+    assert X.is_annotation_use(line, line.index("Nonnull"))
+    doc = " * {@link Session} and {@code @Session}"
+    assert not X.is_annotation_use(doc, doc.rindex("Session"))
+
+
+def test_try_with_resources_is_not_a_field(nav):
+    uses = {(u.category, u.location.line) for u in X.typed(nav, "com/example/model/Session#")}
+    assert ("field", 7) in uses          # private final Session shared
+    assert ("resource", 11) in uses      # try (Session session = …)
+    assert not any(c == "field" and line == 11 for c, line in uses)
+    # …and it is not taken for a caller: the call belongs to the method.
+    root = nav.callers("com/example/model/Session#find().")
+    assert [c.symbol for c in root.children] == ["com/example/model/Store#load()."]
+
+
+def test_records(nav):
+    d = nav.definition("com/example/model/Point#")
+    assert d.kind == "record"
+    assert d.info.signature == "public record Point(int x, int y)"
+    svc = Service(nav.ws.root)
+    out = svc.references("Point#x")
+    assert "includes the uses of its accessor Point#x()" in out
+    assert "6: return new Point(x() * k, y * k);" in out
+    assert "(implicit, not declared in source)" in svc.references("Point#x()")
+
+
+def test_supertypes_direct_from_declaration(nav):
+    _d, supers = nav.supertypes("com/example/model/Session#")
+    assert [(s.symbol, s.direct) for s in supers] == [("java/lang/AutoCloseable#", True)]
+    _d, supers = nav.supertypes("com/example/model/SubAccount#")
+    assert [s.symbol for s in supers if s.direct] == ["com/example/model/Account#"]
+
+
+def test_fqn_overloaded_names(nav):
+    r = nav.resolve("com.example.app.Service.process()")
+    assert r.symbol is None and {d.symbol for d in r.candidates} == {
+        "com/example/app/Service#process().", "com/example/app/Service#process(+1)."}
+    assert nav.resolve("com.example.app.Service#process(+1)").symbol == \
+        "com/example/app/Service#process(+1)."

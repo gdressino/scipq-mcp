@@ -8,13 +8,61 @@ import datetime as _dt
 import glob
 import os
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass, field
 from importlib import resources
 
-from .workspace import DEFAULT_SHARDS_DIR, Workspace, WorkspaceError
+from .workspace import DEFAULT_SHARDS_DIR, Workspace, WorkspaceError, find_project_root
 
 SCIP_JAVAC_VERSION = "0.14.2"
 INIT_SCRIPT_NAME = "scip-shards.init.gradle"
+
+
+BUILD_MARKERS = ("settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts",
+                 "pom.xml")
+_SKIP = {".git", ".gradle", ".idea", ".vscode", "build", "target", "out", "node_modules",
+         ".venv", "venv", "__pycache__", "dist"}
+
+
+def java_project(start: str, max_entries: int = 20000, max_depth: int = 4) -> tuple[bool, str]:
+    """(is it a Java project?, why). Cheap: build files or shards at the project root, else the
+    first tracked .java file (git), else a bounded walk. Used to stay out of the way (no tools)
+    in projects that are not Java."""
+    start = os.path.abspath(os.path.expanduser(start))
+    root = find_project_root(start)
+    if os.path.isdir(os.path.join(root, DEFAULT_SHARDS_DIR)):
+        return True, f"SCIP shards in {root}"
+    for m in BUILD_MARKERS:
+        if os.path.exists(os.path.join(root, m)):
+            return True, f"{m} in {root}"
+    if root == os.path.expanduser("~"):
+        return False, "the home directory is not a project"
+    git = shutil.which("git")
+    if git and os.path.exists(os.path.join(root, ".git")):
+        try:
+            proc = subprocess.Popen([git, "-C", root, "ls-files", "-z", "--", "*.java"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            first = proc.stdout.read(4096) if proc.stdout else b""
+            proc.kill()
+            proc.wait()
+            if first:
+                return True, f"tracked .java files in {root}"
+            return False, f"no .java files tracked in {root}"
+        except OSError:
+            pass
+    seen = 0
+    base_depth = root.rstrip(os.sep).count(os.sep)
+    for d, dirs, files in os.walk(root):
+        if d.count(os.sep) - base_depth >= max_depth:
+            dirs[:] = []
+        dirs[:] = [x for x in dirs if x not in _SKIP and not x.startswith(".")]
+        if any(f.endswith(".java") for f in files):
+            return True, f".java files under {root}"
+        seen += len(files) + len(dirs)
+        if seen > max_entries:
+            break
+    return False, f"no build files or .java sources in {root}"
 
 
 def gradle_template() -> str:

@@ -3,6 +3,7 @@ and the line of code where it helps. Written for agents: few tokens, no decorati
 
 from __future__ import annotations
 
+import re
 from collections import OrderedDict
 from typing import Sequence, TypeVar
 
@@ -15,6 +16,7 @@ from .queries import (
     Reference,
     Resolution,
     Supertype,
+    declared_supertypes,
     signature_line,
 )
 from .workspace import Freshness, Workspace
@@ -56,6 +58,10 @@ def candidates(r: Resolution, limit: int = 30) -> str:
         lines.append("  " + definition_row(d))
     if len(r.candidates) > limit:
         lines.append(f"  … and {len(r.candidates) - limit} more")
+    for e in r.externals[:limit]:
+        lines.append(f"  external  {e}")
+    if len(r.externals) > limit:
+        lines.append(f"  … and {len(r.externals) - limit} more external")
     return "\n".join(lines)
 
 
@@ -131,9 +137,15 @@ def definition(ws: Workspace, d: Definition | None, symbol: str) -> str:
         if d.info.enclosing_symbol and not S.is_local(d.info.enclosing_symbol):
             lines.append(f"enclosed by {d.info.enclosing_symbol}")
         impl = [r.symbol for r in d.info.relationships if r.is_implementation]
-        if impl:
-            label = "overrides" if S.is_method(d.symbol) else "supertypes"
-            lines.append(f"{label}: " + ", ".join(S.short(s) for s in impl))
+        if impl and S.is_method(d.symbol):
+            lines.append("overrides: " + ", ".join(S.short(s) for s in impl))
+        elif impl:
+            declared = declared_supertypes(d)
+            direct = [s for s in impl if S.name_of(s) in declared] if declared else impl
+            rest = [s for s in impl if s not in direct]
+            lines.append("supertypes: " + ", ".join(S.short(s) for s in direct)
+                         + (f"; indirect ({len(rest)}): " + ", ".join(S.short(s) for s in rest[:8])
+                            + (" …" if len(rest) > 8 else "") if rest else ""))
         for doc in d.info.documentation:
             doc = doc.strip()
             if doc:
@@ -368,7 +380,7 @@ def family(method: str, fam, ws: Workspace, offset: int, limit: int,
     for m in fam:
         where = loc(m.definition) if m.definition else "external"
         sig = signature_line(m.definition.info) if m.definition else ""
-        lines.append(f"  {m.relation:<10} {S.short(m.symbol)}  {where}  {len(m.uses)} uses"
+        lines.append(f"  {m.relation:<10} {member_name(m)}  {where}  {len(m.uses)} uses"
                      + (f"  — {sig}" if sig else ""))
     if show_uses:
         flat = [(m, r) for m in fam for r in m.uses]
@@ -382,11 +394,19 @@ def family(method: str, fam, ws: Workspace, offset: int, limit: int,
         for m, r in shown:
             if m.symbol != current:
                 current = m.symbol
-                lines.append(f"  {S.short(m.symbol)}:")
+                lines.append(f"  {member_name(m)}:")
             t = texts[r.location.source].get(r.location.range.start_line, "")
             lines.append(f"    {r.location.source}:{r.location.line}: {t[:140]}"
                          + (f"  [{container_label(r.container)}]" if r.container else ""))
     return "\n".join(lines)
+
+
+def member_name(m) -> str:
+    d = m.definition
+    if d is not None and S.is_local(m.symbol):
+        name = d.info.display_name if d.info and d.info.display_name else m.symbol
+        return f"{name} (anonymous class, in {S.short(d.container)})" if d.container else name
+    return S.short(m.symbol)
 
 
 def overloads(method: str, items, ws: Workspace, offset: int, limit: int) -> str:
@@ -432,7 +452,7 @@ def status(st, root: str) -> str:
     return "\n".join(lines)
 
 
-def tests(symbol: str, uses, task_of) -> str:
+def tests(symbol: str, uses, task_of, gradle: str = "gradle") -> str:
     if not uses:
         return f"no test class uses {S.short(symbol)} directly"
     lines = [f"{S.short(symbol)} — used directly by {len(uses)} test classes"]
@@ -442,8 +462,11 @@ def tests(symbol: str, uses, task_of) -> str:
         lines.append(f"  {t.test_class}  {t.source}:" + ", ".join(map(str, t.lines)))
     lines.append("run them (scipq-mcp does not):")
     for task, ts in by_task.items():
+        filters = " ".join(f"--tests '{t.test_class}'" for t in ts)
         if task.startswith(":"):
-            lines.append(f"  gradle {task} " + " ".join(f"--tests '{t.test_class}'" for t in ts))
+            lines.append(f"  {gradle} {task} {filters}")
+        elif not task:
+            lines.append(f"  {gradle} test {filters}   (use the test task of your build)")
         elif task.endswith("/testCompile"):
             module = task.rsplit("/", 1)[0]
             names = ",".join(t.test_class.rsplit(".", 1)[-1] for t in ts)

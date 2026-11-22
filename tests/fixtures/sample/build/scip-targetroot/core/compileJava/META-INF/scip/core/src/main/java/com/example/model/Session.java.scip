@@ -1,0 +1,11 @@
+Ú
+1core/src/main/java/com/example/model/Session.java.com/example/model/Session#BZ
+ 1%com/example/model/Session#`<init>`().B"java/lang/AutoCloseable#B -#com/example/model/Entity#B7!com/example/model/Session#find().BZ local 0BR#com/example/model/Entity#B.$com/example/model/Entity#findById().Blocal 0B!java/lang/Override#B8"com/example/model/Session#close().BZ	 |
+com/example/model/Session#"
+java/lang/AutoCloseable#(2Session:5"java*-public class Session implements AutoCloseableK
+%com/example/model/Session#`<init>`().(	2<init>:"java*public Session()P
+!com/example/model/Session#find().(2find:#"java*public Entity find(long id)A
+local 02id:"java*long idB!com/example/model/Session#find().|
+"com/example/model/Session#close()."&
+ java/lang/AutoCloseable#close().(2close:%"java*@Override
+public void close()"java

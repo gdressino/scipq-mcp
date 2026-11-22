@@ -120,6 +120,9 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--shards-dir", help="shards directory relative to the root")
     s.add_argument("--freshness", choices=FRESHNESS_MODES, default="full",
                    help="stale-shard check on every answer (default: full)")
+    s.add_argument("--always", action="store_true",
+                   help="expose the tools even when started outside a Java project (by default "
+                        "the server stays idle there, with no tools)")
 
     sub.add_parser("gradle-init", help="print the Gradle init script that writes the shards")
     _query_parser(sub)
@@ -129,7 +132,7 @@ def main(argv: list[str] | None = None) -> None:
         from .server import serve
 
         serve(getattr(a, "root", None), getattr(a, "shards_dir", None),
-              getattr(a, "freshness", "full"))
+              getattr(a, "freshness", "full"), getattr(a, "always", False))
     elif a.command == "gradle-init":
         sys.stdout.write(_template())
     elif a.command == "query":

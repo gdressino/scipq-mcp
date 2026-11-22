@@ -1,0 +1,15 @@
+Õ
+/core/src/main/java/com/example/model/Store.java,com/example/model/Store#BZ /#com/example/model/Store#`<init>`().B$com/example/model/Session#B3com/example/model/Store#shared.B R1/%com/example/model/Session#`<init>`().B'.java/lang/Deprecated#B#com/example/model/Entity#B	5com/example/model/Store#load().B	Z local 0B	R	$com/example/model/Session#B
+;'com/example/model/Store#load().session.B
+R
+,/%com/example/model/Session#`<init>`().B
+#*1'com/example/model/Store#load().session.B+!com/example/model/Session#find().Blocal 0B "='com/example/model/Store#isDeprecated().BZ "com/example/model/Store#B(com/example/model/Store#class.B0&java/lang/Class#isAnnotationPresent().B.java/lang/Deprecated#B/9%java/lang/Deprecated#class.B:?š
+com/example/model/Store#Y Opens {@link Session}s. Mentions {@code @Deprecated} in javadoc: not an annotation use.
+(2Store:"java*public class StoreG
+#com/example/model/Store#`<init>`().(	2<init>:"java*public Store()Q
+com/example/model/Store#shared.(2shared:$"java*private final Session sharedZ
+com/example/model/Store#load().(2load:/"java*'@Deprecated
+public Entity load(long id)?
+local 02id:"java*long idBcom/example/model/Store#load().Q
+'com/example/model/Store#load().session.2session:"java*final Session session`
+'com/example/model/Store#isDeprecated().(2isDeprecated:%"java*public boolean isDeprecated()"java
