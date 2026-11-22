@@ -1,0 +1,10 @@
+ç
+.core/src/main/java/com/example/model/Gone.java+com/example/model/Gone#BZ	 ."com/example/model/Gone#`<init>`().B#com/example/model/Entity#B java/lang/Override#Bjava/lang/String#B3com/example/model/Gone#uid().BZ .$com/example/model/Entity#setState().B∆
+com/example/model/Gone#5Compiled once, then deleted: its shard is an orphan. "
+com/example/model/Entity#"#
+com/example/model/Identifiable#(2Gone:("java* public class Gone extends EntityE
+"com/example/model/Gone#`<init>`().(	2<init>:"java*public Gone()°
+com/example/model/Gone#uid()."+
+%com/example/model/Identifiable#uid()."%
+com/example/model/Entity#uid().(2uid:%"java*@Override
+public String uid()"java

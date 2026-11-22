@@ -1,0 +1,12 @@
+è
+-app/src/main/java/com/example/app/Report.javajava/B
+java/util/Bjava/util/Date#B+com/example/app/Report#BZ ."com/example/app/Report#`<init>`().Bjava/util/Date#B5!com/example/app/Report#changedAt.B R.$java/util/Date#`<init>`().B'+java/util/Date#B<&com/example/app/Report#getChangedAt().BZ
+ +!com/example/app/Report#changedAt.B	8"com/example/app/Report#setState().BZ local 0B"R"6 com/example/app/Report#render().BZ !com/example/app/Report#Blocal 1B#R#local 1B,"com/example/app/Report#setState().Blocal 1B0&com/example/app/Report#getChangedAt().B!#java/util/Date#getTime().B$+|
+com/example/app/Report#:Hand-written homonyms of Lombok getters on another class. (2Report:"java*public class ReportG
+"com/example/app/Report#`<init>`().(	2<init>:"java*public Report()V
+!com/example/app/Report#changedAt.(2	changedAt:$"java*private final Date changedAt\
+&com/example/app/Report#getChangedAt().(2getChangedAt:""java*public Date getChangedAt()Y
+"com/example/app/Report#setState().(2setState:'"java*public void setState(int state)G
+local 02state:"java*	int stateB"com/example/app/Report#setState().V
+ com/example/app/Report#render().(2render:("java* public long render(Report other)H
+local 12other:"java*Report otherB com/example/app/Report#render()."java

@@ -1,0 +1,294 @@
+"""SCIP symbol strings: parsing, short display names, and matching user-supplied names.
+
+scip-javac writes symbols without the scheme/package prefix, e.g.
+``com/example/model/Entity#setState().``; locals are ``local N``. Full global symbols
+(``scheme manager name version descriptors``) are accepted too: only the descriptors matter.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+# Descriptor suffixes (scip.proto, Descriptor.Suffix).
+NAMESPACE = "/"
+TYPE = "#"
+TERM = "."
+METHOD = "()"
+TYPE_PARAMETER = "[]"
+PARAMETER = "(param)"
+META = ":"
+MACRO = "!"
+
+CONSTRUCTOR = "<init>"
+
+
+@dataclass(frozen=True, slots=True)
+class Descriptor:
+    name: str
+    suffix: str
+    disambiguator: str = ""  # for methods: "" or "+1", "+2", ...
+
+
+def is_local(symbol: str) -> bool:
+    return symbol.startswith("local ")
+
+
+def _descriptor_part(symbol: str) -> str:
+    # "scheme manager package-name version descriptors"; ' ' inside names is escaped as '  '.
+    if " " not in symbol:
+        return symbol
+    parts, i, n = [], 0, len(symbol)
+    while i < n and len(parts) < 4:
+        j = i
+        while j < n:
+            if symbol[j] == " ":
+                if j + 1 < n and symbol[j + 1] == " ":
+                    j += 2
+                    continue
+                break
+            j += 1
+        parts.append(symbol[i:j])
+        i = j + 1
+    return symbol[i:] if len(parts) == 4 else symbol
+
+
+def parse(symbol: str) -> list[Descriptor]:
+    """Descriptors of a global symbol; [] for locals or unparsable input."""
+    if not symbol or is_local(symbol):
+        return []
+    s = _descriptor_part(symbol)
+    out: list[Descriptor] = []
+    i, n = 0, len(s)
+    while i < n:
+        if s[i] == "(":  # parameter: (name)
+            j = s.find(")", i)
+            if j < 0:
+                return out
+            out.append(Descriptor(s[i + 1:j], PARAMETER))
+            i = j + 1
+            continue
+        if s[i] == "[":  # type parameter: [name]
+            j = s.find("]", i)
+            if j < 0:
+                return out
+            out.append(Descriptor(s[i + 1:j], TYPE_PARAMETER))
+            i = j + 1
+            continue
+        if s[i] == "`":
+            j = i + 1
+            name_chars = []
+            while j < n:
+                if s[j] == "`":
+                    if j + 1 < n and s[j + 1] == "`":
+                        name_chars.append("`")
+                        j += 2
+                        continue
+                    break
+                name_chars.append(s[j])
+                j += 1
+            name, i = "".join(name_chars), j + 1
+        else:
+            j = i
+            while j < n and (s[j].isalnum() or s[j] in "_$+-"):
+                j += 1
+            name, i = s[i:j], j
+        if i >= n:
+            out.append(Descriptor(name, TERM))  # malformed, best effort
+            break
+        c = s[i]
+        if c == "/":
+            out.append(Descriptor(name, NAMESPACE))
+            i += 1
+        elif c == "#":
+            out.append(Descriptor(name, TYPE))
+            i += 1
+        elif c == ".":
+            out.append(Descriptor(name, TERM))
+            i += 1
+        elif c == ":":
+            out.append(Descriptor(name, META))
+            i += 1
+        elif c == "!":
+            out.append(Descriptor(name, MACRO))
+            i += 1
+        elif c == "(":
+            j = s.find(")", i)
+            if j < 0:
+                return out
+            out.append(Descriptor(name, METHOD, s[i + 1:j]))
+            i = j + 1
+            if i < n and s[i] == ".":
+                i += 1
+        else:
+            return out
+    return out
+
+
+def kind_of(symbol: str) -> str:
+    """'package', 'type', 'method', 'constructor', 'term' (field/enum constant), 'local' or ''."""
+    if is_local(symbol):
+        return "local"
+    d = parse(symbol)
+    if not d:
+        return ""
+    last = d[-1]
+    if last.suffix == METHOD:
+        return "constructor" if last.name == CONSTRUCTOR else "method"
+    return {NAMESPACE: "package", TYPE: "type", TERM: "term"}.get(last.suffix, "")
+
+
+def is_method(symbol: str) -> bool:
+    return kind_of(symbol) in ("method", "constructor")
+
+
+def is_type(symbol: str) -> bool:
+    return kind_of(symbol) == "type"
+
+
+def short(symbol: str) -> str:
+    """Readable name without the package: ``Entity#setState()``, ``Account.Builder``,
+    ``Account#<init>(+1)``. Locals are returned as is."""
+    d = parse(symbol)
+    if not d:
+        return symbol
+    parts = [x for x in d if x.suffix not in (NAMESPACE, PARAMETER, TYPE_PARAMETER)]
+    if not parts:
+        return ".".join(x.name for x in d if x.suffix == NAMESPACE) or symbol
+    out = []
+    for k, x in enumerate(parts):
+        sep = "" if k == 0 else ("." if parts[k - 1].suffix == TYPE and x.suffix == TYPE else "#")
+        if x.suffix == METHOD:
+            out.append(f"{sep}{x.name}({x.disambiguator})")
+        else:
+            out.append(f"{sep}{x.name}")
+    return "".join(out) or symbol
+
+
+def package_of(symbol: str) -> str:
+    return ".".join(x.name for x in parse(symbol) if x.suffix == NAMESPACE)
+
+
+def owner_type(symbol: str) -> str:
+    """Symbol of the innermost type containing a member (or the type itself)."""
+    s = _descriptor_part(symbol)
+    i = s.rfind("#")
+    return s[:i + 1] if i >= 0 else ""
+
+
+def top_level_type_name(symbol: str) -> str:
+    for x in parse(symbol):
+        if x.suffix == TYPE:
+            return x.name
+    return ""
+
+
+# --- user queries ---------------------------------------------------------------------------
+
+_QUERY_TOKEN = re.compile(r"([^#./()\s]+)(\((\+\d+)?\))?")
+
+
+@dataclass(frozen=True, slots=True)
+class Query:
+    """A name typed by a user or an agent: ``Entity``, ``Entity#setState``,
+    ``com.example.model.Entity.setState()``, ``setState(+1)``, ``Account.Builder``,
+    ``Account#<init>``. Matching is on the trailing descriptor names; package separators
+    may be '/', '.' or '#'. A trailing ``()`` restricts to methods (any overload), ``(+N)`` to
+    one overload."""
+
+    raw: str
+    names: tuple[str, ...]
+    method_only: bool
+    disambiguator: str | None  # None = any overload
+
+
+def looks_like_symbol(text: str) -> bool:
+    """A complete SCIP symbol (as printed by the tools), to be used verbatim."""
+    t = text.strip()
+    if is_local(t):
+        return True
+    return "/" in t and (t.endswith("#") or t.endswith(".") or t.endswith("/"))
+
+
+def parse_query(text: str) -> Query:
+    t = text.strip().replace("`", "")
+    names, method_only, disamb = [], False, None
+    pos = 0
+    for m in _QUERY_TOKEN.finditer(t):
+        if t[pos:m.start()].strip(" #./"):
+            break
+        names.append(m.group(1))
+        pos = m.end()
+        if m.group(2):
+            method_only = True
+            disamb = m.group(3)  # None for "()": any overload
+        else:
+            method_only, disamb = False, None
+    # Only the parentheses of the last token count.
+    return Query(text, tuple(names), method_only, disamb)
+
+
+def matches(symbol: str, q: Query) -> bool:
+    if not q.names or is_local(symbol):
+        return False
+    d = [x for x in parse(symbol) if x.suffix not in (PARAMETER, TYPE_PARAMETER)]
+    if len(d) < len(q.names):
+        return False
+    tail = d[-len(q.names):]
+    for x, name in zip(tail, q.names):
+        if x.name != name:
+            return False
+    last = tail[-1]
+    if q.method_only:
+        if last.suffix != METHOD:
+            return False
+        if q.disambiguator is not None and last.disambiguator != q.disambiguator:
+            return False
+    if last.suffix == NAMESPACE and len(q.names) == 1:
+        return False  # a bare name never means a package
+    return True
+
+
+def _escape(text: str) -> bytes:
+    from .workspace import regex_escape
+
+    return regex_escape(text)
+
+
+def definition_regex(q: Query) -> bytes:
+    """Regex (ERE/PCRE/re subset) matching a shard that *defines* a symbol matching `q`.
+
+    The trailing byte is the tag that follows SymbolInformation.symbol (see workspace.py), so
+    shards that only *mention* the name are skipped. It is a prefilter: candidates are decoded."""
+    parts = [_escape("`<init>`" if n == CONSTRUCTOR else n) for n in q.names]
+    body = b"[/#]".join(parts)
+    if q.method_only:
+        if q.disambiguator:
+            end = _escape(f"({q.disambiguator}).")
+        else:
+            end = rb"\((\+[0-9]+)?\)\."
+    else:
+        end = rb"(#|\.|\((\+[0-9]+)?\)\.)"
+    return rb"(^|[^A-Za-z0-9_$])" + body + end + b"[\x28\x32\x1a\x22]"
+
+
+def definition_regex_exact(symbol: str) -> bytes:
+    return _escape(symbol) + b"[\x28\x32\x1a\x22]"
+
+
+def reference_search(symbol: str) -> tuple[str, bytes]:
+    """('fixed' | 'regex', pattern) for shards with occurrences of `symbol`.
+
+    A type symbol (``…/Foo#``) is a prefix of every member symbol (``…/Foo#bar().``), so it
+    must not be followed by an identifier character. 'B' and 'J' stay allowed: they are the
+    range tags (0x42, 0x4a) that follow the symbol of an Occurrence."""
+    if symbol.endswith("#"):
+        return "regex", _escape(symbol) + rb"([^A-Za-z0-9_$`]|[BJ])"
+    return "fixed", symbol.encode()
+
+
+def implementation_needles(symbols) -> list[bytes]:
+    """Fixed needles for Relationship{symbol, [is_reference,] is_implementation}."""
+    from .workspace import IMPLEMENTATION_TAGS
+
+    return [s.encode() + t for s in symbols for t in IMPLEMENTATION_TAGS]

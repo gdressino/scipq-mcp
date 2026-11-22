@@ -1,0 +1,20 @@
+ò
+1core/src/main/java/com/example/model/Account.java.com/example/model/Account#BZ #com/example/model/Entity#B#java/lang/String#B5!com/example/model/Account#number.BR ;%com/example/model/Account#`<init>`().BZ java/lang/String#Blocal 0B R +!com/example/model/Account#number.Blocal 0B.$com/example/model/Entity#setState().Bjava/lang/Override#B
+java/lang/String#B6 com/example/model/Account#uid().BZ
+ +!com/example/model/Account#number.B8"com/example/model/Account#Builder#BZ 9-com/example/model/Account#Builder#`<init>`().Bjava/lang/String#B=)com/example/model/Account#Builder#number.BR,"com/example/model/Account#Builder#BA+com/example/model/Account#Builder#number().BZ 	java/lang/String#B$local 1B%+R+3)com/example/model/Account#Builder#number.Blocal 1B $com/example/model/Account#B@*com/example/model/Account#Builder#build().BZ 	/%com/example/model/Account#`<init>`().B3)com/example/model/Account#Builder#number.B%˜
+com/example/model/Account#"
+com/example/model/Entity#"#
+com/example/model/Identifiable#(2Account:+"java*#public class Account extends EntityR
+!com/example/model/Account#number.(2number:#"java*private final String numberX
+%com/example/model/Account#`<init>`().(	2<init>:%"java*public Account(String number)O
+local 02number:"java*String numberB%com/example/model/Account#`<init>`().¤
+ com/example/model/Account#uid()."+
+%com/example/model/Identifiable#uid()."%
+com/example/model/Entity#uid().(2uid:%"java*@Override
+public String uid()s
+"com/example/model/Account#Builder#Fluent builder for accounts. (2Builder:#"java*public static class BuilderS
+-com/example/model/Account#Builder#`<init>`().(	2<init>:"java*public Builder()T
+)com/example/model/Account#Builder#number.(2number:"java*private String numbere
++com/example/model/Account#Builder#number().(2number:,"java*$public Builder number(String number)U
+local 12number:"java*String numberB+com/example/model/Account#Builder#number().U
+*com/example/model/Account#Builder#build().(2build:"java*public Account build()"java

@@ -1,0 +1,14 @@
+¹
+2app/src/test/java/com/example/app/ServiceTest.javacom/B
+com/example/Bcom/example/model/B$com/example/model/Account#B com/B
+com/example/Bcom/example/model/B#com/example/model/Entity#Bcom/B
+com/example/Bcom/example/model/B'com/example/model/SubAccount#B#0com/example/app/ServiceTest#BZ 3'com/example/app/ServiceTest#`<init>`().B9#com/example/app/ServiceTest#main().BZ java/lang/String#B"local 0B%)R)#com/example/model/Entity#Blocal 1BR'#com/example/model/Entity#B.$com/example/model/Entity#findById().B"$com/example/model/Account#B	local 2B	R	(2(com/example/model/SubAccount#`<init>`().B	"local 2B
+	.$com/example/model/Entity#setState().B
+
+-#com/example/app/Service#`<init>`().B-#com/example/app/Service#activate().Blocal 2B java/lang/System#Bjava/lang/System#out.B* java/io/PrintStream#println(+8).Blocal 2B* com/example/model/Account#uid().B local 1B%&O
+com/example/app/ServiceTest#(2ServiceTest: "java*public class ServiceTestQ
+'com/example/app/ServiceTest#`<init>`().(	2<init>:"java*public ServiceTest()]
+#com/example/app/ServiceTest#main().(P2main:."java*&public static void main(String[] args)K
+local 02args:"java*String[] argsB#com/example/app/ServiceTest#main().E
+local 1(=2e:"java*Entity eB#com/example/app/ServiceTest#main().F
+local 2(=2a:"java*	Account aB#com/example/app/ServiceTest#main()."java

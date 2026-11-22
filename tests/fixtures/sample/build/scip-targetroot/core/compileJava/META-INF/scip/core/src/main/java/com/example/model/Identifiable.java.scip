@@ -1,0 +1,5 @@
+É
+6core/src/main/java/com/example/model/Identifiable.java3com/example/model/Identifiable#BZ java/lang/String#B
+9%com/example/model/Identifiable#uid().BR„
+com/example/model/Identifiable#*Anything with a stable unique identifier. (2Identifiable:%"java*public interface Identifiableu
+%com/example/model/Identifiable#uid().Returns the unique identifier. (B2uid:$"java*public abstract String uid()"java

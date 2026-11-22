@@ -1,0 +1,34 @@
+Ž%
+.app/src/main/java/com/example/app/Service.javacom/B
+com/example/Bcom/example/model/B$com/example/model/Account#B com/B
+com/example/Bcom/example/model/B#com/example/model/Entity#Bcom/B
+com/example/Bcom/example/model/B"com/example/model/Group#Bcom/B
+com/example/Bcom/example/model/B%com/example/model/Snapshot#B!com/B
+com/example/Bcom/example/model/B&com/example/model/Validator#B",com/example/app/Service#BZ3 /#com/example/app/Service#`<init>`().B#com/example/model/Entity#B	4 com/example/app/Service#DEFAULT.B	 'R	(* com/example/app/Service#DEFAULT.B#com/example/model/Entity#B.$com/example/model/Entity#findById().B!$com/example/model/Account#B1com/example/app/Service#seed.BRK$com/example/model/Account#B%,7-com/example/model/Account#Builder#`<init>`().B-45+com/example/model/Account#Builder#number().B7=4*com/example/model/Account#Builder#build().BCH6"com/example/app/Service#seedState.BR2'com/example/app/Service#seed.B"&.$com/example/model/Entity#getState().B'/&com/example/model/Validator#B:$com/example/app/Service#notArchived.B'Z local 0B*+R*+local 0B	.$com/example/model/Entity#setState().B
+9#com/example/app/Service#activate().BZ #com/example/model/Entity#Blocal 1B !R!local 1B	.$com/example/model/Entity#setState().B
+.$com/example/app/Service#notArchived.B1'com/example/model/Validator#validate().Blocal 1B<&com/example/app/Service#activateAll().BZ& "com/example/model/Group#B!local 2B"#R#&com/example/model/Validator#Blocal 3BZ# 
+&com/example/model/Validator#B&java/lang/Override#Blocal 5B#Z" #com/example/model/Entity#B$*local 6B+,R$,local 6B .$com/example/model/Entity#setState().B local 3B$1'com/example/model/Validator#validate().B$local 2B$local 2B%	.$com/example/model/Entity#setState().B%
+java/lang/String#B(8"com/example/app/Service#process().B(Z(* local 7B(R(java/lang/Integer#B))java/lang/Integer#toString(+1).B)local 7B) !java/lang/String#B,:$com/example/app/Service#process(+1).B,Z,. java/lang/String#B, local 8B,!"R,","com/example/app/Service#process().B-local 8B-$java/lang/String#length().B-4com/example/app/Service#age().B0Z02 %com/example/model/Snapshot#B0local 9B0R0local 9B14*com/example/model/Snapshot#getChangedAt().B1#java/util/Date#getTime().B1 'C
+com/example/app/Service#(2Service:"java*public class ServiceI
+#com/example/app/Service#`<init>`().(	2<init>:"java*public Service()Z
+ com/example/app/Service#DEFAULT.(O2DEFAULT:+"java*#private static final Entity DEFAULTK
+com/example/app/Service#seed.(2seed:""java*private final Account seedV
+"com/example/app/Service#seedState.(2	seedState:#"java*private final int seedStateb
+$com/example/app/Service#notArchived.(2notArchived:+"java*#private final Validator notArchivedF
+local 02e:"java*Entity eB&com/example/app/Service#`<init>`(+-1).Y
+#com/example/app/Service#activate().(2activate:&"java*public void activate(Entity e)C
+local 12e:"java*Entity eB#com/example/app/Service#activate().a
+&com/example/app/Service#activateAll().(2activateAll:("java* public void activateAll(Group g)E
+local 22g:"java*Group gB&com/example/app/Service#activateAll().Q
+local 3(=2anon:"java*Validator anonB&com/example/app/Service#activateAll().‚
+local 5"-
+'com/example/model/Validator#validate().(2validate:3"java*+@Override
+public boolean validate(Entity e)Blocal 4'
+local 62e:"java*Entity eBlocal 5U
+"com/example/app/Service#process().(2process:$"java*public String process(int n)?
+local 72n:"java*int nB"com/example/app/Service#process().Z
+$com/example/app/Service#process(+1).(2process:'"java*public String process(String s)D
+local 82s:"java*String sB$com/example/app/Service#process(+1).L
+com/example/app/Service#age().(2age:#"java*public long age(Snapshot s)@
+local 92s:"java*
+Snapshot sBcom/example/app/Service#age()."java

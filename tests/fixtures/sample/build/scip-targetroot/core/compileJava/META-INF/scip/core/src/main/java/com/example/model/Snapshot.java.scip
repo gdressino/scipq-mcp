@@ -1,0 +1,19 @@
+®
+2core/src/main/java/com/example/model/Snapshot.javajava/B
+java/util/Bjava/util/Date#Blombok/Blombok/Getter#Blombok/Getter#B/com/example/model/Snapshot#BZ
+ 2&com/example/model/Snapshot#`<init>`().Bjava/util/Date#B9%com/example/model/Snapshot#changedAt.BR%java/lang/SuppressWarnings#B
+java/lang/Bjava/Blombok/Generated#Blombok/Bjava/util/Date#B/%com/example/model/Snapshot#changedAt.B@*com/example/model/Snapshot#getChangedAt().J	 R8$com/example/model/Snapshot#archived.B	R	%java/lang/SuppressWarnings#B	
+java/lang/B	java/B	lombok/Generated#B	lombok/B	.$com/example/model/Snapshot#archived.B	>(com/example/model/Snapshot#isArchived().J	
+ 	R	l
+com/example/model/Snapshot#Lombok-generated getters. (2Snapshot:%"java*@Getter
+public class SnapshotM
+&com/example/model/Snapshot#`<init>`().(	2<init>:"java*public Snapshot()V
+%com/example/model/Snapshot#changedAt.(2	changedAt: "java*protected Date changedAtT
+$com/example/model/Snapshot#archived.(2archived: "java*private boolean archivedÑ
+*com/example/model/Snapshot#getChangedAt().(2getChangedAt:F"java*>@SuppressWarnings("all")
+@Generated
+public Date getChangedAt()Å
+(com/example/model/Snapshot#isArchived().(2
+isArchived:G"java*?@SuppressWarnings("all")
+@Generated
+public boolean isArchived()"java

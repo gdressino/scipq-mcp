@@ -1,0 +1,18 @@
+š
+0core/src/main/java/com/example/model/Entity.java-com/example/model/Entity#BZ 0$com/example/model/Entity#`<init>`().B)com/example/model/Identifiable#B(43com/example/model/Entity#state.BR:$com/example/model/Entity#setState().BZ local 0B"R")com/example/model/Entity#state.Blocal 0B:$com/example/model/Entity#getState().BZ )com/example/model/Entity#state.B#com/example/model/Entity#B:$com/example/model/Entity#findById().B!Z local 1B')R")java/lang/Override#Bjava/lang/String#B5com/example/model/Entity#uid().BZ !²
+com/example/model/Entity#( Base class for every persisted entity.
+"#
+com/example/model/Identifiable#(2Entity:<"java*4public abstract class Entity implements IdentifiableI
+$com/example/model/Entity#`<init>`().(	2<init>:"java*public Entity()E
+com/example/model/Entity#state.(2state:"java*private int state˜
+$com/example/model/Entity#setState().; Changes the lifecycle state.
+
+ @param state the new state
+(2setState:'"java*public void setState(int state)I
+local 02state:"java*	int stateB$com/example/model/Entity#setState().Q
+$com/example/model/Entity#getState().(2getState:"java*public int getState()b
+$com/example/model/Entity#findById().(P2findById:."java*&public static Entity findById(long id)D
+local 12id:"java*long idB$com/example/model/Entity#findById().…
+com/example/model/Entity#uid()."+
+%com/example/model/Identifiable#uid().(B2uid:."java*&@Override
+public abstract String uid()"java

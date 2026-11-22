@@ -1,0 +1,49 @@
+// Gradle init script: write per-file SCIP shards on every Java compilation, for scipq-mcp.
+//
+// javac + the scip-javac plugin write one shard per source file:
+//   <root>/build/scip-targetroot/<module>/<task>/META-INF/scip/<source path from the root>.scip
+// Gradle compiles incrementally, so only the shards of what changed are rewritten. Shards of
+// deleted sources stay on disk; scipq-mcp ignores them.
+//
+// Install (pick one):
+//   - per build:   ./gradlew build --init-script /path/to/scip-shards.init.gradle
+//   - every build: copy or symlink it into ~/.gradle/init.d/ and list your projects below
+// Turn it off for one run with -Pscip=false (javac arguments change, so the next run with it on
+// recompiles everything).
+//
+// It only touches local builds that load this script; CI does not see ~/.gradle/init.d.
+
+def SCIP_VERSION = "0.14.2"
+
+// Root project names (rootProject.name in settings.gradle) this applies to. Empty = all builds
+// that load this script. Matching by name, not by directory, also covers git worktrees.
+def PROJECTS = [] as Set<String>
+
+gradle.rootProject { root ->
+    if (!PROJECTS.isEmpty() && !PROJECTS.contains(root.name)) return
+    if (root.findProperty("scip")?.toString() == "false") return
+
+    root.allprojects { p ->
+        p.plugins.withId("java") {
+            // Every source set has its own processor path (main -> annotationProcessor,
+            // test -> testAnnotationProcessor, ...); without this javac fails with
+            // "plug-in not found: scip".
+            p.extensions.getByType(SourceSetContainer).configureEach { ss ->
+                p.dependencies.add(ss.annotationProcessorConfigurationName,
+                        "org.scip-code:scip-javac:${SCIP_VERSION}")
+            }
+            p.tasks.withType(JavaCompile).configureEach { c ->
+                // One directory per task, declared as an output: with the build cache on, a
+                // FROM-CACHE compilation does not run javac, and without this the shards would
+                // silently stay those of the last real run (another branch, other contents).
+                def module = p == root ? "_root" : p.path.substring(1).replace(":", "/")
+                def targetroot = new File(root.projectDir, "build/scip-targetroot/${module}/${c.name}")
+                c.outputs.dir(targetroot).withPropertyName("scipShards")
+                // Through an argument provider rather than compilerArgs.add(...): builds that
+                // assign `options.compilerArgs = [...]` later would drop the -Xplugin flag.
+                def pluginArg = "-Xplugin:scip -sourceroot:${root.projectDir} -targetroot:${targetroot}".toString()
+                c.options.compilerArgumentProviders.add({ [pluginArg] } as org.gradle.process.CommandLineArgumentProvider)
+            }
+        }
+    }
+}

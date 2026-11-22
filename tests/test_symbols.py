@@ -1,0 +1,60 @@
+import re
+
+from scipq_mcp import symbols as S
+
+
+def test_parse_and_short():
+    assert S.short("com/example/model/Account#Builder#number().") == "Account.Builder#number()"
+    assert S.short("com/example/model/Account#`<init>`(+1).") == "Account#<init>(+1)"
+    assert S.short("com/example/model/Entity#state.") == "Entity#state"
+    assert S.short("com/example/model/") == "com.example.model"
+    assert S.short("local 3") == "local 3"
+    assert S.short("semanticdb maven maven/a 1.0 com/x/Y#z().") == "Y#z()"
+    assert S.kind_of("com/example/model/Account#") == "type"
+    assert S.kind_of("com/example/model/Account#`<init>`().") == "constructor"
+    assert S.kind_of("com/example/model/Account#uid().") == "method"
+    assert S.kind_of("com/example/model/Account#number.") == "term"
+    assert S.package_of("com/example/model/Account#uid().") == "com.example.model"
+    assert S.owner_type("com/example/model/Account#Builder#build().") == \
+        "com/example/model/Account#Builder#"
+    assert S.top_level_type_name("com/example/model/Account#Builder#build().") == "Account"
+
+
+def test_query_matching():
+    sym = "com/example/model/Account#Builder#number()."
+    field = "com/example/model/Account#Builder#number."
+    for q in ("number", "Builder#number", "Account.Builder.number", "com.example.model.Account.Builder.number"):
+        assert S.matches(sym, S.parse_query(q)), q
+    assert S.matches(sym, S.parse_query("number()"))
+    assert not S.matches(field, S.parse_query("number()"))
+    assert not S.matches(sym, S.parse_query("number(+1)"))
+    assert S.matches("com/example/app/Service#process(+1).", S.parse_query("process(+1)"))
+    assert S.matches("com/example/model/Account#`<init>`().", S.parse_query("Account#<init>"))
+    assert not S.matches("com/example/model/", S.parse_query("model"))
+    assert not S.matches("local 1", S.parse_query("local"))
+
+
+def test_looks_like_symbol():
+    assert S.looks_like_symbol("com/example/model/Entity#setState().")
+    assert S.looks_like_symbol("com/example/model/Entity#")
+    assert not S.looks_like_symbol("Entity#setState")
+    assert not S.looks_like_symbol("com.example.model.Entity")
+
+
+def test_definition_regex_selects_definitions_only():
+    q = S.parse_query("Entity#setState")
+    rx = re.compile(S.definition_regex(q))
+    sym = b"com/example/model/Entity#setState()."
+    as_definition = b"\x0a" + bytes([len(sym)]) + sym + b"\x28\x1a"   # SymbolInformation
+    as_reference = b"\x12" + bytes([len(sym)]) + sym + b"\x42\x02"     # Occurrence
+    assert rx.search(as_definition)
+    assert not rx.search(as_reference)
+    assert not re.compile(S.definition_regex(S.parse_query("tity#setState"))).search(as_definition)
+
+
+def test_reference_search_for_types_skips_members():
+    mode, pat = S.reference_search("com/example/model/Entity#")
+    assert mode == "regex"
+    rx = re.compile(pat)
+    assert rx.search(b"com/example/model/Entity#\x42")
+    assert not rx.search(b"com/example/model/Entity#setState().\x42")
