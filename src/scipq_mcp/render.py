@@ -259,9 +259,12 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None) -> st
         lines.append(f"WARNING: {len(f.uncompiled)} .java file{'s' if len(f.uncompiled) != 1 else ''} "
                      "created after the last compilation of their module, not indexed: "
                      + _some(f.uncompiled))
-    if f.tasks:
-        lines.append("  recompile to refresh: " + ", ".join(sorted(f.tasks)[:6])
-                     + (" …" if len(f.tasks) > 6 else "") + " (scipq-mcp does not build)")
+    tasks = sorted(t for t in f.tasks if t)
+    if tasks:
+        lines.append("  recompile to refresh: " + ", ".join(tasks[:6])
+                     + (" …" if len(tasks) > 6 else "") + " (scipq-mcp does not build)")
+    elif f.stale or f.uncompiled:
+        lines.append("  recompile the project to refresh (scipq-mcp does not build)")
     return "\n".join(lines)
 
 
@@ -420,9 +423,12 @@ def status(st, root: str) -> str:
                      + (": " + _some(st.without_shard) if st.without_shard else "")
                      + (" (some may be legitimately excluded: not in a source set, or "
                         "empty/commented out)" if st.without_shard else ""))
-    if st.refresh:
-        lines.append("recompile to refresh: " + ", ".join(st.refresh)
+    refresh = [t for t in st.refresh if t]
+    if refresh:
+        lines.append("recompile to refresh: " + ", ".join(refresh)
                      + " (scipq-mcp does not build)")
+    elif st.stale or st.uncompiled:
+        lines.append("recompile the project to refresh (scipq-mcp does not build)")
     return "\n".join(lines)
 
 

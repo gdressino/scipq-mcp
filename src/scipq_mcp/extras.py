@@ -18,6 +18,7 @@ from .workspace import SUFFIX, build_task
 SKIP_DIRS = {".git", ".gradle", ".idea", ".vscode", "build", "target", "out", "node_modules",
              ".mvn", "bin", ".venv", "__pycache__"}
 TEST_TASK = re.compile(r"test", re.IGNORECASE)
+TEST_PATH = re.compile(r"(^|/)(src/)?[A-Za-z]*[tT]est[A-Za-z]*/")
 
 
 # --- source -----------------------------------------------------------------------------------
@@ -452,7 +453,11 @@ def tests_using(nav: Navigator, symbol: str) -> list[TestUse]:
     by_file: OrderedDict[str, TestUse] = OrderedDict()
     for r in refs:
         task = r.module.rpartition("/")[2]
-        if not TEST_TASK.search(task):
+        if task in (".", ""):
+            # All shards in one directory: no task to tell tests apart, use the source path.
+            if not TEST_PATH.search(r.location.source):
+                continue
+        elif not TEST_TASK.search(task):
             continue
         t = by_file.get(r.location.source)
         if t is None:

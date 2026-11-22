@@ -133,3 +133,28 @@ def test_setup(sample_root, tmp_path, monkeypatch):
     (tmp_path / "pom.xml").write_text("<project/>")
     assert "maven-compiler-plugin" in Service(str(tmp_path)).setup()
     assert "Call the `setup` tool" in Service(str(tmp_path)).references("X")
+
+
+def test_single_root_layout(sample_copy):
+    """All shards under build/scip-targetroot/META-INF/scip (one -targetroot for every task)."""
+    import shutil
+    base = os.path.join(sample_copy, "build", "scip-targetroot")
+    flat = os.path.join(sample_copy, "build", "flat")
+    for d, _, files in os.walk(base):
+        for n in files:
+            src = os.path.join(d, n)
+            rel = os.path.relpath(src, base).split("/META-INF/scip/", 1)[1]
+            dst = os.path.join(flat, "META-INF", "scip", rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+    shutil.rmtree(base)
+    os.rename(flat, base)
+    svc = Service(sample_copy)
+    assert "7 references in 4 files" in svc.references("Entity#setState")
+    assert "WARNING" not in svc.references("Entity#setState")
+    group = os.path.join(sample_copy, "core/src/main/java/com/example/model/Group.java")
+    os.utime(group, (1_700_000_500, 1_700_000_500))
+    out = svc.references("Entity#setState")
+    assert "in these results: core/src/main/java/com/example/model/Group.java" in out
+    assert "recompile the project to refresh" in out
+    assert "com.example.app.ServiceTest" in svc.tests("Entity#setState")

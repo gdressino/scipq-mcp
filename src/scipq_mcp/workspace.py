@@ -273,33 +273,27 @@ class Workspace:
                  for k, (r, _m) in enumerate(self.scip_roots())}
         newest: dict[int, float] = {}
         shard_of: dict[str, float] = {}
+        task_of_source: dict[str, int] = {}
         task_of_dir: dict[str, int] = {}
         for rel, mt in shard_mtimes.items():
-            prefix, sep, source = rel.partition("/META-INF/scip/")
-            if not sep or not source.endswith(SUFFIX):
+            split = split_shard_path(rel)
+            if split is None:
                 continue
-            k = roots.get(prefix + "/META-INF/scip/")
+            k = roots.get(split[0])
             if k is None:
                 continue
-            source = source[:-len(SUFFIX)]
+            source = split[1]
             newest[k] = max(newest.get(k, 0.0), mt)
             shard_of[source] = max(shard_of.get(source, 0.0), mt)
+            task_of_source[source] = k
             task_of_dir.setdefault(source.rpartition("/")[0], k)
-        task_of_source: dict[str, int] = {}
-        for rel, _mt in shard_mtimes.items():
-            prefix, sep, source = rel.partition("/META-INF/scip/")
-            k = roots.get(prefix + "/META-INF/scip/") if sep else None
-            if k is not None:
-                task_of_source[source[:-len(SUFFIX)]] = k
         modules = [m for _r, m in self.scip_roots()]
         for source, mt in java_mtimes.items():
             sm = shard_of.get(source)
             if sm is not None:
                 if mt > sm:
                     result.stale.append(source)
-                    k = task_of_source.get(source)
-                    if k is not None:
-                        result.tasks.add(build_task(modules[k]))
+                    result.tasks.add(build_task(modules[task_of_source[source]]))
             else:
                 k = task_of_dir.get(source.rpartition("/")[0])
                 if k is not None and mt > newest.get(k, 0.0):
@@ -505,10 +499,23 @@ def _gnu_find() -> str | None:
         return None
 
 
+def split_shard_path(rel: str) -> tuple[str, str] | None:
+    """("<prefix>META-INF/scip/", source) for a shard path relative to the shards dir, e.g.
+    "core/compileJava/META-INF/scip/a/B.java.scip" or "META-INF/scip/a/B.java.scip"."""
+    marker = "META-INF/scip/"
+    i = 0 if rel.startswith(marker) else rel.find("/" + marker) + 1
+    if i < 0 or (i == 0 and not rel.startswith(marker)) or not rel.endswith(SUFFIX):
+        return None
+    j = i + len(marker)
+    return rel[:j], rel[j:-len(SUFFIX)]
+
+
 def build_task(module: str) -> str:
     """Gradle task path for a "<module>/<task>" shards directory written by the init template
     ("core/compileJava" -> ":core:compileJava", "_root/compileJava" -> ":compileJava");
-    other layouts are returned as they are."""
+    other layouts are returned as they are ("" when all shards share one directory)."""
+    if module in (".", ""):
+        return ""
     mod, _, task = module.rpartition("/")
     if task.startswith("compile") and task.endswith("Java"):
         return f":{task}" if mod in ("", "_root") else f":{mod.replace('/', ':')}:{task}"
