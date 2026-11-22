@@ -21,8 +21,9 @@ the rest is the MCP SDK), one server for any number of checkouts.
 
 ## Read-only by design
 
-scipq-mcp **reads** shards, sources and (in later versions) git metadata. It never compiles,
-never runs tests and never writes to your repository. The index is produced by the build you
+scipq-mcp **reads** shards, sources and git metadata (`git diff`, `git ls-files`). It never
+compiles, never runs tests and never writes to your repository; the only thing it writes is its
+own cache. The index is produced by the build you
 already run; scipq-mcp consumes it. When the index is not enough (stale shards, files that
 never compiled, a checkout that was never built) it says so and tells you what to build,
 without running it.
@@ -115,7 +116,8 @@ to do). Start it with `--always` to expose the tools anyway, e.g. to query other
 through `project_root`.
 
 Server options: `--root DIR` (default project), `--shards-dir` (default
-`build/scip-targetroot`), `--freshness full|results|off` (see below), `--always`.
+`build/scip-targetroot`), `--freshness full|results|off` (see below), `--always`,
+`--cache-dir DIR`, `--index-external all|methods|none`, `--config FILE`.
 
 ## Tools
 
@@ -142,6 +144,57 @@ Server options: `--root DIR` (default project), `--shards-dir` (default
 
 All tools are read-only and take an optional `project_root`. Lists take `offset`/`limit` and
 say `next offset N` when there is more.
+
+### Whole-project tools (auxiliary index)
+
+Questions that follow call chains or look at everything use an on-disk index, built from the
+shards the first time one of these tools runs (~15 s and ~170 MB for 10,000 files, in a child
+process so the server stays small) and updated incrementally afterwards (unchanged: ~0.1 s).
+
+| Tool | What it answers |
+|---|---|
+| `impact(symbol, depth, include_overridden, group_by)` | transitive callers by depth, grouped by module or package, tests marked |
+| `tests(symbol, transitive=true)` | test classes that reach a symbol through callers, with the command to run them |
+| `path(source, target)` | shortest call chains between two symbols, with the lines |
+| `changed(base, staged, paths)` | from `git diff` to the definitions whose lines changed, their callers and the tests to run |
+| `deps(level, scope, target, sites)` | dependencies between modules or packages, cycles, or every call site from one scope to another |
+| `dead_code(scope, public_is_api)` | candidates nobody references, leaving out framework entry points, overrides, accessors in use and names used in strings |
+| `census(category)` | annotations in use, or entities and their tables |
+| `cache_status()` | where the index of this checkout is and how big |
+
+The index lives in the user cache — `$XDG_CACHE_HOME/scipq` (`~/.cache/scipq`), or
+`~/Library/Caches/scipq` on macOS — one directory per checkout (worktrees get their own), private
+(`0700`, owner and symlink checked). `--cache-dir DIR` moves it. It is disposable: deleted, it is
+rebuilt. `scipq-mcp cache status|prune|clear` manages it; the server prunes the entries of
+checkouts that no longer exist when it starts. `--index-external methods|none` keeps fewer
+references to JDK and library symbols (smaller, slower to build).
+
+### Profiles and project configuration
+
+Framework knowledge is declarative. Built-in profiles — `junit`, `spring`, `jaxrs`, `vaadin`,
+`cucumber`, `jpa`, `jdo` — list entry points (annotations, supertypes, type names) and the
+persistence model; with no configuration, the profiles whose annotations appear in the project
+are used. A configuration file (`--config FILE`, default `$XDG_CONFIG_HOME/scipq/config.toml`)
+picks profiles and project settings per checkout:
+
+```toml
+[[project]]
+match = { root_project = "shop" }   # or { path = "~/src/shop*" } (worktrees), { git_remote = "…" }
+profiles = ["jpa", "spring", "junit"]
+
+[project.tests]
+filter = "./run-tests.sh {task} --tests '{fqcn}'"   # {module} {task} {fqcn} {simple} {classes}
+
+[project.by_name]
+globs = ["*.java", "*.xml"]
+
+[[project.entry_points]]
+type_names = ["*Screen"]
+```
+
+When several entries match, `path` beats `root_project`, which beats `git_remote`. Your own
+profiles go in `$XDG_CONFIG_HOME/scipq/profiles/*.toml` (same format as
+`src/scipq_mcp/profiles/`). `index_status` shows which entry and profiles apply.
 
 ### Naming symbols
 

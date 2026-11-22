@@ -481,6 +481,8 @@ def status(st, root: str) -> str:
                      + (": " + _some(st.without_shard) if st.without_shard else "")
                      + (" (some may be legitimately excluded: not in a source set, or "
                         "empty/commented out)" if st.without_shard else ""))
+    if getattr(st, "settings", None) is not None:
+        lines += settings_lines(st.settings)
     refresh = [t for t in st.refresh if t]
     if refresh:
         lines.append("recompile to refresh: " + ", ".join(refresh)
@@ -490,7 +492,19 @@ def status(st, root: str) -> str:
     return "\n".join(lines)
 
 
-def tests(symbol: str, uses, task_of, gradle: str = "gradle") -> str:
+def format_test_filter(template: str, module: str, classes: list[str]) -> str:
+    """A configured test command: {module} (`a:b`), {task} (`:a:b:test`), and per class
+    {fqcn} / {simple}, or {classes} (all FQCNs, space-separated) for one line per module."""
+    mod = module.replace("/", ":") if module not in (".", "") else ""
+    task = f":{mod}:test" if mod else "test"
+    if "{fqcn}" in template or "{simple}" in template:
+        return "\n  ".join(template.format(module=mod, task=task, fqcn=c,
+                                            simple=c.rsplit(".", 1)[-1], classes=c)
+                           for c in classes)
+    return template.format(module=mod, task=task, classes=" ".join(classes), fqcn="", simple="")
+
+
+def tests(symbol: str, uses, task_of, gradle: str = "gradle", template: str = "") -> str:
     if not uses:
         return f"no test class uses {S.short(symbol)} directly"
     lines = [f"{S.short(symbol)} — used directly by {len(uses)} test classes"]
@@ -499,6 +513,13 @@ def tests(symbol: str, uses, task_of, gradle: str = "gradle") -> str:
         by_task.setdefault(task_of(t.module), []).append(t)
         lines.append(f"  {t.test_class}  {t.source}:" + ", ".join(map(str, t.lines)))
     lines.append("run them (scipq-mcp does not):")
+    if template:
+        mods: OrderedDict[str, list[str]] = OrderedDict()
+        for t in uses:
+            mods.setdefault(t.module.rpartition("/")[0], []).append(t.test_class)
+        for mod, classes in mods.items():
+            lines.append("  " + format_test_filter(template, mod, classes))
+        return "\n".join(lines)
     for task, ts in by_task.items():
         filters = " ".join(f"--tests '{t.test_class}'" for t in ts)
         if task.startswith(":"):
@@ -512,3 +533,209 @@ def tests(symbol: str, uses, task_of, gradle: str = "gradle") -> str:
         else:
             lines.append(f"  {task}: " + " ".join(t.test_class for t in ts))
     return "\n".join(lines)
+
+
+# --- v2 (auxiliary index) ----------------------------------------------------------------------
+
+def index_note(stats) -> str:
+    if stats is None or not stats.processed and not stats.removed:
+        return ""
+    if stats.built_from_scratch:
+        return (f"-- index built: {stats.processed} shards in {stats.seconds:.0f} s (once per "
+                "checkout; later updates are incremental)\n")
+    return f"-- index updated: {stats.processed} shards, {stats.removed} removed\n"
+
+
+def impact(symbol: str, nodes, truncated: bool, depth: int, group_by: str, offset: int,
+           limit: int) -> str:
+    if not nodes:
+        return f"nothing in this project calls {S.short(symbol)}"
+    groups: OrderedDict[str, list] = OrderedDict()
+    for n in nodes:
+        key = S.package_of(n.symbol) if group_by == "package" else n.module
+        groups.setdefault(key or "(root)", []).append(n)
+    by_depth: OrderedDict[int, int] = OrderedDict()
+    for n in nodes:
+        by_depth[n.depth] = by_depth.get(n.depth, 0) + 1
+    tests = sum(1 for n in nodes if n.test)
+    lines = [f"impact of {S.short(symbol)} (callers up to depth {depth}): {len(nodes)} "
+             f"definitions, {tests} in tests; by depth "
+             + ", ".join(f"{d}: {c}" for d, c in by_depth.items())
+             + ("; TRUNCATED" if truncated else "")]
+    lines.append(f"by {group_by}: " + ", ".join(
+        f"{g} {len(ns)}" for g, ns in sorted(groups.items(), key=lambda kv: -len(kv[1]))[:12]))
+    rows = []
+    for g, ns in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        rows.append(f"{g}:")
+        for n in ns:
+            test = "  [test]" if n.test else ""
+            rows.append(f"  d{n.depth}  {S.short(n.symbol)}  {n.source}:{n.line}  "
+                        f"→ {S.short(n.via)}{test}")
+    shown, suffix = page(rows, offset, limit)
+    if suffix:
+        lines.append("rows" + suffix + ":")
+    lines += list(shown)
+    return "\n".join(lines)
+
+
+def path(src: str, dst: str, paths) -> str:
+    if not paths:
+        return f"no call path from {S.short(src)} to {S.short(dst)} within the depth searched"
+    lines = [f"{len(paths)} shortest call path{'s' if len(paths) != 1 else ''} from "
+             f"{S.short(src)} to {S.short(dst)}:"]
+    for k, p in enumerate(paths, 1):
+        chain = []
+        for sym, sites in p:
+            at = f" (line {', '.join(map(str, sites[:3]))})" if sites else ""
+            chain.append(S.short(sym) + at)
+        lines.append(f"{k}. " + "  →  ".join(chain))
+    return "\n".join(lines)
+
+
+def tests_transitive(symbol: str, nodes, depth: int, task_of, gradle: str,
+                     template: str = "") -> str:
+    tests = [n for n in nodes if n.test]
+    if not tests:
+        return f"no test reaches {S.short(symbol)} within depth {depth}"
+    classes: OrderedDict[tuple[str, str], list] = OrderedDict()
+    for n in tests:
+        top = S.top_level_type_name(n.symbol)
+        fqcn = (S.package_of(n.symbol) + "." if S.package_of(n.symbol) else "") + top
+        classes.setdefault((n.module, fqcn), []).append(n)
+    lines = [f"{S.short(symbol)} — reached by {len(classes)} test classes "
+             f"({len(tests)} test methods/members, depth ≤ {depth})"]
+    for (mod, fqcn), ns in classes.items():
+        best = min(n.depth for n in ns)
+        lines.append(f"  {fqcn}  d{best}  {ns[0].source}")
+    lines.append("run them (scipq-mcp does not):")
+    by_task: OrderedDict[str, list[str]] = OrderedDict()
+    for (mod, fqcn), ns in classes.items():
+        by_task.setdefault(mod, []).append(fqcn)
+    if template:
+        for mod, names in by_task.items():
+            lines.append("  " + format_test_filter(template, mod, names))
+        return "\n".join(lines)
+    for mod, names in by_task.items():
+        filters = " ".join(f"--tests '{c}'" for c in names)
+        lines.append(f"  {gradle} {':' + mod.replace('/', ':') + ':test' if mod not in ('.', '') else 'test'} {filters}")
+    return "\n".join(lines)
+
+
+def changed(result: dict, base: str, impact_nodes, tests_line: str) -> str:
+    defs = result["definitions"]
+    lines = [f"changed since {base or 'the index'}: {result['files']} files, "
+             f"{len(defs)} definitions"]
+    for sym, e in defs.items():
+        ch = sorted(e["changed"])
+        span = f"{ch[0]}" if len(ch) == 1 else f"{ch[0]}–{ch[-1]} ({len(ch)} lines)"
+        lines.append(f"  {S.short(sym)}  {e['source']}:{e['line']}  changed {span}")
+    if result["unmapped_deletions"]:
+        lines.append(f"{len(result['unmapped_deletions'])} hunks only delete code, which is not "
+                     "in the index (cannot map them): " + _some(result["unmapped_deletions"]))
+    if result["stale"]:
+        lines.append("stale (edited after their last compilation; recompile to map them): "
+                     + _some(result["stale"]))
+    if result["not_indexed"]:
+        lines.append("not indexed (new, or never compiled): " + _some(result["not_indexed"]))
+    if impact_nodes is not None:
+        n_tests = sum(1 for n in impact_nodes if n.test)
+        lines.append(f"callers of the changed definitions: {len(impact_nodes)} "
+                     f"({n_tests} in tests)")
+    if tests_line:
+        lines.append(tests_line)
+    return "\n".join(lines)
+
+
+def deps(edges: dict, level: str, cycles_found, offset: int, limit: int) -> str:
+    if not edges:
+        return f"no dependencies between {level}s in scope"
+    rows = sorted(edges.items(), key=lambda kv: -kv[1])
+    shown, suffix = page(rows, offset, limit)
+    lines = [f"{len(rows)} {level} dependencies (references counted){suffix}"]
+    lines += [f"  {a} → {b}  {n}" for (a, b), n in shown]
+    if cycles_found is not None:
+        if cycles_found:
+            lines.append(f"cycles: {len(cycles_found)}")
+            for c in cycles_found[:20]:
+                lines.append("  " + " ↔ ".join(c[:12]) + (" …" if len(c) > 12 else ""))
+        else:
+            lines.append("cycles: none")
+    return "\n".join(lines)
+
+
+def uses_between(scope: str, target: str, rows, limit: int) -> str:
+    if not rows:
+        return f"no uses of {target} from {scope}"
+    lines = [f"uses of {target} from {scope}: {len(rows)}"
+             + (f" (first {limit})" if len(rows) >= limit else "")]
+    for caller, tgt, src, sites in rows:
+        lines.append(f"  {S.short(caller)} → {S.short(tgt)}  {src}:{', '.join(map(str, sites[:5]))}")
+    return "\n".join(lines)
+
+
+def dead_code(rows, offset: int, limit: int) -> str:
+    if not rows:
+        return "no dead-code candidates in scope"
+    shown, suffix = page(rows, offset, limit)
+    lines = [f"{len(rows)} dead-code candidates (no references; framework entry points, "
+             f"overrides and names used in strings left out — check before deleting){suffix}"]
+    current = None
+    for sym, kind, src, line, sig in shown:
+        if src != current:
+            current = src
+            lines.append(src)
+        lines.append(f"  {line}  {kind}: {signature_text(sig) or S.short(sym)}")
+    return "\n".join(lines)
+
+
+def signature_text(sig: str) -> str:
+    parts = [x.strip() for x in (sig or "").splitlines() if x.strip()]
+    for x in reversed(parts):
+        if not x.startswith("@"):
+            return x
+    return parts[-1] if parts else ""
+
+
+def census(rows) -> str:
+    if not rows:
+        return "no annotations on project definitions"
+    lines = [f"annotations on project definitions (top {len(rows)}): uses, files"]
+    lines += [f"  @{S.short(a)}  {n}  {f}" for a, n, f in rows]
+    return "\n".join(lines)
+
+
+def cache_status(st: dict) -> str:
+    if not st.get("exists"):
+        return f"no auxiliary index yet for this checkout ({st['path']}); the first query that " \
+               "needs it builds it"
+    lines = [f"auxiliary index: {st['path']}  {st.get('bytes', 0) / 1e6:.1f} MB"]
+    for k in ("shards", "symbols", "defs", "refs", "rels", "annotations"):
+        if k in st:
+            lines.append(f"  {k}: {st[k]}")
+    for k in ("external", "created_at", "last_used_at"):
+        if k in st:
+            v = st[k]
+            if k.endswith("_at"):
+                import datetime as _dt
+                v = _dt.datetime.fromtimestamp(int(v)).strftime("%Y-%m-%d %H:%M")
+            lines.append(f"  {k}: {v}")
+    return "\n".join(lines)
+
+
+def entities(rows, offset: int, limit: int) -> str:
+    if not rows:
+        return "no entities found"
+    shown, suffix = page(rows, offset, limit)
+    lines = [f"{len(rows)} entities{suffix}: type  table  location"]
+    lines += [f"  {S.short(sym)}  {table or '-'}  {src}:{line}" for sym, src, line, table in shown]
+    return "\n".join(lines)
+
+
+def settings_lines(st) -> list[str]:
+    out = [f"profiles: {', '.join(st.profiles) or 'none'}"
+           + (f" — {st.source}" if st.source else "")]
+    if st.tests_filter:
+        out.append(f"tests filter: {st.tests_filter}")
+    for w in st.warnings:
+        out.append(f"config warning: {w}")
+    return out

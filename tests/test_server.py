@@ -3,7 +3,8 @@ import sys
 import anyio
 from mcp import ClientSession, StdioServerParameters, stdio_client
 
-EXPECTED_TOOLS = {"setup", "find_symbols", "references", "definition", "source",
+EXPECTED_TOOLS = {"setup", "find_symbols", "references", "definition", "source", "impact",
+                  "path", "changed", "deps", "dead_code", "census", "cache_status",
                   "implementations", "supertypes", "members", "family", "overloads", "outline",
                   "callers", "callees", "annotated", "typed", "tests", "index_status", "batch"}
 

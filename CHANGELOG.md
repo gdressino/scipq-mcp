@@ -3,6 +3,19 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Added
+
+- Auxiliary index (SQLite, in the user cache, one per checkout, private, disposable, updated
+  incrementally; big builds in a child process with parallel workers) and the tools that use
+  it: `impact`, `path`, `changed`, `deps`, `dead_code`, `census`, `cache_status`, and
+  `tests(transitive=true)`.
+- `scipq-mcp cache status|prune|clear`; `--cache-dir`, `--index-external`.
+- Profiles (`junit`, `spring`, `jaxrs`, `vaadin`, `cucumber`, `jpa`, `jdo`) and a TOML project
+  configuration (`--config`, `$XDG_CONFIG_HOME/scipq/config.toml`): entry points for dead code,
+  entity tables, globs for uses by name, the command that runs tests.
+
 ## 0.1.0 — 2026-11-22
 
 First release.

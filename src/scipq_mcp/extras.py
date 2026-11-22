@@ -452,6 +452,7 @@ class Status:
     uncompiled: list[str]                 # newer than the last compilation of their task
     without_shard: list[str] | None       # git-tracked .java with no shard (None: not a git repo)
     refresh: list[str]                    # tasks to recompile
+    settings: object = None               # config.Settings, filled by the service
 
 
 def index_status(nav: Navigator) -> Status:

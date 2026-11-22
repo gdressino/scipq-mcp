@@ -1,0 +1,10 @@
+[profile]
+name = "vaadin"
+description = "Vaadin Flow"
+
+[[entry_points]]
+kind = "screen"
+annotations = ["com.vaadin.flow.router.Route", "com.vaadin.flow.router.RouteAlias",
+               "com.vaadin.flow.component.ClientCallable", "com.vaadin.flow.component.EventHandler"]
+supertypes = ["com.vaadin.flow.server.VaadinServiceInitListener",
+              "com.vaadin.flow.server.ServiceInitListener"]

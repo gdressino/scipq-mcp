@@ -1,0 +1,22 @@
+[profile]
+name = "jpa"
+description = "Jakarta / javax Persistence (JPA)"
+
+[[entry_points]]
+kind = "entity"
+annotations = [
+  "jakarta.persistence.Entity", "jakarta.persistence.Embeddable",
+  "jakarta.persistence.MappedSuperclass", "jakarta.persistence.Converter",
+  "jakarta.persistence.PrePersist", "jakarta.persistence.PostPersist",
+  "jakarta.persistence.PreUpdate", "jakarta.persistence.PostUpdate",
+  "jakarta.persistence.PreRemove", "jakarta.persistence.PostRemove",
+  "jakarta.persistence.PostLoad",
+  "javax.persistence.Entity", "javax.persistence.Embeddable",
+  "javax.persistence.MappedSuperclass", "javax.persistence.Converter",
+  "javax.persistence.PrePersist", "javax.persistence.PostLoad",
+]
+
+[persistence]
+entity = ["jakarta.persistence.Entity", "javax.persistence.Entity"]
+table = { annotation = ["jakarta.persistence.Table", "javax.persistence.Table"], attribute = "name" }
+column = { annotation = ["jakarta.persistence.Column", "javax.persistence.Column"], attribute = "name" }

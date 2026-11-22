@@ -7,14 +7,23 @@ and its warning is appended to every answer.
 
 from __future__ import annotations
 
+import contextlib
+import fnmatch
 import os
+import sqlite3
 import threading
+from collections import OrderedDict
 from typing import Any, Callable, TypeVar
 
 from . import extras as X
+from . import graph as G
 from . import render
 from . import setup as SETUP
 from . import symbols as S
+from . import config as CFG
+from .cachedir import CacheError
+from .graph import Graph, GraphError
+from .index import Index, IndexError_
 from .queries import AmbiguousName, Navigator, QueryError
 from .workspace import Freshness, Workspace, WorkspaceError, find_project_root
 
@@ -30,7 +39,8 @@ NO_SHARDS_HINT = ("This project has not been compiled with the scip-javac plugin
 
 class Service:
     def __init__(self, default_root: str | None = None, shards_dir: str | None = None,
-                 freshness: str = "full"):
+                 freshness: str = "full", cache_dir: str | None = None,
+                 index_external: str = "all", config_file: str | None = None):
         """freshness: "full" (every shard against its source, ~0.1 s on 10k files, run in
         parallel with the query), "results" (only the files in the answer) or "off"."""
         if freshness not in FRESHNESS_MODES:
@@ -38,6 +48,18 @@ class Service:
         self.default_root = default_root
         self.shards_dir = shards_dir
         self.freshness = freshness
+        self.cache_dir = cache_dir
+        self.index_external = index_external
+        self.config_file = config_file
+
+    def settings(self, root: str, graph=None) -> CFG.Settings:
+        present = graph.annotations_present() if graph is not None else None
+        try:
+            return CFG.settings_for(root, self.config_file, present_annotations=present)
+        except CFG.ConfigError as e:
+            st = CFG.Settings()
+            st.warnings.append(str(e))
+            return st
 
     # --- plumbing ---------------------------------------------------------------------------
 
@@ -154,7 +176,8 @@ class Service:
                 names = X.property_names(sym)
                 exclude = {(r.location.source, r.location.line) for r in refs}
                 exclude |= {(d.location.source, d.location.line) for d in defs}
-                hits = X.uses_by_name(nav.ws.root, names, by_name_globs or ["*.java"], exclude)
+                globs = by_name_globs or self.settings(nav.ws.root).by_name_globs
+                hits = X.uses_by_name(nav.ws.root, names, globs, exclude)
                 text += "\n" + render.by_name(hits, names)
             return note + text, {r.location.source for r in refs}
         return body
@@ -274,17 +297,160 @@ class Service:
             return note + render.overloads(sym, items, nav.ws, offset, limit), srcs
         return body
 
-    def _b_tests(self, symbol: str) -> Body:
+    def _b_tests(self, symbol: str, transitive: bool = False, depth: int = 3) -> Body:
         def body(nav: Navigator):
-            sym, note, uses = self._resolved(nav, symbol, lambda s: X.tests_using(nav, s))
             gradle = "./gradlew" if os.path.exists(os.path.join(nav.ws.root, "gradlew")) \
                 else "gradle"
-            return note + render.tests(sym, uses, X.test_task, gradle), {t.source for t in uses}
+            template = self.settings(nav.ws.root).tests_filter
+            if transitive:
+                sym, note = self._resolve(nav, symbol)
+                with self._graph(nav) as (g, stats):
+                    nodes, _trunc = g.impact(sym, max(1, min(depth, 8)))
+                text = render.tests_transitive(sym, nodes, depth, X.test_task, gradle, template)
+                return render.index_note(stats) + note + text, {n.source for n in nodes if n.test}
+            sym, note, uses = self._resolved(nav, symbol, lambda s: X.tests_using(nav, s))
+            return note + render.tests(sym, uses, X.test_task, gradle, template), \
+                {t.source for t in uses}
+        return body
+
+    # --- v2: queries over the auxiliary index -----------------------------------------------
+
+    @contextlib.contextmanager
+    def _graph(self, nav: Navigator):
+        try:
+            ix = Index(nav.ws, self.cache_dir, self.index_external)
+            stats = ix.ensure()
+            g = Graph(ix)
+        except (CacheError, IndexError_, sqlite3.Error) as e:
+            raise QueryError(f"auxiliary index unavailable: {e}") from e
+        try:
+            yield g, stats
+        finally:
+            g.close()
+
+    def _b_impact(self, symbol: str, depth: int = 3, include_overridden: bool = True,
+                  group_by: str = "module", offset: int = 0, limit: int = DEFAULT_LIMIT) -> Body:
+        def body(nav: Navigator):
+            sym, note = self._resolve(nav, symbol)
+            d = max(1, min(depth, 10))
+            with self._graph(nav) as (g, stats):
+                nodes, trunc = g.impact(sym, d, include_overridden)
+            text = render.impact(sym, nodes, trunc, d, group_by, offset, limit)
+            return render.index_note(stats) + note + text, {n.source for n in nodes}
+        return body
+
+    def _b_path(self, source: str, target: str, max_depth: int = 6, limit: int = 3) -> Body:
+        def body(nav: Navigator):
+            a, note_a = self._resolve(nav, source)
+            b, note_b = self._resolve(nav, target)
+            with self._graph(nav) as (g, stats):
+                paths = g.path(a, b, max(1, min(max_depth, 12)), max(1, limit))
+            return render.index_note(stats) + note_a + note_b + render.path(a, b, paths), set()
+        return body
+
+    def _b_changed(self, base: str = "HEAD", staged: bool = False,
+                   paths: list[str] | None = None, depth: int = 2) -> Body:
+        def body(nav: Navigator):
+            with self._graph(nav) as (g, stats):
+                try:
+                    res = g.changed(nav.ws.root, base, staged, paths)
+                except GraphError as e:
+                    raise QueryError(str(e)) from e
+                nodes: dict[str, object] = {}
+                for sym in res["definitions"]:
+                    for n in g.impact(sym, max(1, min(depth, 6)))[0]:
+                        nodes.setdefault(n.symbol, n)
+            gradle = "./gradlew" if os.path.exists(os.path.join(nav.ws.root, "gradlew")) \
+                else "gradle"
+            tests: OrderedDict[str, set[str]] = OrderedDict()
+            for n in nodes.values():
+                if n.test:
+                    top = S.top_level_type_name(n.symbol)
+                    pkg = S.package_of(n.symbol)
+                    tests.setdefault(n.module, set()).add(f"{pkg}.{top}" if pkg else top)
+            tests_line = ""
+            template = self.settings(nav.ws.root).tests_filter
+            if tests and template:
+                tests_line = "tests to run (scipq-mcp does not):\n  " + "\n  ".join(
+                    render.format_test_filter(template, mod, sorted(names))
+                    for mod, names in tests.items())
+            elif tests:
+                parts = []
+                for mod, names in tests.items():
+                    task = "test" if mod in (".", "") else ":" + mod.replace("/", ":") + ":test"
+                    parts.append(f"{gradle} {task} " + " ".join(f"--tests '{c}'"
+                                                              for c in sorted(names)))
+                tests_line = "tests to run (scipq-mcp does not):\n  " + "\n  ".join(parts)
+            text = render.changed(res, base if not staged else f"{base} (staged)",
+                                  list(nodes.values()), tests_line)
+            return render.index_note(stats) + text, {e["source"] for e in
+                                                     res["definitions"].values()}
+        return body
+
+    def _b_deps(self, level: str = "module", scope: str = "", target: str = "",
+                cycles: bool = True, sites: bool = False, offset: int = 0,
+                limit: int = DEFAULT_LIMIT) -> Body:
+        def body(nav: Navigator):
+            if level not in ("module", "package"):
+                raise QueryError("level must be module or package")
+            with self._graph(nav) as (g, stats):
+                if sites:
+                    if not scope or not target:
+                        raise QueryError("sites=true needs both scope and target")
+                    rows = g.uses_between(scope, target, max(1, limit))
+                    return render.index_note(stats) + render.uses_between(scope, target, rows,
+                                                                          limit), set()
+                edges = g.deps(level, scope, target)
+                cyc = G.cycles(edges.keys()) if cycles else None
+            return render.index_note(stats) + render.deps(edges, level, cyc, offset, limit), set()
+        return body
+
+    def _b_dead_code(self, scope: str = "", public_is_api: bool = False,
+                     include_tests: bool = False, offset: int = 0,
+                     limit: int = DEFAULT_LIMIT) -> Body:
+        def body(nav: Navigator):
+            with self._graph(nav) as (g, stats):
+                st = self.settings(nav.ws.root, g)
+                rows = g.dead_code(scope, public_is_api, include_tests,
+                                   entry_annotations=st.entry_annotations,
+                                   entry_supertypes=st.entry_supertypes,
+                                   entry_type_names=st.entry_type_names,
+                                   by_name_globs=st.by_name_globs, root=nav.ws.root)
+            note = f"-- profiles: {', '.join(st.profiles) or 'none'} ({st.source or 'none'})\n"
+            return render.index_note(stats) + note + render.dead_code(rows, offset, limit), set()
+        return body
+
+    def _b_census(self, scope: str = "", limit: int = 50, category: str = "annotations",
+                  offset: int = 0) -> Body:
+        def body(nav: Navigator):
+            with self._graph(nav) as (g, stats):
+                if category == "entities":
+                    st = self.settings(nav.ws.root, g)
+                    if not st.entity_annotations:
+                        raise QueryError("no persistence profile active (jpa, jdo or one of "
+                                         "yours): nothing marks entities")
+                    rows = g.entities(st.entity_annotations, st.table, nav.ws.root)
+                    if scope:
+                        rows = [r for r in rows if fnmatch.fnmatch(r[1], scope)]
+                    return render.index_note(stats) + render.entities(rows, offset, limit), set()
+                rows = g.annotation_census(scope, max(1, limit))
+            return render.index_note(stats) + render.census(rows), set()
+        return body
+
+    def _b_cache_status(self) -> Body:
+        def body(nav: Navigator):
+            try:
+                st = Index(nav.ws, self.cache_dir, self.index_external).status()
+            except CacheError as e:
+                raise QueryError(str(e)) from e
+            return render.cache_status(st), set()
         return body
 
     def _b_index_status(self) -> Body:
         def body(nav: Navigator):
-            return render.status(X.index_status(nav), nav.ws.root), set()
+            st = X.index_status(nav)
+            st.settings = self.settings(nav.ws.root)
+            return render.status(st, nav.ws.root), set()
         return body
 
     # --- tools ------------------------------------------------------------------------------
@@ -351,8 +517,42 @@ class Service:
                   limit: int = DEFAULT_LIMIT) -> str:
         return self._run(project_root, self._b_overloads(symbol, offset, limit))
 
-    def tests(self, symbol: str, project_root: str | None = None) -> str:
-        return self._run(project_root, self._b_tests(symbol))
+    def tests(self, symbol: str, project_root: str | None = None, transitive: bool = False,
+              depth: int = 3) -> str:
+        return self._run(project_root, self._b_tests(symbol, transitive, depth))
+
+    def impact(self, symbol: str, project_root: str | None = None, depth: int = 3,
+               include_overridden: bool = True, group_by: str = "module", offset: int = 0,
+               limit: int = DEFAULT_LIMIT) -> str:
+        return self._run(project_root, self._b_impact(symbol, depth, include_overridden,
+                                                      group_by, offset, limit))
+
+    def path(self, source: str, target: str, project_root: str | None = None,
+             max_depth: int = 6, limit: int = 3) -> str:
+        return self._run(project_root, self._b_path(source, target, max_depth, limit))
+
+    def changed(self, project_root: str | None = None, base: str = "HEAD", staged: bool = False,
+                paths: list[str] | None = None, depth: int = 2) -> str:
+        return self._run(project_root, self._b_changed(base, staged, paths, depth))
+
+    def deps(self, project_root: str | None = None, level: str = "module", scope: str = "",
+             target: str = "", cycles: bool = True, sites: bool = False, offset: int = 0,
+             limit: int = DEFAULT_LIMIT) -> str:
+        return self._run(project_root, self._b_deps(level, scope, target, cycles, sites, offset,
+                                                    limit))
+
+    def dead_code(self, project_root: str | None = None, scope: str = "",
+                  public_is_api: bool = False, include_tests: bool = False, offset: int = 0,
+                  limit: int = DEFAULT_LIMIT) -> str:
+        return self._run(project_root, self._b_dead_code(scope, public_is_api, include_tests,
+                                                         offset, limit))
+
+    def census(self, project_root: str | None = None, scope: str = "", limit: int = 50,
+               category: str = "annotations", offset: int = 0) -> str:
+        return self._run(project_root, self._b_census(scope, limit, category, offset))
+
+    def cache_status(self, project_root: str | None = None) -> str:
+        return self._run(project_root, self._b_cache_status())
 
     def index_status(self, project_root: str | None = None) -> str:
         return self._run(project_root, self._b_index_status())
@@ -371,8 +571,9 @@ class Service:
         "source": "_b_source", "members": "_b_members", "annotated": "_b_annotated",
         "typed": "_b_typed", "family": "_b_family", "overloads": "_b_overloads",
         "tests": "_b_tests", "index_status": "_b_index_status",
+        "impact": "_b_impact", "path": "_b_path", "changed": "_b_changed", "deps": "_b_deps",
+        "dead_code": "_b_dead_code", "census": "_b_census", "cache_status": "_b_cache_status",
     }
-    _ARG_ALIASES = {"find_symbols": {"name": "name"}}
 
     def batch(self, queries: list[dict[str, Any]], project_root: str | None = None) -> str:
         """Several queries over the same checkout in one call; one freshness check."""

@@ -1,6 +1,6 @@
 # scipq-mcp design
 
-Status: v1 implemented; v2 and v3 proposed (this document), not implemented yet.
+Status: v1 and v2 implemented; v3 proposed.
 
 ## Principles
 
@@ -22,6 +22,12 @@ only occur where the answer is (e.g. a symbol followed by the protobuf tag that 
 A freshness check (`find -printf %T@` in child processes, or Python) runs in parallel.
 
 ## v2: auxiliary database
+
+Implemented as below, with these measurements on a 10,000-file, 7-module project (4.1 M
+occurrences): first build ~16 s in a child process (8 workers; the server process stays at
+~25 MB), 172 MB on disk with `external = all` (131 MB with `methods`, but 3x slower to build),
+1.58 M reference rows (occurrences aggregated per symbol, caller and shard), unchanged update
+~0.1 s; impact at depth 3 ~10 ms of SQL.
 
 Needed by queries that are global or transitive: `impact` with depth 3 and fan-out 20 would be
 ~400 grep passes (~40 s), and dead code or dependency graphs must read every shard (~10 s).

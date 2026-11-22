@@ -282,11 +282,97 @@ def build(service: Service, active: bool = True) -> Any:
         return service.typed(symbol, project_root, categories, offset, limit)
 
     @tool
-    def tests(symbol: Symbol, project_root: ProjectRoot = "") -> str:
-        """Test classes (in test compile tasks or src/*test*/) that use a symbol directly, with a
-        ready filter: `--tests` for Gradle (./gradlew when present), `-Dtest` for Maven. It does
-        not run them."""
-        return service.tests(symbol, project_root)
+    def tests(symbol: Symbol, project_root: ProjectRoot = "",
+              transitive: Annotated[bool, Field(
+                  description="Also tests that reach it through callers (uses the index)")]
+              = False,
+              depth: Annotated[int, Field(ge=1, le=8, description="Caller levels when "
+                                                                  "transitive")] = 3) -> str:
+        """Test classes (in test compile tasks or src/*test*/) that use a symbol, directly or
+        (transitive) through callers, with a ready filter: `--tests` for Gradle (./gradlew when
+        present), `-Dtest` for Maven. It does not run them."""
+        return service.tests(symbol, project_root, transitive, depth)
+
+    @tool
+    def impact(symbol: Symbol, project_root: ProjectRoot = "",
+               depth: Annotated[int, Field(ge=1, le=10, description="Caller levels")] = 3,
+               include_overridden: Annotated[bool, Field(
+                   description="Count calls to the methods it overrides (may dispatch here)")]
+               = True,
+               group_by: Literal["module", "package"] = "module",
+               offset: Offset = 0, limit: Limit(100) = 100) -> str:
+        """Transitive callers of a symbol, by depth, grouped by module or package, marking
+        tests: what a change can affect. Uses the auxiliary index (built once per checkout,
+        then updated incrementally)."""
+        return service.impact(symbol, project_root, depth, include_overridden, group_by,
+                              offset, limit)
+
+    @tool
+    def path(source: Annotated[str, Field(description="Where the chain starts (a caller)")],
+             target: Annotated[str, Field(description="Where it ends (the callee)")],
+             project_root: ProjectRoot = "",
+             max_depth: Annotated[int, Field(ge=1, le=12)] = 6,
+             limit: Annotated[int, Field(ge=1, le=20, description="Max paths")] = 3) -> str:
+        """Shortest call chains from one symbol to another, with the lines of each call."""
+        return service.path(source, target, project_root, max_depth, limit)
+
+    @tool
+    def changed(project_root: ProjectRoot = "",
+                base: Annotated[str, Field(description="git revision to compare with")] = "HEAD",
+                staged: Annotated[bool, Field(description="Only staged changes")] = False,
+                paths: Annotated[list[str] | None, Field(description="Limit to these paths")]
+                = None,
+                depth: Annotated[int, Field(ge=1, le=6, description="Caller levels")] = 2) -> str:
+        """From `git diff` (read-only) to the definitions whose lines changed, their callers and
+        the tests to run. Hunks that only delete code cannot be mapped and are listed; files
+        edited after their last compilation are refused until recompiled."""
+        return service.changed(project_root, base, staged, paths, depth)
+
+    @tool
+    def deps(project_root: ProjectRoot = "",
+             level: Literal["module", "package"] = "module",
+             scope: Annotated[str, Field(description="From: module or package (prefix or glob)")]
+             = "",
+             target: Annotated[str, Field(description="To: module/package, or a symbol prefix "
+                                                      "such as `org/flowable/` with sites")] = "",
+             cycles: Annotated[bool, Field(description="Report cycles")] = True,
+             sites: Annotated[bool, Field(description="List the call sites from scope to "
+                                                      "target instead of counts")] = False,
+             offset: Offset = 0, limit: Limit(100) = 100) -> str:
+        """Dependencies between modules or packages (reference counts) and their cycles; with
+        sites, every place where `scope` uses `target`."""
+        return service.deps(project_root, level, scope, target, cycles, sites, offset, limit)
+
+    @tool
+    def dead_code(project_root: ProjectRoot = "",
+                  scope: Annotated[str, Field(description="Package (prefix or glob) or source "
+                                                          "path glob")] = "",
+                  public_is_api: Annotated[bool, Field(
+                      description="Treat public members as API used from outside")] = False,
+                  include_tests: Annotated[bool, Field(description="Also test code")] = False,
+                  offset: Offset = 0, limit: Limit(100) = 100) -> str:
+        """Candidates for dead code: definitions nobody references, leaving out overrides,
+        framework-managed members (non-JDK annotations), main and serialization hooks, no-arg
+        constructors, Lombok accessors in use and names found in string literals. Candidates,
+        not verdicts: reflection can still reach them."""
+        return service.dead_code(project_root, scope, public_is_api, include_tests, offset,
+                                 limit)
+
+    @tool
+    def census(project_root: ProjectRoot = "",
+               category: Annotated[Literal["annotations", "entities"], Field(
+                   description="annotations: which are used and how much; entities: persistent "
+                               "types and their tables (needs a jpa/jdo profile)")]
+               = "annotations",
+               scope: Annotated[str, Field(description="Source path glob")] = "",
+               offset: Offset = 0, limit: Limit(50, 2000) = 50) -> str:
+        """Censuses over the project: annotations in use, or entities with their tables."""
+        return service.census(project_root, scope, limit, category, offset)
+
+    @tool
+    def cache_status(project_root: ProjectRoot = "") -> str:
+        """Where the auxiliary index of this checkout is, its size and row counts."""
+        return service.cache_status(project_root)
 
     @tool
     def index_status(project_root: ProjectRoot = "") -> str:
@@ -334,7 +420,8 @@ def _slim_schemas(mcp: Any) -> None:
 
 
 def serve(root: str | None = None, shards_dir: str | None = None,
-          freshness: str = "full", always: bool = False) -> None:
+          freshness: str = "full", always: bool = False, cache_dir: str | None = None,
+          index_external: str = "all", config_file: str | None = None) -> None:
     import os
     import sys
 
@@ -344,7 +431,15 @@ def serve(root: str | None = None, shards_dir: str | None = None,
     if not active:
         print(f"scipq-mcp: {why}; no tools exposed (start with --always to override)",
               file=sys.stderr)
-    build(Service(root, shards_dir, freshness), active).run("stdio")
+    if active:
+        from .cachedir import CacheError, prune
+
+        try:  # only entries of checkouts that no longer exist, only in our cache dir
+            prune(cache_dir)
+        except (OSError, CacheError):
+            pass
+    build(Service(root, shards_dir, freshness, cache_dir, index_external, config_file),
+          active).run("stdio")
 
 
 __all__ = ["build", "serve", "__version__"]

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from importlib import resources
 
 from . import __version__
@@ -26,6 +27,10 @@ def _query_parser(sub) -> None:
     q.add_argument("--root", help="project root (default: closest ancestor with shards)")
     q.add_argument("--shards-dir", help="shards directory relative to the root "
                                         "(default: build/scip-targetroot)")
+    q.add_argument("--cache-dir", help="auxiliary index base directory (default: user cache)")
+    q.add_argument("--config", help="project configuration file (default: "
+                                    "$XDG_CONFIG_HOME/scipq/config.toml)")
+    q.add_argument("--index-external", choices=["all", "methods", "none"], default="all")
     q.add_argument("--freshness", choices=FRESHNESS_MODES, default="full",
                    help="stale-shard check: every file (full), only the files in the answer "
                         "(results), or none (off)")
@@ -62,13 +67,30 @@ def _query_parser(sub) -> None:
         types={"action": "store_true"})
     add("annotated", "annotation", **paging)
     add("typed", "symbol", **paging, only={"nargs": "*", "default": None})
-    add("tests", "symbol")
+    add("tests", "symbol", transitive={"action": "store_true"},
+        depth={"type": int, "default": 3})
+    add("impact", "symbol", **paging, depth={"type": int, "default": 3},
+        no_overridden={"action": "store_true"},
+        group_by={"choices": ["module", "package"], "default": "module"})
+    add("path", "source", "target", max_depth={"type": int, "default": 6},
+        limit={"type": int, "default": 3})
+    add("changed", base={"default": "HEAD"}, staged={"action": "store_true"},
+        paths={"nargs": "*", "default": None}, depth={"type": int, "default": 2})
+    add("deps", **paging, level={"choices": ["module", "package"], "default": "module"},
+        scope={"default": ""}, target={"default": ""}, no_cycles={"action": "store_true"},
+        sites={"action": "store_true"})
+    add("dead", **paging, scope={"default": ""}, public_is_api={"action": "store_true"},
+        include_tests={"action": "store_true"})
+    add("census", **paging, scope={"default": ""},
+        category={"choices": ["annotations", "entities"], "default": "annotations"})
+    add("cache-status")
     add("status")
     add("setup", no_template={"action": "store_true"})
 
 
 def _run_query(a) -> str:
-    svc = Service(a.root, a.shards_dir, freshness=a.freshness)
+    svc = Service(a.root, a.shards_dir, freshness=a.freshness, cache_dir=a.cache_dir,
+                  index_external=a.index_external, config_file=a.config)
     t = a.tool
     if t == "find":
         return svc.find(a.name, limit=a.limit, offset=a.offset, match=a.match)
@@ -104,12 +126,64 @@ def _run_query(a) -> str:
     if t == "typed":
         return svc.typed(a.symbol, categories=a.only, offset=a.offset, limit=a.limit)
     if t == "tests":
-        return svc.tests(a.symbol)
+        return svc.tests(a.symbol, transitive=a.transitive, depth=a.depth)
+    if t == "impact":
+        return svc.impact(a.symbol, depth=a.depth, include_overridden=not a.no_overridden,
+                          group_by=a.group_by, offset=a.offset, limit=a.limit)
+    if t == "path":
+        return svc.path(a.source, a.target, max_depth=a.max_depth, limit=a.limit)
+    if t == "changed":
+        return svc.changed(base=a.base, staged=a.staged, paths=a.paths, depth=a.depth)
+    if t == "deps":
+        return svc.deps(level=a.level, scope=a.scope, target=a.target, cycles=not a.no_cycles,
+                        sites=a.sites, offset=a.offset, limit=a.limit)
+    if t == "dead":
+        return svc.dead_code(scope=a.scope, public_is_api=a.public_is_api,
+                             include_tests=a.include_tests, offset=a.offset, limit=a.limit)
+    if t == "census":
+        return svc.census(scope=a.scope, limit=a.limit, category=a.category, offset=a.offset)
+    if t == "cache-status":
+        return svc.cache_status()
     if t == "status":
         return svc.index_status()
     if t == "setup":
         return svc.setup(include_template=not a.no_template)
     raise SystemExit(f"unknown tool {t}")
+
+
+def _cache(a) -> str:
+    import os
+
+    from . import cachedir as C
+    from .workspace import find_project_root
+
+    base = a.cache_dir or C.default_base()
+    if a.action == "status":
+        rows = C.entries(base)
+        if not rows:
+            return f"no indexes under {base}"
+        out = [f"{len(rows)} indexes under {base}:"]
+        for e in rows:
+            when = time.strftime("%Y-%m-%d", time.localtime(e["last_used"])) if e["last_used"] \
+                else "?"
+            gone = "" if e["exists"] else "  (root gone)"
+            out.append(f"  {e['bytes'] / 1e6:7.1f} MB  used {when}  {e['root'] or e['dir']}{gone}")
+        return "\n".join(out)
+    if a.action == "prune":
+        removed = C.prune(base, a.older_than)
+        return f"removed {len(removed)} entries" + "".join(
+            f"\n  {e['root'] or e['dir']}" for e in removed)
+    if a.all:
+        rows = C.entries(base)
+        for e in rows:
+            C.remove_entry(e["dir"])
+        return f"removed {len(rows)} entries"
+    root = find_project_root(a.root or os.getcwd())
+    d = os.path.join(base, C.entry_name(root))
+    if not os.path.isdir(d):
+        return f"no index for {root}"
+    C.remove_entry(d)
+    return f"removed the index of {root}"
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -124,11 +198,25 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--shards-dir", help="shards directory relative to the root")
     s.add_argument("--freshness", choices=FRESHNESS_MODES, default="full",
                    help="stale-shard check on every answer (default: full)")
+    s.add_argument("--cache-dir", help="where the auxiliary index lives (default: "
+                                       "$XDG_CACHE_HOME/scipq, ~/.cache/scipq, or "
+                                       "~/Library/Caches/scipq on macOS)")
+    s.add_argument("--index-external", choices=["all", "methods", "none"], default="all",
+                   help="references to JDK/library symbols kept in the index (default: all)")
+    s.add_argument("--config", help="project configuration file (default: "
+                                    "$XDG_CONFIG_HOME/scipq/config.toml)")
     s.add_argument("--always", action="store_true",
                    help="expose the tools even when started outside a Java project (by default "
                         "the server stays idle there, with no tools)")
 
     sub.add_parser("gradle-init", help="print the Gradle init script that writes the shards")
+    c = sub.add_parser("cache", help="manage the auxiliary indexes")
+    c.add_argument("action", choices=["status", "prune", "clear"])
+    c.add_argument("--cache-dir", help="cache base directory (default: user cache)")
+    c.add_argument("--older-than", type=float, default=30.0,
+                   help="prune: also entries unused for this many days (default 30)")
+    c.add_argument("--root", help="clear: the checkout whose entry to remove (default: cwd)")
+    c.add_argument("--all", action="store_true", help="clear: every entry")
     _query_parser(sub)
 
     a = parser.parse_args(argv)
@@ -136,11 +224,15 @@ def main(argv: list[str] | None = None) -> None:
         from .server import serve
 
         serve(getattr(a, "root", None), getattr(a, "shards_dir", None),
-              getattr(a, "freshness", "full"), getattr(a, "always", False))
+              getattr(a, "freshness", "full"), getattr(a, "always", False),
+              getattr(a, "cache_dir", None), getattr(a, "index_external", "all"),
+              getattr(a, "config", None))
     elif a.command == "gradle-init":
         sys.stdout.write(_template())
     elif a.command == "query":
         print(_run_query(a))
+    elif a.command == "cache":
+        print(_cache(a))
 
 
 if __name__ == "__main__":

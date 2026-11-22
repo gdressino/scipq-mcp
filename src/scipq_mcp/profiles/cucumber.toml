@@ -1,0 +1,16 @@
+[profile]
+name = "cucumber"
+description = "Cucumber-JVM step definitions and hooks"
+
+[[entry_points]]
+kind = "step"
+annotations = [
+  "io.cucumber.java.en.Given", "io.cucumber.java.en.When", "io.cucumber.java.en.Then",
+  "io.cucumber.java.en.And", "io.cucumber.java.en.But",
+  "io.cucumber.java.es.Dado", "io.cucumber.java.es.Cuando", "io.cucumber.java.es.Entonces",
+  "io.cucumber.java.es.Y", "io.cucumber.java.es.Pero",
+  "io.cucumber.java.Before", "io.cucumber.java.After", "io.cucumber.java.BeforeStep",
+  "io.cucumber.java.AfterStep", "io.cucumber.java.BeforeAll", "io.cucumber.java.AfterAll",
+  "io.cucumber.java.ParameterType", "io.cucumber.java.DataTableType",
+  "io.cucumber.java.DocStringType", "io.cucumber.java.DefaultParameterTransformer",
+]

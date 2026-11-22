@@ -1,0 +1,31 @@
+[profile]
+name = "spring"
+description = "Spring Framework and Spring Boot"
+
+[[entry_points]]
+kind = "bean"
+annotations = [
+  "org.springframework.stereotype.Component", "org.springframework.stereotype.Service",
+  "org.springframework.stereotype.Repository", "org.springframework.stereotype.Controller",
+  "org.springframework.context.annotation.Configuration",
+  "org.springframework.context.annotation.Bean",
+  "org.springframework.boot.autoconfigure.SpringBootApplication",
+  "org.springframework.beans.factory.annotation.Autowired",
+  "org.springframework.beans.factory.annotation.Value",
+  "org.springframework.context.event.EventListener",
+  "org.springframework.scheduling.annotation.Scheduled",
+  "org.springframework.transaction.event.TransactionalEventListener",
+]
+
+[[entry_points]]
+kind = "endpoint"
+annotations = [
+  "org.springframework.web.bind.annotation.RestController",
+  "org.springframework.web.bind.annotation.RequestMapping",
+  "org.springframework.web.bind.annotation.GetMapping",
+  "org.springframework.web.bind.annotation.PostMapping",
+  "org.springframework.web.bind.annotation.PutMapping",
+  "org.springframework.web.bind.annotation.DeleteMapping",
+  "org.springframework.web.bind.annotation.PatchMapping",
+  "org.springframework.web.bind.annotation.ExceptionHandler",
+]

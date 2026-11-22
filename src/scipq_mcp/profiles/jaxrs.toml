@@ -1,0 +1,12 @@
+[profile]
+name = "jaxrs"
+description = "Jakarta / javax RESTful Web Services"
+
+[[entry_points]]
+kind = "endpoint"
+annotations = [
+  "jakarta.ws.rs.Path", "jakarta.ws.rs.GET", "jakarta.ws.rs.POST", "jakarta.ws.rs.PUT",
+  "jakarta.ws.rs.DELETE", "jakarta.ws.rs.PATCH", "jakarta.ws.rs.ext.Provider",
+  "javax.ws.rs.Path", "javax.ws.rs.GET", "javax.ws.rs.POST", "javax.ws.rs.PUT",
+  "javax.ws.rs.DELETE", "javax.ws.rs.PATCH", "javax.ws.rs.ext.Provider",
+]
