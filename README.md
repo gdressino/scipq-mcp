@@ -80,7 +80,8 @@ instructions tell the agent to ask the user before changing the build. In Claude
 ## Install
 
 Requirements: Python ≥ 3.11, Linux or macOS. GNU grep and GNU find are used when present
-(faster); otherwise scipq-mcp falls back to pure Python.
+(much faster on large projects); otherwise scipq-mcp falls back to pure Python. On macOS,
+`brew install grep findutils` provides them (`ggrep` is picked up automatically).
 
 ```sh
 uvx scipq-mcp --help            # run without installing

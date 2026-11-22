@@ -85,7 +85,7 @@ class Workspace:
         self._scip_roots: list[tuple[str, str]] | None = None
         self._files: list[tuple[int, str]] | None = None
         self._root_prefixes: list[str] | None = None
-        self._grep = shutil.which("grep")
+        self._grep = gnu_grep()
 
     # --- layout -------------------------------------------------------------------------
 
@@ -371,6 +371,24 @@ class Workspace:
         except OSError:
             pass
         return out
+
+
+@functools.lru_cache(maxsize=1)
+def gnu_grep() -> str | None:
+    """GNU grep (`grep`, or `ggrep` from Homebrew), else None: BSD grep does not match reliably
+    on binary data (NUL bytes, control bytes in patterns), so shard searches then fall back to
+    pure Python."""
+    for name in ("grep", "ggrep"):
+        path = shutil.which(name)
+        if not path:
+            continue
+        try:
+            out = subprocess.run([path, "--version"], capture_output=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if b"GNU grep" in out:
+            return path
+    return None
 
 
 @functools.lru_cache(maxsize=4)
