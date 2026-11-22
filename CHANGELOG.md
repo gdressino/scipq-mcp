@@ -17,6 +17,8 @@ First release.
   `annotated`, `typed`, `tests`, `index_status` and `batch`. All read-only, all with an optional
   `project_root` (one server for several checkouts or worktrees), lists paginated.
 - Names or exact SCIP symbols; JDK and library symbols resolve through their references.
+  `find_symbols` also finds by part of a name (prefix, substring, camel humps, any case), and a
+  name that matches nothing suggests the names that contain it.
 - Freshness warnings on every answer (sources edited after their shard, files not compiled
   yet) naming the task to recompile.
 - `setup` tool and prompt: diagnoses a Gradle or Maven build and returns the steps to produce

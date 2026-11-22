@@ -171,22 +171,23 @@ class Workspace:
             return []
         return self._search(fixed=pats)
 
-    def grep_regex(self, regex: bytes) -> list[Shard]:
+    def grep_regex(self, regex: bytes, ignore_case: bool = False) -> list[Shard]:
         """Shards whose bytes match `regex`, written in the syntax shared by POSIX ERE, PCRE and
         Python's re: literals, [classes], (a|b) groups, ? and +. Must not contain b"\n"."""
         if b"\n" in regex:
             raise ValueError("regex must not contain a newline byte")
-        return self._search(regex=regex)
+        return self._search(regex=regex, ignore_case=ignore_case)
 
-    def _search(self, fixed: list[bytes] | None = None, regex: bytes | None = None) -> list[Shard]:
+    def _search(self, fixed: list[bytes] | None = None, regex: bytes | None = None,
+                ignore_case: bool = False) -> list[Shard]:
         files = self.files()
         if not files:
             return []
         rel_paths = [self._rel_to_shards_dir(k, rel) for k, rel in files]
         if self._grep:
-            hits = self._grep_cmd(rel_paths, fixed, regex)
+            hits = self._grep_cmd(rel_paths, fixed, regex, ignore_case)
         else:
-            hits = self._grep_python(rel_paths, fixed, regex)
+            hits = self._grep_python(rel_paths, fixed, regex, ignore_case)
         index = {p: kr for p, kr in zip(rel_paths, files)}
         out = []
         for p in hits:
@@ -204,7 +205,8 @@ class Workspace:
                                    for r, _m in self.scip_roots()]
         return self._root_prefixes[k] + rel
 
-    def _grep_cmd(self, rel_paths: list[str], fixed, regex) -> list[str]:
+    def _grep_cmd(self, rel_paths: list[str], fixed, regex, ignore_case: bool = False
+                  ) -> list[str]:
         """Runs grep over the files in parallel chunks (cwd = shards dir, relative paths)."""
         if fixed is not None:
             base: list = [self._grep, "-lFaZ"]
@@ -212,7 +214,7 @@ class Workspace:
                 base += [b"-e", p]
         else:
             mode = "-lPaZ" if _grep_has_pcre(self._grep) else "-lEaZ"
-            base = [self._grep, mode, b"-e", regex]
+            base = [self._grep, mode] + (["-i"] if ignore_case else []) + [b"-e", regex]
         base.append("--")
         env = dict(os.environ, LC_ALL="C")
         out: list[str] = []
@@ -239,8 +241,9 @@ class Workspace:
                 proc.wait()
         return out
 
-    def _grep_python(self, rel_paths: list[str], fixed, regex) -> list[str]:
-        rx = re.compile(regex) if regex is not None else None
+    def _grep_python(self, rel_paths: list[str], fixed, regex, ignore_case: bool = False
+                     ) -> list[str]:
+        rx = re.compile(regex, re.IGNORECASE if ignore_case else 0) if regex is not None else None
         out = []
         for rel in rel_paths:
             try:

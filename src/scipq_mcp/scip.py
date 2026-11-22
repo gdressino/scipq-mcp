@@ -20,6 +20,8 @@ proto3 omits fields set to their default value: a missing line means line 0.
 
 from __future__ import annotations
 
+import bisect
+
 from dataclasses import dataclass, field
 from typing import Iterator
 
@@ -348,7 +350,7 @@ class Document:
     byte search to find where a symbol is encoded and decode just the occurrences or symbol
     informations that contain those positions."""
 
-    __slots__ = ("buf", "span", "_path", "_index", "_occ_starts", "_sym_starts",
+    __slots__ = ("buf", "span", "_path", "_index", "_starts",
                  "_occurrences", "_symbols", "_definitions")
 
     def __init__(self, buf, span: tuple[int, int]):
@@ -356,8 +358,7 @@ class Document:
         self.span = span
         self._path: str | None = None
         self._index: list[tuple[int, int, int]] | None = None
-        self._occ_starts: list[int] | None = None
-        self._sym_starts: list[int] | None = None
+        self._starts: list[int] | None = None
         self._occurrences: list[Occurrence] | None = None
         self._symbols: list[SymbolInfo] | None = None
         self._definitions: list[Occurrence] | None = None
@@ -411,19 +412,22 @@ class Document:
         return out
 
     def _containing(self, num: int, positions: list[int]) -> list[tuple[int, int]]:
-        """Spans of top-level field `num` that contain any of the sorted `positions`."""
+        """Spans of top-level field `num` that contain any of `positions` (binary search over
+        the field offsets)."""
         if not positions:
             return []
-        out = []
-        k = 0
-        for n, a, z in self.index():
-            while k < len(positions) and positions[k] < a:
-                k += 1
-            if k == len(positions):
-                break
-            if n == num and positions[k] < z:
-                out.append((a, z))
-        return out
+        idx = self.index()
+        if self._starts is None:
+            self._starts = [a for _n, a, _z in idx]
+        starts = self._starts
+        picked = set()
+        for p in positions:
+            k = bisect.bisect_right(starts, p) - 1
+            if k >= 0 and k not in picked:
+                n, a, z = idx[k]
+                if n == num and p < z:
+                    picked.add(k)
+        return [(idx[k][1], idx[k][2]) for k in sorted(picked)]
 
     @property
     def relative_path(self) -> str:

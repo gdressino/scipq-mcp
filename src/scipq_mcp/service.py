@@ -116,15 +116,26 @@ class Service:
 
     # --- bodies (shared by the tools and batch) ---------------------------------------------
 
-    def _b_find(self, name: str, offset: int = 0, limit: int = 50) -> Body:
+    def _b_find(self, name: str, offset: int = 0, limit: int = 50, match: str = "auto") -> Body:
         def body(nav: Navigator):
-            found = nav.find(name)
-            return (render.find(name, found, offset, limit),
+            how = ""
+            if match in ("auto", "exact"):
+                found = nav.find(name)
+                if not found and match == "auto":
+                    found = [d for d in nav.find_fuzzy(name, "contains")
+                             if not S.is_local_like(d.symbol)]
+                    how = "no exact name; names containing it, ignoring case" if found else ""
+            elif match in S.MATCH_MODES:
+                found = [d for d in nav.find_fuzzy(name, match) if not S.is_local_like(d.symbol)]
+                how = f"match={match}, ignoring case"
+            else:
+                raise ValueError(f"match must be auto or one of {S.MATCH_MODES}")
+            return (render.find(name, found, offset, limit, how),
                     {d.location.source for d in found[offset:offset + limit]})
         return body
 
     def _b_references(self, symbol: str, offset: int = 0, limit: int = DEFAULT_LIMIT,
-                      include_definitions: bool = False, exclude_imports: bool = False,
+                      include_definitions: bool = False, exclude_imports: bool | None = None,
                       by_name: bool = False, by_name_globs: list[str] | None = None) -> Body:
         def body(nav: Navigator):
             sym, note, (refs, defs) = self._resolved(nav, symbol, nav.references)
@@ -135,16 +146,9 @@ class Service:
                                                           r.location.range.start_line,
                                                           r.location.range.start_char))
                 note += f"-- record component: includes the uses of its accessor {S.short(accessor)}\n"
-            if exclude_imports:
-                texts = {}
-                kept = []
-                for r in refs:
-                    t = texts.setdefault(r.location.source, nav.ws.source_lines(
-                        r.location.source, {x.location.range.start_line for x in refs
-                                            if x.location.source == r.location.source}))
-                    if not t.get(r.location.range.start_line, "").startswith("import "):
-                        kept.append(r)
-                refs = kept
+            drop_imports = S.is_type(sym) if exclude_imports is None else exclude_imports
+            if drop_imports:  # by default for types: import lines are noise
+                refs = _drop_imports(nav, refs)
             text = render.references(nav.ws, sym, refs, defs, offset, limit, include_definitions)
             if by_name:
                 names = X.property_names(sym)
@@ -286,12 +290,12 @@ class Service:
     # --- tools ------------------------------------------------------------------------------
 
     def find(self, name: str, project_root: str | None = None, limit: int = 50,
-             offset: int = 0) -> str:
-        return self._run(project_root, self._b_find(name, offset, limit))
+             offset: int = 0, match: str = "auto") -> str:
+        return self._run(project_root, self._b_find(name, offset, limit, match))
 
     def references(self, symbol: str, project_root: str | None = None, offset: int = 0,
                    limit: int = DEFAULT_LIMIT, include_definitions: bool = False,
-                   exclude_imports: bool = False, by_name: bool = False,
+                   exclude_imports: bool | None = None, by_name: bool = False,
                    by_name_globs: list[str] | None = None) -> str:
         return self._run(project_root, self._b_references(
             symbol, offset, limit, include_definitions, exclude_imports, by_name, by_name_globs))
@@ -391,6 +395,24 @@ class Service:
         if not bodies:
             return "error: no queries"
         return self._run(project_root, *bodies)
+
+
+def _drop_imports(nav: Navigator, refs: list) -> list:
+    """References that are not on an import line. Imports come first in a file, so only the
+    lines up to the last import-looking reference of each file are read."""
+    by_file: dict[str, list] = {}
+    for r in refs:
+        by_file.setdefault(r.location.source, []).append(r)
+    kept = []
+    for source, rs in by_file.items():
+        # A reference on an import line has no enclosing definition.
+        maybe = {r.location.range.start_line for r in rs if not r.container}
+        texts = nav.ws.source_lines(source, maybe) if maybe else {}
+        kept.extend(r for r in rs if r.container or
+                    not texts.get(r.location.range.start_line, "").startswith("import "))
+    kept.sort(key=lambda r: (r.location.source, r.location.range.start_line,
+                             r.location.range.start_char))
+    return kept
 
 
 def _const(text: str) -> Body:

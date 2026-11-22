@@ -332,6 +332,23 @@ class Navigator:
 
     # --- find / resolve ---------------------------------------------------------------------
 
+    def find_fuzzy(self, text: str, mode: str) -> list[Definition]:
+        """find() with the last name matched by prefix, substring or camel humps, ignoring
+        case."""
+        q = S.parse_query(text.strip())
+        if not q.names:
+            return []
+        regex = S.fuzzy_definition_regex(q, mode)
+        compiled = re.compile(regex, re.IGNORECASE)
+        out = []
+        for v in self._views(self.ws.grep_regex(regex, ignore_case=True)):
+            infos = {i.symbol: i for i in v.doc.symbol_infos_matching(compiled)
+                     if S.fuzzy_matches(i.symbol, q, mode)}
+            out.extend(v.definitions_of(infos, infos))
+        out.sort(key=lambda d: (S.name_of(d.symbol).lower() != q.names[-1].lower(),
+                                d.location.source, d.location.range.start_line))
+        return out
+
     def find(self, text: str) -> list[Definition]:
         text = text.strip()
         if not text:
@@ -378,9 +395,11 @@ class Navigator:
         found = [d for d in self.find(text) if not S.is_local_like(d.symbol)]
         syms = sorted({d.symbol for d in found})
         q = S.parse_query(text)
-        # A bare name may also be a JDK or library type used everywhere (e.g. `Button`).
-        external = [e for e in self.find_external(text) if e not in syms] \
-            if (not syms or len(q.names) == 1) else []
+        # A bare type name may also be a JDK or library type used everywhere (e.g. `Button`).
+        # Only when it changes the answer: no project match, or already ambiguous.
+        bare_type = len(q.names) == 1 and q.names[0][:1].isupper() and not q.method_only
+        external = self.find_external(text, syms) if (not syms or (bare_type and len(syms) > 1)) \
+            else []
         external = [e for e in external if not self._implicit_member(e)] if syms else external
         if len(syms) == 1 and not external:
             return Resolution(syms[0], found, f"{text} → {syms[0]}")
@@ -388,6 +407,12 @@ class Navigator:
             n = len(syms) + len(external)
             return Resolution(None, found, f"{text!r} matches {n} symbols; pass one of them",
                               external)
+        if not external:
+            similar = [d for d in self.find_fuzzy(text, "contains")
+                       if not S.is_local_like(d.symbol)]
+            if similar:
+                return Resolution(None, similar, f"no symbol named {text!r}; names containing it "
+                                                 "(case-insensitive):")
         if len(external) == 1:
             label = "implicit, not declared in source" if self._implicit_member(external[0]) \
                 else "external"
@@ -404,21 +429,27 @@ class Navigator:
         owner = S.parent(symbol)
         return bool(owner) and S.is_type(owner) and self.definition(owner) is not None
 
-    def find_external(self, text: str, max_docs: int = 200) -> list[str]:
+    def find_external(self, text: str, exclude: Iterable[str] = ()) -> list[str]:
         """Symbols referenced but not defined in the project (JDK, libraries) whose names match:
-        looked up among occurrences, since they have no SymbolInformation in the shards."""
+        looked up among occurrences, since they have no SymbolInformation in the shards. Reads
+        the symbol string straight from the bytes around each match, without decoding."""
         q = S.parse_query(text)
         if not q.names:
             return []
         regex = S.occurrence_regex(q)
         compiled = re.compile(regex)
+        skip = set(exclude)
         found: set[str] = set()
-        for n, v in enumerate(self._views(self.ws.grep_regex(regex))):
-            if n >= max_docs:
-                break
-            for o in v.doc.occurrences_matching(compiled):
-                if S.matches(o.symbol, q):
-                    found.add(o.symbol)
+        for sh in self.ws.grep_regex(regex):
+            try:
+                with open(sh.path, "rb") as fh:
+                    data = fh.read()
+            except OSError:
+                continue
+            for m in compiled.finditer(data):
+                sym = _symbol_before(data, m.end() - 1)
+                if sym and sym not in skip and S.matches(sym, q):
+                    found.add(sym)
         return sorted(found)
 
     def require(self, text: str) -> str:
@@ -641,6 +672,34 @@ class AmbiguousName(QueryError):
     def __init__(self, resolution: Resolution):
         super().__init__(resolution.note)
         self.resolution = resolution
+
+
+def _symbol_before(data: bytes, tag_pos: int, window: int = 600) -> str:
+    """The symbol string of the field that ends right before `tag_pos`: the longest
+    `0x12 <varint length> <bytes>` (Occurrence.symbol) that ends exactly there."""
+    best = ""
+    lo = max(0, tag_pos - window)
+    p = tag_pos - 2
+    while p >= lo:
+        if data[p] == 0x12:
+            n = shift = 0
+            j = p + 1
+            ok = False
+            while j < tag_pos and shift <= 14:
+                c = data[j]
+                n |= (c & 0x7F) << shift
+                j += 1
+                if c < 0x80:
+                    ok = True
+                    break
+                shift += 7
+            if ok and j + n == tag_pos and n > 0:
+                try:
+                    best = data[j:tag_pos].decode("utf-8")
+                except UnicodeDecodeError:
+                    pass
+        p -= 1
+    return best
 
 
 def _site_key(ref: Reference):

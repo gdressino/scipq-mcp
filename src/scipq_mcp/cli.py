@@ -40,9 +40,13 @@ def _query_parser(sub) -> None:
         return sp
 
     paging = {"offset": {"type": int, "default": 0}, "limit": {"type": int, "default": 100}}
-    add("find", "name", **paging)
+    add("find", "name", **paging, match={"default": "auto",
+                                         "choices": ["auto", "exact", "prefix", "contains",
+                                                     "camel"]})
     add("refs", "symbol", **paging, defs={"action": "store_true"},
-        no_imports={"action": "store_true"}, by_name={"action": "store_true"},
+        no_imports={"action": "store_const", "const": True, "default": None},
+        with_imports={"action": "store_const", "const": False, "dest": "no_imports"},
+        by_name={"action": "store_true"},
         globs={"nargs": "*", "default": None})
     add("def", "symbol")
     add("source", "symbol", max_lines={"type": int, "default": 200})
@@ -67,7 +71,7 @@ def _run_query(a) -> str:
     svc = Service(a.root, a.shards_dir, freshness=a.freshness)
     t = a.tool
     if t == "find":
-        return svc.find(a.name, limit=a.limit, offset=a.offset)
+        return svc.find(a.name, limit=a.limit, offset=a.offset, match=a.match)
     if t == "refs":
         return svc.references(a.symbol, offset=a.offset, limit=a.limit,
                               include_definitions=a.defs, exclude_imports=a.no_imports,

@@ -123,8 +123,8 @@ Server options: `--root DIR` (default project), `--shards-dir` (default
 | Tool | What it answers | Like |
 |---|---|---|
 | `setup` | how this project produces shards, whether they are fresh, the steps to enable them | — |
-| `find_symbols(name)` | definitions whose trailing names match | workspace/symbol |
-| `references(symbol, exclude_imports, by_name)` | every use, grouped by file, with the line of code and the enclosing method; optionally possible uses by name in strings | findReferences |
+| `find_symbols(name, match)` | definitions by name or part of it (exact, prefix, contains, camel humps; case-insensitive) | workspace/symbol |
+| `references(symbol, exclude_imports, by_name)` | every use, grouped by file, with the line of code and the enclosing method (imports left out for types; large results open with a summary); optionally possible uses by name in strings | findReferences |
 | `definition(symbol)` | location, kind, signature, javadoc, what it overrides or extends | definition + hover |
 | `source(symbol)` | the exact source of a definition, with line numbers | — |
 | `implementations(symbol, direct_only)` | subtypes of a type or overrides of a method, at any depth; anonymous classes included | implementation |

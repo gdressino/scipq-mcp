@@ -37,8 +37,13 @@ def is_local(symbol: str) -> bool:
 def is_local_like(symbol: str) -> bool:
     """Locals, plus the variables scip-javac gives a global symbol under a method (try-with-
     resources variables: ``…/Dao#load().#pm.``) — not members of any type."""
-    if is_local(symbol):
+    if symbol.startswith("local "):
         return True
+    # Cheap test (this runs for every definition of every decoded document): a method
+    # descriptor "…)." followed by more descriptors.
+    i = symbol.find(").", 0, len(symbol) - 2)
+    if i < 0:
+        return False
     d = parse(symbol)
     return len(d) >= 2 and d[-2].suffix == METHOD and d[-1].suffix in (TERM, TYPE)
 
@@ -320,6 +325,65 @@ def definition_regex(q: Query) -> bytes:
 def occurrence_regex(q: Query) -> bytes:
     """Like definition_regex, for occurrences (the tag after Occurrence.symbol)."""
     return definition_regex(q)[:-len(b"[\x28\x32\x1a\x22]")] + b"[\x42\x18\x4a]"
+
+
+MATCH_MODES = ("exact", "prefix", "contains", "camel")
+_IDENT = rb"[A-Za-z0-9_$\x80-\xff]*"
+
+
+def fuzzy_definition_regex(q: Query, mode: str) -> bytes:
+    """Prefilter for definitions whose LAST name matches q's last name by prefix, substring or
+    camel humps (case-insensitive: use with ignore_case); earlier names must match exactly."""
+    last = q.names[-1]
+    if mode == "camel":
+        humps = _humps(last)
+        pat = rb"[A-Za-z0-9_$\x80-\xff]*".join(_escape(h) for h in humps)
+        core = pat + _IDENT
+    elif mode == "prefix":
+        core = _escape(last) + _IDENT
+    else:
+        core = _IDENT + _escape(last) + _IDENT
+    head = b"[/#]".join(_escape(n) for n in q.names[:-1])
+    lead = (head + b"[/#]") if head else b"[/#]"
+    return lead + core + rb"(#|\.|\((\+[0-9]+)?\)\.)[\x28\x32\x1a\x22]"
+
+
+def _humps(name: str) -> list[str]:
+    """`UsoBlAct` -> ['Uso', 'Bl', 'Act']; `uba` -> ['u', 'b', 'a'] (every letter a hump)."""
+    parts = re.findall(r"[A-Z][a-z0-9_$]*|[a-z0-9_$]+", name)
+    if len(parts) == 1 and parts[0].islower():
+        return list(parts[0])
+    return parts or [name]
+
+
+def fuzzy_matches(symbol: str, q: Query, mode: str) -> bool:
+    if mode == "exact":
+        return matches(symbol, q)
+    if not q.names or is_local_like(symbol):
+        return False
+    d = [x for x in parse(symbol) if x.suffix not in (PARAMETER, TYPE_PARAMETER)]
+    if len(d) < len(q.names) or d[-1].suffix == NAMESPACE:
+        return False
+    tail = d[-len(q.names):]
+    if any(x.name.lower() != n.lower() for x, n in zip(tail[:-1], q.names[:-1])):
+        return False
+    name, want = tail[-1].name, q.names[-1]
+    if q.method_only and tail[-1].suffix != METHOD:
+        return False
+    if mode == "prefix":
+        return name.lower().startswith(want.lower())
+    if mode == "contains":
+        return want.lower() in name.lower()
+    # camel: every hump starts a word of the name, in order.
+    words = [w.lower() for w in re.findall(r"[A-Z]?[a-z0-9_$]+|[A-Z]+(?![a-z])", name)]
+    k = 0
+    for h in (x.lower() for x in _humps(want)):
+        while k < len(words) and not words[k].startswith(h):
+            k += 1
+        if k == len(words):
+            return False
+        k += 1
+    return True
 
 
 def definition_regex_exact(symbol: str) -> bytes:

@@ -210,3 +210,24 @@ def test_fqn_overloaded_names(nav):
         "com/example/app/Service#process().", "com/example/app/Service#process(+1)."}
     assert nav.resolve("com.example.app.Service#process(+1)").symbol == \
         "com/example/app/Service#process(+1)."
+
+
+def test_find_by_fragment(sample_root):
+    svc = Service(sample_root)
+    out = svc.find("changed")
+    assert "no exact name; names containing it" in out and "Snapshot#getChangedAt()" in out
+    assert "Account#Builder#build()." in svc.find("bui", match="prefix")
+    assert "Snapshot#getChangedAt()." in svc.find("gCA", match="camel")
+    assert "Account#uid()." in svc.find("Account#UID", match="contains")
+    assert "names containing it" in svc.references("ChangedAt")
+
+
+def test_type_references_drop_imports_by_default(sample_root):
+    svc = Service(sample_root)
+    assert "import com.example.model.Entity;" not in svc.references("Entity")
+    assert "import com.example.model.Entity;" in svc.references("Entity", exclude_imports=False)
+
+
+def test_ambiguity_tip(sample_root):
+    out = Service(sample_root).references("setState")
+    assert "tip: add the owner type" in out

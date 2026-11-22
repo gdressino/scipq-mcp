@@ -22,6 +22,25 @@ from .queries import (
 from .workspace import Freshness, Workspace
 
 MAX_LISTED_FILES = 5
+SUMMARY_OVER = 300  # references: above this, open with a summary
+
+
+def _summary(symbol: str, refs) -> list[str]:
+    by_file: OrderedDict[str, int] = OrderedDict()
+    by_dir: OrderedDict[str, int] = OrderedDict()
+    for r in refs:
+        by_file[r.location.source] = by_file.get(r.location.source, 0) + 1
+        top = r.location.source.split("/", 1)[0]
+        by_dir[top] = by_dir.get(top, 0) + 1
+    top_files = sorted(by_file.items(), key=lambda kv: -kv[1])[:5]
+    hint = ("typed(categories=[...]) to see one kind of use, callers to group by method"
+            if S.is_type(symbol) else "callers to group them by method")
+    return [
+        "summary: by top directory " + ", ".join(
+            f"{d} {n}" for d, n in sorted(by_dir.items(), key=lambda kv: -kv[1])[:8]),
+        "  most uses: " + ", ".join(f"{f.rsplit('/', 1)[-1]} {n}" for f, n in top_files),
+        f"  narrow it: {hint}, or page with offset/limit",
+    ]
 T = TypeVar("T")
 
 
@@ -54,6 +73,21 @@ def definition_row(d: Definition, full_symbol: bool = True) -> str:
 
 def candidates(r: Resolution, limit: int = 30) -> str:
     lines = [r.note]
+    cands = sorted(r.candidates, key=lambda d: (d.location.source, d.location.range.start_line))
+    owners = {S.parent(d.symbol) for d in cands}
+    if len(cands) > limit:
+        modules: OrderedDict[str, int] = OrderedDict()
+        for d in cands:
+            m = d.location.source.split("/", 1)[0]
+            modules[m] = modules.get(m, 0) + 1
+        lines.append(f"  in {len(owners)} types; by top directory: "
+                     + ", ".join(f"{m} {n}" for m, n in sorted(modules.items(),
+                                                              key=lambda kv: -kv[1])[:8]))
+    if cands and len(owners) > 1 and len(S.parse_query(r.note.split("'")[1] if "'" in r.note
+                                                       else "x").names) == 1:
+        ex = S.short(cands[0].symbol).split("(")[0]
+        lines.append(f"  tip: add the owner type to narrow it, e.g. `{ex}`")
+    r = Resolution(r.symbol, cands, r.note, r.externals)
     for d in r.candidates[:limit]:
         lines.append("  " + definition_row(d))
     if len(r.candidates) > limit:
@@ -65,11 +99,13 @@ def candidates(r: Resolution, limit: int = 30) -> str:
     return "\n".join(lines)
 
 
-def find(text: str, found: list[Definition], offset: int, limit: int) -> str:
+def find(text: str, found: list[Definition], offset: int, limit: int, how: str = "") -> str:
     if not found:
-        return f"no symbol defined in this project matches {text!r}"
+        return f"no symbol defined in this project matches {text!r}" + (
+            f" ({how})" if how else "; try match='contains'")
     shown, suffix = page(found, offset, limit)
-    lines = [f"{len(found)} definition{'s' if len(found) != 1 else ''} match {text!r}{suffix}"]
+    lines = [f"{len(found)} definition{'s' if len(found) != 1 else ''} match {text!r}"
+             + (f" ({how})" if how else "") + suffix]
     lines += [definition_row(d) for d in shown]
     return "\n".join(lines)
 
@@ -91,6 +127,8 @@ def references(ws: Workspace, symbol: str, refs: list[Reference], defs: list[Def
     head = (f"{S.short(symbol)} — {len(refs)} reference{'s' if len(refs) != 1 else ''} "
             f"in {len(files)} file{'s' if len(files) != 1 else ''}{suffix}")
     lines = [head]
+    if len(refs) > SUMMARY_OVER and offset == 0:
+        lines += _summary(symbol, refs)
     if include_definitions:
         for d in defs:
             lines.append(f"defined at {loc(d)}" + ("  (generated)" if d.generated else ""))
