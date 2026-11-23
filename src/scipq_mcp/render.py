@@ -686,31 +686,58 @@ def index_note_plain(stats) -> str:
     return f"-- index updated: {stats.processed} shards, {stats.removed} removed\n"
 
 
-def entry_points(entries, per_kind: int = 12) -> list[str]:
-    """What a change reaches that someone starts from outside: screens, endpoints, jobs…"""
+def entry_points(entries, per_kind: int = 12, depth: int = 0, searched: int = 0) -> list[str]:
+    """What a change reaches that someone starts from outside: screens, endpoints, jobs…,
+    one row per type with its reached members. `depth`: the depth the rest of the output
+    stops at; `searched`: how deep the entry points were looked for."""
     if not entries:
         return []
-    by_kind: OrderedDict[str, list] = OrderedDict()
-    for kind, n, detail in sorted(entries, key=lambda e: (e[0], e[1].depth, e[1].source)):
-        by_kind.setdefault(kind, []).append((n, detail))
-    lines = ["entry points reached (by kind): " + ", ".join(
-        f"{k} {len(v)}" for k, v in sorted(by_kind.items(), key=lambda kv: -len(kv[1])))
-        + (" (tests: listed by tests(transitive=true))" if "test" in by_kind else "")]
-    for kind, items in sorted(by_kind.items(), key=lambda kv: -len(kv[1])):
+    by_kind: OrderedDict[str, OrderedDict[str, list]] = OrderedDict()
+    for e in sorted(entries, key=lambda e: (e.kind, e.node.depth, e.node.source, e.node.line)):
+        t = S.owner_type(e.node.symbol) or e.node.symbol
+        by_kind.setdefault(e.kind, OrderedDict()).setdefault(t, []).append(e)
+
+    def count(types) -> str:
+        members = sum(len(v) for v in types.values())
+        return (f"{len(types)} type{'s' if len(types) != 1 else ''}" +
+                (f" ({members} members)" if members != len(types) else ""))
+    kinds = sorted(by_kind.items(), key=lambda kv: -len(kv[1]))
+    deeper = searched > depth and any(e.node.depth > depth for e in entries)
+    lines = ["entry points reached (by kind" + (f", searched to depth {searched}; the rows "
+                                                f"stop at {depth}" if deeper else "") + "): " +
+             ", ".join(f"{k} {count(v)}" for k, v in kinds)
+             + (" (tests: listed by tests(transitive=true))" if "test" in by_kind else "")]
+    for kind, types in kinds:
         if kind == "test":
             continue
-        for n, detail in items[:per_kind]:
-            lines.append(f"  {kind}  d{n.depth}  {S.short(n.symbol)}  {n.source}:{n.line}  "
-                         f"{detail}")
-        if len(items) > per_kind:
-            lines.append(f"  {kind}  … and {len(items) - per_kind} more")
+        for t, es in list(types.items())[:per_kind]:
+            first = es[0]
+            head = f"  {kind}  d{first.node.depth}  {S.short(t)}  {first.node.source}"
+            if first.on_type:
+                head += f"  {first.detail}"
+            if all(S.kind_of(e.node.symbol) == "type" for e in es):
+                lines.append(head)
+                continue
+            members = []
+            for e in es[:6]:
+                m = S.name_of(e.node.symbol) + "()"
+                members.append(m + (f" {e.detail}" if not e.on_type else "")
+                               + (f" d{e.node.depth}" if e.node.depth != first.node.depth
+                                  else ""))
+            lines.append(head + "  — " + ", ".join(members)
+                         + (f" (+{len(es) - 6})" if len(es) > 6 else ""))
+        if len(types) > per_kind:
+            lines.append(f"  {kind}  … and {len(types) - per_kind} more types")
     return lines
 
 
 def impact(symbol: str, nodes, truncated: bool, depth: int, group_by: str, offset: int,
-           limit: int, entries=None) -> str:
+           limit: int, entries=None, itself=None, searched: int = 0) -> str:
+    """`entries` may come from deeper than `depth`; `itself`: the symbol's own entry points."""
+    head = [f"{S.short(symbol)} is itself an entry point: {e.kind} {e.detail}"
+            for e in itself or []]
     if not nodes:
-        return f"nothing in this project calls {S.short(symbol)}"
+        return "\n".join(head + [f"nothing in this project calls {S.short(symbol)}"])
     groups: OrderedDict[str, list] = OrderedDict()
     for n in nodes:
         key = S.package_of(n.symbol) if group_by == "package" else n.module
@@ -719,14 +746,14 @@ def impact(symbol: str, nodes, truncated: bool, depth: int, group_by: str, offse
     for n in nodes:
         by_depth[n.depth] = by_depth.get(n.depth, 0) + 1
     tests = sum(1 for n in nodes if n.test)
-    lines = [f"impact of {S.short(symbol)} (callers up to depth {depth}): {len(nodes)} "
+    lines = head + [f"impact of {S.short(symbol)} (callers up to depth {depth}): {len(nodes)} "
              f"definitions, {tests} in tests; by depth "
              + ", ".join(f"{d}: {c}" for d, c in by_depth.items())
              + ("; TRUNCATED" if truncated else "")
              + " — lines are where each caller is defined (callers shows the calls)"]
     lines.append(f"by {group_by}: " + ", ".join(
         f"{g} {len(ns)}" for g, ns in sorted(groups.items(), key=lambda kv: -len(kv[1]))[:12]))
-    lines += entry_points(entries)
+    lines += entry_points(entries, depth=depth, searched=searched)
     rows = []
     for g, ns in sorted(groups.items(), key=lambda kv: -len(kv[1])):
         rows.append(f"{g}:")

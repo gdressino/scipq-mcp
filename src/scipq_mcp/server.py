@@ -402,8 +402,10 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
                group_by: Literal["module", "package"] = "module",
                offset: Offset = 0, limit: Limit(100) = 100) -> str:
         """Transitive callers of a symbol, by depth, grouped by module or package, marking
-        tests: what a change can affect. Uses the auxiliary index (built once per checkout,
-        then updated incrementally)."""
+        tests: what a change can affect, and the entry points it reaches (screens, endpoints
+        with their routes, jobs…, one row per type, searched to depth 6 even when the rows
+        stop sooner). Uses the auxiliary index (built once per checkout, then updated
+        incrementally)."""
         return service.impact(symbol, project_root, depth, include_overridden, group_by,
                               offset, limit)
 

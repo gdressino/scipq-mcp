@@ -374,10 +374,31 @@ def test_impact_lists_the_entry_points_reached(sample_copy, tmp_path):
         fh.write('profiles = ["servlet"]\n\n[[entry_points]]\nkind = "job"\n'
                  'type_names = ["*Support"]\n')
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).impact("Entity#setState")
-    assert "entry points reached (by kind):" in out
-    assert "servlet  d1  Service#activate()" in out and "in app/src/main/webapp/WEB-INF/web.xml" \
-        in out
-    assert "job  d1  TestSupport#reset()" in out and "named like *Support" in out
+    assert "entry points reached (by kind): job 1 type, servlet 1 type (2 members)" in out
+    assert "servlet  d1  Service  app/src/main/java/com/example/app/Service.java  in " \
+        "app/src/main/webapp/WEB-INF/web.xml  — activate(), activateAll()" in out
+    assert "job  d1  TestSupport  " in out and "named like *Support  — reset()" in out
+
+
+def test_entry_points_routes_supertypes_depth_and_the_symbol_itself(refactor_root, tmp_path):
+    import os
+    from scipq_mcp.service import Service
+    with open(os.path.join(refactor_root, ".scipq.toml"), "w") as fh:
+        fh.write('profiles = ["jaxrs", "jdo"]\n\n[[entry_points]]\nkind = "screen"\n'
+                 'supertypes = ["com.example.shop.Widget"]\n')
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    out = svc.impact("Steps#base", depth=3)
+    # The endpoint is five calls away and the screen three: searched deeper than the rows.
+    assert "entry points reached (by kind, searched to depth 6; the rows stop at 3): " \
+        "endpoint 1 type, screen 1 type" in out
+    assert "endpoint  d5  OrderResource  " in out and "— create() POST /orders" in out
+    assert "screen  d3  MainScreen  " in out and "extends BaseScreen (a Widget)  — show()" in out
+    assert "  d4  " not in out and "  d5  Steps#first()" not in out    # rows stop at 3
+    out = svc.impact("OrderDao#openFilter")
+    assert "find() GET /orders/{id}" in out
+    out = svc.impact("OrderResource#create")
+    assert out.splitlines()[1].startswith(
+        "OrderResource#create() is itself an entry point: endpoint POST /orders")
 
 
 def test_persistence_model(refactor_root, tmp_path):

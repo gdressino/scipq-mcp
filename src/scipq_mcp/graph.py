@@ -41,6 +41,20 @@ class Node:
     task_dir: str = ""            # "<module>/<task>" of its shard (e.g. "core/compileTestJava")
 
 
+@dataclass
+class Entry:
+    """A reached definition someone starts from outside (a screen, an endpoint, a job…)."""
+    kind: str
+    node: Node
+    detail: str
+    on_type: bool = False       # identified by its type (supertype, name, descriptor)
+
+
+_HTTP_VERBS = {v: v for v in ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS")}
+_MAPPINGS = {"GetMapping": "GET", "PostMapping": "POST", "PutMapping": "PUT",
+             "DeleteMapping": "DELETE", "PatchMapping": "PATCH", "RequestMapping": ""}
+
+
 def module_of(task_dir: str) -> str:
     """"core/compileJava" -> "core"; "a/b/compileTestJava" -> "a/b"; "." -> "."."""
     head, _, _task = task_dir.rpartition("/")
@@ -361,13 +375,13 @@ class Graph:
         return sorted(nodes.values(), key=lambda n: (n.depth, n.module, n.source, n.line)), \
             truncated
 
-    def entry_points(self, nodes: list[Node], specs: list[dict], root: str
-                     ) -> list[tuple[str, Node, str]]:
-        """[(kind, node, detail)] for the reached nodes that are entry points by a profile's
-        [[entry_points]]: the member or its type carries one of the annotations, or the type
-        extends one of the supertypes and/or has a name matching type_names (both, when both
-        are given), or is named in a deployment descriptor (xml). `detail` is the first string
-        of the matching annotation (a path, a step text) or the rule that matched."""
+    def entry_points(self, nodes: list[Node], specs: list[dict], root: str) -> list[Entry]:
+        """The reached nodes that are entry points by a profile's [[entry_points]]: the member
+        or its type carries one of the annotations, or the type extends one of the supertypes
+        and/or has a name matching type_names (both, when both are given), or is named in a
+        deployment descriptor (xml). The detail says what identifies it: an HTTP route (verb
+        and the type's and member's paths), an annotation's first string (a step text), the
+        type's declared supertype, the descriptor (with its URL patterns)."""
         if not nodes or not specs:
             return []
         syms = {n.symbol for n in nodes if n.symbol}
@@ -375,12 +389,13 @@ class Graph:
         ids = self.ids(syms | owners)
         by_id = {v: k for k, v in ids.items()}
         anns: dict[str, list[tuple[str, int, int]]] = {}
-        if ids:
-            q = ",".join("?" * len(ids))
+        id_list = list(ids.values())
+        for i in range(0, len(id_list), 500):
+            chunk = id_list[i:i + 500]
+            q = ",".join("?" * len(chunk))
             for def_id, ann, shard_id, line in self.con.execute(
                     f"SELECT a.def_id, s.symbol, a.shard_id, a.line FROM annotations a JOIN "
-                    f"symbols s ON s.id = a.annotation_id WHERE a.def_id IN ({q})",
-                    list(ids.values())):
+                    f"symbols s ON s.id = a.annotation_id WHERE a.def_id IN ({q})", chunk):
                 anns.setdefault(by_id[def_id], []).append((ann, shard_id, line))
         supers: dict[str, set[str]] = {}
         for t in owners:
@@ -393,35 +408,81 @@ class Graph:
         sh = self.shards()
         texts: dict[str, list[str]] = {}
 
-        def first_string(sym: str, ann: str) -> str:
+        def lines_of(src: str) -> list[str]:
+            if src not in texts:
+                try:
+                    with open(os.path.join(root, src), encoding="utf-8",
+                              errors="replace") as fh:
+                        texts[src] = fh.read().split("\n")
+                except OSError:
+                    texts[src] = []
+            return texts[src]
+
+        def args_of(sym: str, names: set[str]) -> list[tuple[str, str]]:
+            """[(annotation simple name, its argument text)] of sym's annotations named so."""
+            out_ = []
             for a, shard_id, line in anns.get(sym, []):
-                if a != ann or shard_id not in sh:
-                    continue
-                src = sh[shard_id][0]
-                if src not in texts:
-                    try:
-                        with open(os.path.join(root, src), encoding="utf-8",
-                                  errors="replace") as fh:
-                            texts[src] = fh.read().split("\n")
-                    except OSError:
-                        texts[src] = []
-                args = _annotation_args(texts[src], line, S.name_of(ann))
-                m = re.search(r'"((?:[^"\\]|\\.)*)"', args)
-                return m.group(1)[:80] if m else ""
-            return ""
+                n_ = S.name_of(a)
+                if n_ in names and shard_id in sh:
+                    out_.append((n_, _annotation_args(lines_of(sh[shard_id][0]), line, n_)))
+            return out_
+
+        def first_string(text: str) -> str:
+            m = re.search(r'"((?:[^"\\]|\\.)*)"', text)
+            return m.group(1)[:80] if m else ""
+
+        def route(sym: str, owner: str) -> str:
+            """"POST /orders/{id}" from JAX-RS or Spring annotations, or ""."""
+            if S.kind_of(sym) != "method":
+                return ""
+            verb = ""
+            for n_, a in args_of(sym, set(_HTTP_VERBS) | set(_MAPPINGS)):
+                verb = _HTTP_VERBS.get(n_) or _MAPPINGS.get(n_) or verb
+                if n_ == "RequestMapping":
+                    m = re.search(r"RequestMethod\.(\w+)", a)
+                    verb = m.group(1) if m else verb
+            own = next((first_string(a) for _n, a in args_of(sym, {"Path"} | set(_MAPPINGS))
+                        if first_string(a)), "")
+            base = next((first_string(a) for _n, a in args_of(owner, {"Path",
+                                                                       "RequestMapping"})
+                         if first_string(a)), "")
+            if not verb and not own:
+                return ""
+            path = "/" + "/".join(x.strip("/") for x in (base, own) if x.strip("/"))
+            return f"{verb} {path}".strip()
+
+        declared: dict[str, str] = {}
+
+        def declared_super(t: str) -> str:
+            """The supertype the declaration names after extends (else implements)."""
+            if t not in declared:
+                declared[t] = ""
+                d = self.definitions([ids[t]]).get(ids[t]) if t in ids else None
+                if d:
+                    text = " ".join(lines_of(d[0])[max(0, d[1] - 1):d[1] + 6])
+                    m = re.search(r"\b(?:class|interface|enum|record)\s+" +
+                                  re.escape(S.name_of(t)) + r"\b([^{]*)", text)
+                    head = re.sub(r"<[^<>]*(<[^<>]*>[^<>]*)*>", "", m.group(1)) if m else ""
+                    e = re.search(r"\bextends\s+([\w$.]+)", head) or \
+                        re.search(r"\bimplements\s+([\w$.]+)", head)
+                    declared[t] = e.group(1).rsplit(".", 1)[-1] if e else ""
+            return declared[t]
+
         out = []
         for n in nodes:
             sym = n.symbol
             owner = S.owner_type(sym)
             for k, spec in enumerate(specs):
-                detail = None
+                detail, on_type = None, False
                 for target in (sym, owner):
                     hit = [a for a, _s, _l in anns.get(target, []) if a in spec["annotations"]]
                     if hit:
-                        detail = "@" + S.name_of(hit[0])
-                        text = first_string(target, hit[0])
-                        if text:
-                            detail += f'("{text}")'
+                        on_type = target != sym or S.kind_of(sym) == "type"
+                        detail = route(sym, owner)
+                        if not detail:
+                            text = next((first_string(a) for _n, a in
+                                         args_of(target, {S.name_of(hit[0])})), "")
+                            detail = "@" + S.name_of(hit[0]) + (f'("{text}")' if text else "")
                         break
                 if detail is None and S.kind_of(sym) in ("type", "constructor", "method"):
                     t = owner if owner else sym
@@ -431,12 +492,19 @@ class Graph:
                         fnmatch.fnmatch(S.name_of(t), g) for g in spec["type_names"])
                     if (spec["supertypes"] or spec["type_names"]) and ok_super and ok_name:
                         sup = sorted(supers.get(t, set()) & spec["supertypes"])
-                        detail = (f"extends {S.short(sup[0])}" if sup else "named like "
-                                  + "/".join(spec["type_names"]))
+                        direct = declared_super(t)
+                        if sup:
+                            rule = S.name_of(sup[0])
+                            detail = f"extends {direct or rule}" + (
+                                f" (a {rule})" if direct and direct != rule else "")
+                        else:
+                            detail = "named like " + "/".join(spec["type_names"]) + (
+                                f", extends {direct}" if direct else "")
+                        on_type = True
                     elif t in xml_types.get(k, {}):
-                        detail = f"in {xml_types[k][t]}"
+                        detail, on_type = f"in {xml_types[k][t]}", True
                 if detail is not None:
-                    out.append((spec["kind"], n, detail))
+                    out.append(Entry(spec["kind"], n, detail, on_type))
                     break
         return out
 
@@ -1043,6 +1111,7 @@ def _xml_classes(root: str, rules: list) -> dict[str, str]:
                     text = fh.read()
             except OSError:
                 continue
+            urls = _web_xml_urls(text)
             for m in rx.finditer(text):
                 fq = m.group(2).replace("$", ".")
                 parts = fq.split(".")
@@ -1050,7 +1119,30 @@ def _xml_classes(root: str, rules: list) -> dict[str, str]:
                 types = parts[len(pkg):]
                 if types:
                     sym = "/".join(pkg) + "/" + "#".join(types) + "#"
-                    out.setdefault(sym, path)
+                    u = urls.get(m.group(2), [])
+                    out.setdefault(sym, path + (f" ({', '.join(u[:4])})" if u else ""))
+    return out
+
+
+def _web_xml_urls(text: str) -> dict[str, list[str]]:
+    """{servlet or filter class: its URL patterns (or servlet names, for filters mapped to
+    servlets)} from web.xml's <servlet>/<filter> and their -mapping elements."""
+    out: dict[str, list[str]] = {}
+    for kind in ("servlet", "filter"):
+        cls = {}
+        for b in re.finditer(rf"<{kind}>(.*?)</{kind}>", text, re.S):
+            n = re.search(rf"<{kind}-name>\s*(.*?)\s*</{kind}-name>", b.group(1), re.S)
+            c = re.search(rf"<{kind}-class>\s*([\w$.]+)\s*</{kind}-class>", b.group(1))
+            if n and c:
+                cls[n.group(1)] = c.group(1)
+        for b in re.finditer(rf"<{kind}-mapping>(.*?)</{kind}-mapping>", text, re.S):
+            n = re.search(rf"<{kind}-name>\s*(.*?)\s*</{kind}-name>", b.group(1), re.S)
+            if not n or n.group(1) not in cls:
+                continue
+            pats = re.findall(r"<url-pattern>\s*(.*?)\s*</url-pattern>", b.group(1)) + \
+                [f"servlet {x}" for x in re.findall(r"<servlet-name>\s*(.*?)\s*</servlet-name>",
+                                                    b.group(1)) if kind == "filter"]
+            out.setdefault(cls[n.group(1)], []).extend(pats)
     return out
 
 

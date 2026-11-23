@@ -37,6 +37,7 @@ from .queries import AmbiguousName, Navigator, QueryError
 from .workspace import Freshness, Workspace, WorkspaceError, build_running, find_project_root
 
 DEFAULT_LIMIT = 100
+ENTRY_DEPTH = 6     # impact searches entry points (screens, jobs…) at least this deep
 FRESHNESS_MODES = ("full", "results", "off")
 JDK_CHOICE_SECONDS = 60  # how long the JDK picked for a checkout (from its build files) is kept
 T = TypeVar("T")
@@ -1091,10 +1092,21 @@ class Service:
             sym, note = self._resolve(nav, symbol)
             d = max(1, min(depth, 10))
             with self._graph(nav) as (g, stats):
-                nodes, trunc = g.impact(sym, d, include_overridden, root=nav.ws.root)
+                # Entry points are searched deeper than the rows go: a screen or a job is
+                # often four or five calls away.
+                deep = max(d, ENTRY_DEPTH)
+                every, trunc = g.impact(sym, deep, include_overridden, root=nav.ws.root)
+                nodes = [n for n in every if n.depth <= d]
+                trunc = trunc and max((n.depth for n in every), default=0) <= d
                 st = self.settings(nav.ws.root, g)
-                entries = g.entry_points(nodes, st.entry_specs, nav.ws.root)
-            text = render.impact(sym, nodes, trunc, d, group_by, offset, limit, entries)
+                entries = g.entry_points(every, st.entry_specs, nav.ws.root)
+                defs = g.definitions(g.ids([sym]).values())
+                dd = next(iter(defs.values()), None)
+                itself = [e for e in g.entry_points(
+                    [G.Node(sym, 0, "", dd[0] if dd else "", dd[1] if dd else 0)],
+                    st.entry_specs, nav.ws.root) if e.kind != "test"]
+            text = render.impact(sym, nodes, trunc, d, group_by, offset, limit, entries,
+                                 itself, deep)
             return render.index_note(stats) + note + text, {n.source for n in nodes}
         return body
 
@@ -1162,7 +1174,7 @@ class Service:
             if cuke:
                 tests_line = (tests_line + "\n" if tests_line else "") + cuke
             if entries:   # screens, endpoints, jobs… to try by hand (tests are listed above)
-                tests_line = "\n".join(render.entry_points(entries)) + (
+                tests_line = "\n".join(render.entry_points(entries, depth=depth)) + (
                     "\n" + tests_line if tests_line else "")
             text = render.changed(res, base if not staged else f"{base} (staged)",
                                   [n for n in nodes.values() if n.depth > 0], tests_line, depth)

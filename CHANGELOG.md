@@ -27,8 +27,11 @@ version and date when releasing.
   missing files, lines past the end and line numbers that no longer fall in the symbol named
   next to them, by folder.
 - `impact` and `changed` list the entry points the change reaches, by kind (screens,
-  endpoints, jobs, servlets, steps…), with their depth and what identifies them (an
-  annotation's first string, the supertype, the descriptor). An `[[entry_points]]` rule may
+  endpoints, jobs, servlets, steps…), one row per type with its reached members, their depth
+  and what identifies them (an endpoint's verb and route from the type's and the method's
+  paths, an annotation's first string, the declared supertype, the descriptor with its URL
+  patterns). `impact` looks for them to depth 6 even when its rows stop sooner, and says
+  when the symbol is an entry point itself. An `[[entry_points]]` rule may
   combine `supertypes` and `type_names` (a type must match both) and name classes listed in
   XML files (`[[entry_points.xml]] files, elements`); `dead_code` keeps those classes too.
   A `servlet` profile (annotations and `web.xml`), and Vaadin 7/8 UIs and views in `vaadin`.

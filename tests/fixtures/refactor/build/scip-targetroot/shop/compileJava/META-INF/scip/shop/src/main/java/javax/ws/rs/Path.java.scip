@@ -1,0 +1,6 @@
+Ô
+(shop/src/main/java/javax/ws/rs/Path.java%javax/ws/rs/Path#BZ java/lang/String#B
+-javax/ws/rs/Path#value().BRa
+javax/ws/rs/Path#"$
+ java/lang/annotation/Annotation#(2Path:"java*public @interface PathL
+javax/ws/rs/Path#value().(B2value:&"java*public abstract String value()"java

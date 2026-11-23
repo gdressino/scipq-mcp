@@ -1,0 +1,13 @@
+è
+
+6shop/src/main/java/com/example/shop/OrderResource.javajavax/B	javax/ws/Bjavax/ws/rs/Bjavax/ws/rs/GET#Bjavax/B	javax/ws/Bjavax/ws/rs/Bjavax/ws/rs/POST#Bjavax/B	javax/ws/Bjavax/ws/rs/Bjavax/ws/rs/Path#Bjavax/ws/rs/Path#B3com/example/shop/OrderResource#BZ 6*com/example/shop/OrderResource#`<init>`().Bjavax/ws/rs/POST#B		java/lang/String#B
+>(com/example/shop/OrderResource#create().B
+Z	 !com/example/shop/Steps#B)com/example/shop/Steps#first().Bjavax/ws/rs/GET#Bjavax/ws/rs/Path#B	java/lang/String#B<&com/example/shop/OrderResource#find().BZ /%com/example/shop/OrderDao#`<init>`().B1'com/example/shop/OrderDao#openFilter().B(²
+com/example/shop/OrderResource#IEndpoints: the route is the class's path, the method's own and its verb. (2OrderResource:3"java*+@Path("/orders")
+public class OrderResourceV
+*com/example/shop/OrderResource#`<init>`().(	2<init>:"java*public OrderResource()Z
+(com/example/shop/OrderResource#create().(2create:$"java*@POST
+public String create()b
+&com/example/shop/OrderResource#find().(2find:0"java*(@GET
+@Path("/{id}")
+public String find()"java

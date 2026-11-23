@@ -1,0 +1,11 @@
+¯
+
+.shop/src/main/java/com/example/shop/Steps.java+com/example/shop/Steps#BZ ."com/example/shop/Steps#`<init>`().Bjava/lang/String#B5com/example/shop/Steps#first().BZ * com/example/shop/Steps#second().Bjava/lang/String#B6 com/example/shop/Steps#second().BZ
+ )com/example/shop/Steps#third().B	java/lang/String#B5com/example/shop/Steps#third().BZ * com/example/shop/Steps#fourth().Bjava/lang/String#B6 com/example/shop/Steps#fourth().BZ (com/example/shop/Steps#base().Bjava/lang/String#B4com/example/shop/Steps#base().BZ …
+com/example/shop/Steps#EA chain of calls: what calls base() from outside is five calls away. (2Steps:"java*public class StepsF
+"com/example/shop/Steps#`<init>`().(	2<init>:"java*public Steps()I
+com/example/shop/Steps#first().(P2first:"java*static String first()L
+ com/example/shop/Steps#second().(P2second:"java*static String second()I
+com/example/shop/Steps#third().(P2third:"java*static String third()L
+ com/example/shop/Steps#fourth().(P2fourth:"java*static String fourth()F
+com/example/shop/Steps#base().(P2base:"java*static String base()"java
