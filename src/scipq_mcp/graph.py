@@ -915,8 +915,8 @@ _SUFFIXES = ("aciones", "iciones", "acion", "icion", "ciones", "cion", "adores",
 
 def stem(word: str) -> str:
     """A light stem for prefix search (Spanish and English): accents and plurals off, then a
-    verb or noun ending: importar/importación/importer -> import, tareas -> tarea,
-    programadas -> program."""
+    verb or noun ending: exportar/exportación/exporter -> export, facturas -> factura,
+    enviadas -> envi."""
     w = "".join(c for c in unicodedata.normalize("NFD", word.lower())
                 if unicodedata.category(c) != "Mn")
     if len(w) > 4 and w.endswith("es"):
