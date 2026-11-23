@@ -402,7 +402,8 @@ def render(r: Report) -> str:
     marks = {"ok": "OK  ", "warn": "WARN", "info": "    "}
     order = {"warn": 0, "ok": 1, "info": 2}
     warns = sum(1 for f in r.findings if f.level == "warn")
-    lines = [f"doctor: {warns} warnings" if warns else "doctor: nothing to fix"]
+    lines = [f"doctor: {warns} warning{'s' if warns != 1 else ''}" if warns else
+             "doctor: nothing to fix"]
     for f in sorted(r.findings, key=lambda f: order[f.level] if f.level == "warn" else 1):
         lines.append(f"{marks[f.level]} [{f.area}] {f.text}")
         if f.hint:

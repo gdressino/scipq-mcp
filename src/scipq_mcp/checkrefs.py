@@ -105,11 +105,14 @@ class Model:
         self.nested: dict[str, list[str]] = {}      # type -> types declared inside it
         self.by_member: dict[str, list[str]] = {}   # member name -> types declaring it
         sh = g.shards()
-        for sym, shard_id, line, b0, b1, sig in g.con.execute(
-                "SELECT s.symbol, d.shard_id, d.line, d.body_start, d.body_end, d.signature "
-                "FROM defs d JOIN symbols s ON s.id = d.symbol_id"):
+        self.generated: set[str] = set()            # Lombok's and other generated members
+        for sym, shard_id, line, b0, b1, sig, flags in g.con.execute(
+                "SELECT s.symbol, d.shard_id, d.line, d.body_start, d.body_end, d.signature, "
+                "d.flags FROM defs d JOIN symbols s ON s.id = d.symbol_id"):
             if shard_id not in sh or S.is_local_like(sym):
                 continue
+            if flags & 1:
+                self.generated.add(sym)
             if sym not in self.where:
                 self.where[sym] = (sh[shard_id][0], line + 1, b0, b1)
             if S.is_type(sym):
@@ -276,9 +279,11 @@ class Model:
         return f" ({name} is in {', '.join(owners[:3])}{' …' if len(owners) > 3 else ''})" \
             if owners else ""
 
-    def type_hint(self, simple: str) -> str:
-        """" (Account is at com.example.core.Account)" when a type of that name exists."""
-        at = [_qualified(t) for t in self.types.get(simple, [])]
+    def type_hint(self, simple: str, near: str = "") -> str:
+        """" (Account is at com.example.core.Account)" when a type of that name exists, the
+        ones sharing most of the written package first."""
+        at = sorted((_qualified(t) for t in self.types.get(simple, [])),
+                    key=lambda q: -len(os.path.commonprefix([q, near])))
         return f" ({simple} is at {', '.join(at[:2])}{' …' if len(at) > 2 else ''})" if at \
             else ""
 
@@ -513,14 +518,15 @@ def _check_qualified(m: Model, chain: str, add) -> list[str]:
                     break
                 cands = inner
             return cands
-    if "/".join(segs[:2]) not in m.roots or m.is_library(segs[uppers[0]]):
+    if "/".join(segs[:2]) not in m.roots or \
+            (segs[uppers[0]] not in m.types and m.is_library(segs[uppers[0]])):
         return []           # a library's or another project's package
     if m.is_package("/".join(segs)):
         return []           # a package with an upper-case segment (com.x.IVA)
     last = max(i for i in uppers if all(x[:1].isupper() for x in segs[uppers[0]:i + 1]))
     fqn = ".".join(segs[:last + 1])
     simple = segs[uppers[0]]
-    add(fqn, "no such type" + (m.type_hint(simple) or _closest(simple, list(m.types))),
+    add(fqn, "no such type" + (m.type_hint(simple, fqn) or _closest(simple, list(m.types))),
         "no-type")
     return []
 
@@ -553,6 +559,10 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         if written.startswith(k):
             written = v + written[len(k):]
             break
+    if re.match(r"[ab]/", written) and not _find_path(written, by_suffix, sources):
+        written = written[2:]           # a git diff's a/ and b/ prefixes
+    if re.search(r"/tmp\b|\bscratch\b", line[max(0, mo.start() - 40):mo.start()]):
+        return                          # a scratch copy, not the checkout's file
     hits = _find_path(written, by_suffix, sources)
     if not hits:
         for base_dir in ("", doc_dir):      # from the checkout, or from the document
@@ -611,17 +621,49 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
                     m.where.get(x, ("",))[0] == src and (names is None or S.name_of(x) in names)]
             for t in m.types_in.get(src, []):
                 for name in (names if names is not None else segment_names):
-                    out_ += [x for x in m.member_syms.get((t, name), []) if S.is_method(x)]
+                    out_ += [x for x in m.member_syms.get((t, name), [])
+                             if S.is_method(x) or S.kind_of(x) == "term"]
                 if constructor:
                     out_ += m.member_syms.get((t, S.name_of(t)), [])
             return out_
-        # The name glued to the path when it is one of the file's members, else the names
-        # of the mention's part of the line.
-        syms = (named(glued) if glued else []) or named(None)
         lines = text_cache.get(src) or []
         if not lines:
             _with_header(root, src, 1, text_cache)
             lines = text_cache.get(src) or []
+        # The name glued to the path when it is one of the file's members, else the names
+        # of the mention's part of the line; generated members (Lombok's) only when no
+        # written member has the name.
+        syms = (named(glued) if glued else []) or named(None)
+        syms = [x for x in syms if x not in m.generated]
+        # The doc shows a call (`x = foo(…)`, `foo(…).bar`, "hace foo(…)"): the line must
+        # still call it.
+        seg_text = line[a:b]
+        # Only in code spans, and shown as a call on something: obj.foo(…), x = foo(…).
+        shown_calls = {g.group(2) for p_, q_ in near for g in re.finditer(
+            r"(?:([a-z_$][\w$]*|\))\s*\.|=\s*|\breturn\s+)([a-z_$][\w$]*)\s*\(",
+            line[p_:q_]) if g.group(2) in m.by_member}
+        for name in sorted({S.name_of(x) for x in syms if S.is_method(x)} | shown_calls):
+            q = re.escape(name)
+            # x = foo(…), return foo(…), "hace foo(…)", obj.foo(…) (not Type.foo(…): a
+            # mention of the member), foo(…).bar
+            shown = re.search(r"(?:=|\breturn|\bhace|\bllama|\bcalls?)\s*`?" + q + r"\s*\(|"
+                              + q + r"\s*\([^)]*\)\s*[.\[]", seg_text) or any(
+                not r_.group(1)[:1].isupper() for r_ in re.finditer(
+                    r"([\w$]+|\))\s*\.\s*" + q + r"\s*\(", seg_text))
+            if not shown:
+                continue
+            end_n = int(mo.group(3)) if mo.group(3) else n
+            calls = [k + 1 for k, c in enumerate(lines)
+                     if re.search(r"(?<![\w$])" + re.escape(name) + r"\s*\(", c)
+                     and not re.match(r"\s*(//|\*|/\*)", c)
+                     and not re.search(r"\b(?:public|protected|private|static|void)\b[^=;]*"
+                                       + re.escape(name) + r"\s*\(", c)]
+            if any(n - 1 <= k <= end_n + 1 for k in calls):
+                return
+            add(mo.group(0), f"line {n} no longer calls {name}" + (
+                f" (calls at {', '.join(map(str, calls[:4]))}{' …' if len(calls) > 4 else ''})"
+                if calls else " (nothing in this file calls it now)"), "line-moved")
+            return
         # A single line that calls the name (in code, not a comment) is the call the doc
         # points at; a range is a block of code, which must fall in the member.
         if mo.group(3) is None:
@@ -637,7 +679,8 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
             lo = min((w[2] + 1) if w[2] is not None else w[1], w[1])
             hi = (w[3] + 1) if w[3] is not None else w[1]
             spans_here.append((sym, _with_header(root, src, lo, text_cache), hi))
-    if spans_here and not any(lo - 2 <= n <= hi + 1 for _s, lo, hi in spans_here):
+    end_n = int(mo.group(3)) if mo.group(3) else n      # a range N-M overlaps a member
+    if spans_here and not any(n <= hi + 1 and end_n >= lo - 2 for _s, lo, hi in spans_here):
         sym, lo, hi = min(spans_here, key=lambda x: min(abs(n - x[1]), abs(n - x[2])))
         add(mo.group(0), f"line {n} is not in {S.short(sym)} any more (now lines {lo}–{hi})",
             "line-moved")
@@ -656,6 +699,25 @@ def _segment(line: str, start: int, end: int) -> tuple[int, int]:
         elif sep.start() >= end:
             b = sep.start()
             break
+    # Inside parentheses (… (File:N → `name`) …): what they hold.
+    depth, open_at = 0, -1
+    for k in range(start - 1, a - 1, -1):
+        if line[k] == ")":
+            depth += 1
+        elif line[k] == "(":
+            if depth == 0:
+                open_at = k
+                break
+            depth -= 1
+    if open_at >= 0 and not re.match(r"[\w$]", line[open_at - 1:open_at] or " "):
+        depth = 0
+        for k in range(end, b):
+            if line[k] == "(":
+                depth += 1
+            elif line[k] == ")":
+                if depth == 0:
+                    return open_at + 1, k
+                depth -= 1
     return a, b
 
 
@@ -664,11 +726,15 @@ def _glued_names(segment: str, path_mention: str) -> set[str]:
     `File:N (name)`."""
     p = re.escape(path_mention)
     out = set()
-    for rx in (r"([A-Za-z_$][\w$]*)\s*(?:\(\s*\))?`?\s*\(\s*`?" + p,
-               p + r"`?\s*(?:—|–|:|-)\s*`?(?:[\w$]+[#.])?([A-Za-z_$][\w$]*)",
-               p + r"`?\s*\(\s*`?(?:[\w$]+[#.])?([A-Za-z_$][\w$]*)"):
+    for k, rx in enumerate((r"([A-Za-z_$][\w$]*)\s*(?:\(\s*\))?`?\s*\(\s*`?" + p,
+                            p + r"`?\s*(?:—|–|:|-)\s*(`?)(?:[\w$]+[#.])?([A-Za-z_$][\w$]*)"
+                                r"(\s*\()?",
+                            p + r"`?\s*\(\s*`?(?:[\w$]+[#.])?([A-Za-z_$][\w$]*)")):
         for m_ in re.finditer(rx, segment):
-            name = m_.group(1)
+            name = m_.group(2) if k == 1 else m_.group(1)
+            # After a dash, prose follows unless the word looks like code.
+            if k == 1 and not (m_.group(1) or m_.group(3) or re.search(r"[a-z][A-Z]", name)):
+                continue
             if name[:1].islower() or name == "constructor":
                 out.add(name)
     return out - {"constructor", "el", "la", "the", "line", "linea", "líneas", "lines"}
@@ -755,6 +821,7 @@ def _check_member(m: Model, mention: str, written_type: str, name: str, params,
         add(mention, f"{S.short(t)} has no member {name}"
             + (_closest(name, m.names_in(t)) or m.elsewhere(name, t)), "no-member")
         return [t]
+    syms = [x for c in cands for x in m.member_syms.get((c, name), [])]
     if params is not None and params.strip() and not call:
         want = _params(params)
         from .refactor import _param_types
@@ -764,7 +831,17 @@ def _check_member(m: Model, mention: str, written_type: str, name: str, params,
             shown = "; ".join("(" + ", ".join(h) + ")" for h in have[:3])
             add(mention, f"no {name}({', '.join(want)}) in {S.short(t)}: its overloads take "
                 f"{shown}", "params")
-    return [x for c in cands for x in m.member_syms.get((c, name), [])] or [t]
+        # The overload written is the one meant (guardar(boolean)).
+        exact = [x for x in syms if _param_types(_sig_of(m, x)) == want]
+        syms = exact or syms
+    return syms or [t]
+
+
+def _sig_of(m: Model, sym: str) -> str:
+    parent, name = S.parent(sym), S.name_of(sym)
+    sigs = m.members.get(parent, {}).get(name, [])
+    syms = m.member_syms.get((parent, name), [])
+    return sigs[syms.index(sym)] if sym in syms and syms.index(sym) < len(sigs) else ""
 
 
 def _is_library_like(written: str) -> bool:
@@ -776,8 +853,16 @@ def _is_library_like(written: str) -> bool:
 
 
 def _cut(text: str, width: int = 80) -> str:
-    """A long mention cut in the middle, so that its end (a line number) stays."""
-    return text if len(text) <= width else text[:width // 2 - 1] + "…" + text[-(width // 2):]
+    """A long mention cut in the middle at a folder, so that its end (the file name and
+    line number) stays whole."""
+    if len(text) <= width:
+        return text
+    head, tail = text[:width // 2], text[-(width // 2):]
+    if "/" in tail:
+        tail = tail[tail.index("/"):]
+    if "/" in head:
+        head = head[:head.rindex("/")]
+    return head + "/…" + tail if "/" in text else text[:width // 2 - 1] + "…" + text[-(width // 2):]
 
 
 def render(problems: list[Problem], checked: int, nfiles: int, offset: int, limit: int,

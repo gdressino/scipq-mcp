@@ -399,6 +399,7 @@ def test_check_refs(sample_copy, tmp_path):
 - Cut names: …Old.setValue(1) is not a type.
 
 | `Entity.setState()` | core/src/main/java/com/example/model/Entity.java:3 | a row |
+- `app/src/main/java/com/example/app/Service.java:2` → `a.setState(1)`
 - Constants, nested types, examples: `Service.DEFAULT.getState()`, `Service.NOPE.get()`,
   `Account.build()`, por ejemplo `Fulano.prefix()`; `Gone.java` borrado.
 ```python
@@ -414,7 +415,7 @@ svc = Client.__init__(url=None)  # Python: Entity.get_connection(x)
         fh.write("`Entity#ancient`\n")
     svc = Service(sample_copy, cache_dir=str(tmp_path / "c"))
     out = svc.check_refs()
-    assert "9 problems: " in out and "2 members not found" in out, out
+    assert "10 problems: " in out and "2 members not found" in out, out
     assert "Service.NOPE.get()  — Service has no member NOPE" in out
     for x in ("M/Account", "X_main", "no type Old", "Probe", "Migrate", "DEFAULT", "Account.build", "Fulano", "borrado", "__init__", "get_connection", "ancient"):
         assert x not in out, x
@@ -424,6 +425,7 @@ svc = Client.__init__(url=None)  # Python: Entity.get_connection(x)
     assert "no type Nope" in out and "com.example.model.Ghost  — no such type" in out
     assert "line 3 is not in Entity#setState() any more (now lines 9–16)" in out
     assert "line 6 ×2 (also 18)  core/src/main/java/com/example/model/Entity.java:3" in out  # row
+    assert "Service.java:2  — line 2 no longer calls setState (calls at" in out
     assert "Gone.java  — no such file" in out and "Account.java  —" not in out
     assert "Old" not in out and "Gone#run" not in out             # said to be gone
     for x in ("Foo", "getX", "LOG", "hashCode", "dnGetState", "Lizt", "X.java", "uid"):

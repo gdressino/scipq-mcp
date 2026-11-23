@@ -34,7 +34,9 @@ version and date when releasing.
   there (with the closest names, and where a type or member of that name lives now),
   parameter lists no overload has, names none of the same-named types has, missing files,
   lines past the end and line numbers that no longer fall in the symbol named next to them
-  (its javadoc and annotations count as its lines); counts by kind, then by file with
+  (its javadoc and annotations count as its lines; a range overlapping it is fine; when the
+  doc shows a call, the line must still make it: "line 70 no longer calls foo (calls at
+  62)"); counts by kind, then by file with
   repeats merged, or as a Markdown table. Left alone: library types (from the library
   index, under the packages the project uses), placeholders (`Foo`, `getX`), constants as
   receivers, members of nested builders, Object/Class/enum and JDO-enhancer members, Python
