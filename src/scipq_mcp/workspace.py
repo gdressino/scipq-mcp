@@ -615,7 +615,8 @@ class _FreshnessCheck:
             return self.ws._freshness_from(shard_mtimes, java)
         if self._thread is not None:
             self._thread.join()
-        return self._result or Freshness()
+        # Not `or`: a Freshness with nothing stale is falsy but still carries counts.
+        return self._result if self._result is not None else Freshness()
 
 
 def _split(items: list[str], n: int) -> list[list[str]]:

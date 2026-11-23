@@ -466,10 +466,17 @@ def test_git_diff_names_with_spaces_and_accents(tmp_path):
     assert changed_files(str(tmp_path), "HEAD") == set(names)
 
 
-def test_a_file_written_again_unchanged_is_not_stale(sample_copy, tmp_path):
+@pytest.mark.parametrize("gnu_find", [True, False])
+def test_a_file_written_again_unchanged_is_not_stale(sample_copy, tmp_path, monkeypatch,
+                                                     gnu_find):
     """A build up to date by content (Gradle) leaves the shard older than a file written
     again with the same text: the index's hash of the compiled source tells it apart."""
+    from scipq_mcp import workspace as W
     from scipq_mcp.service import Service
+    if not gnu_find:   # the pure-Python check (BSD find on macOS)
+        monkeypatch.setattr(W, "_gnu_find", lambda: None)
+    elif W._gnu_find() is None:
+        pytest.skip("GNU find not available")
     svc = Service(sample_copy, cache_dir=str(tmp_path / "cache"))
     svc.census()                                       # builds the auxiliary index
     src = os.path.join(sample_copy, "core/src/main/java/com/example/model/Entity.java")
