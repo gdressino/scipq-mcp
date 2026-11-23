@@ -9,12 +9,14 @@ version and date when releasing.
 
 - `compare(other_root)`: this checkout against another one (a worktree or a clone), from both
   auxiliary indexes (B's is built if missing). Public/protected definitions only in one side
-  or with another signature, and maybe-renamed pairs; when both share git history, what each
-  changed since the merge base, members changed on both sides (conflicts likely), and what
-  merging one into the other would break: the symbols one side removed or changed in files
-  only it touched, with the uses the other side has of them (those in files it changed
-  itself marked new), their overrides of a changed or removed method, and their concrete
-  subtypes when a new abstract method appears. The API section covers public/protected
+  or with another signature, and maybe-renamed pairs; when both share git history, the API
+  differences classified by who did what since the merge base (added in A, removed in B,
+  changed in B…), the files each side changed (and how many are .java), members changed on
+  both sides (conflicts likely), and what merging one into the other would break: the symbols
+  one side removed or changed in files only it touched, against the other side's uses,
+  overrides and concrete subtypes (for a new abstract method) in files that other side
+  modified or added since the base — a file it did not touch ends up with the first side's
+  version, already adapted. The API section covers public/protected
   members; what a merge breaks covers every visibility. Annotations are ignored, a type's
   header changing breaks nothing, and moved types (same simple name and members, another
   package) are paired like renames. `all_worktrees=True`: every other worktree against this

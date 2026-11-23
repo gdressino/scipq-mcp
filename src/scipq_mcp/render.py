@@ -989,6 +989,26 @@ def compare(a_label: str, b_label: str, diff, api_only: bool, scope: str, git: d
     renamed = {x for pair in diff.renamed + diff.moved for x in pair}
     only_a = {k: v for k, v in diff.only_a.items() if k not in renamed}
     only_b = {k: v for k, v in diff.only_b.items() if k not in renamed}
+    if git is not None:  # who did what, from the files each side touched since the base
+        from .compare import ApiDiff, classify
+        groups = classify(ApiDiff(only_a, only_b, diff.changed), git["files_a"], git["files_b"])
+        for name, items in groups.items():
+            if not items:
+                continue
+            lines.append(f"  {name} ({len(items)}):")
+            for sym, e in sorted(items.items(), key=lambda kv: (
+                    (kv[1][0] if isinstance(kv[1], tuple) else kv[1]).source,
+                    (kv[1][0] if isinstance(kv[1], tuple) else kv[1]).line))[:limit]:
+                if isinstance(e, tuple):
+                    lines.append(f"    {S.short(sym)}  {e[0].source}:{e[0].line}")
+                    lines.append(f"      A: {e[0].signature[:120]}")
+                    lines.append(f"      B: {e[1].signature[:120]}")
+                else:
+                    lines.append(f"    {S.short(sym)}  {e.source}:{e.line}  — {e.signature[:120]}")
+            if len(items) > limit:
+                lines.append(f"    … and {len(items) - limit} more")
+        only_a, only_b = {}, {}
+        diff = ApiDiff(diff.only_a, diff.only_b, {}, diff.renamed, diff.moved)
     if only_a:
         lines.append(f"  only in A ({len(only_a)}):")
         lines += _entries(only_a, limit)
@@ -1008,8 +1028,10 @@ def compare(a_label: str, b_label: str, diff, api_only: bool, scope: str, git: d
         lines.append("no shared git history (or no git): changes since a merge base, clashes "
                      "and merge breaks are not shown")
         return "\n".join(lines)
-    lines.append(f"since the merge base {git['base'][:10]}: A changed {len(git['files_a'])} "
-                 f"files, B {len(git['files_b'])}; both changed {len(git['both_files'])}")
+    def n(files):
+        return f"{len(files)} files ({sum(1 for f in files if f.endswith('.java'))} .java)"
+    lines.append(f"since the merge base {git['base'][:10]}: A changed {n(git['files_a'])}, B "
+                 f"{n(git['files_b'])}; both changed {n(git['both_files'])}")
     if git["both_members"]:
         lines.append(f"  members changed on both sides (merge conflicts likely, "
                      f"{len(git['both_members'])}):")
@@ -1019,8 +1041,10 @@ def compare(a_label: str, b_label: str, diff, api_only: bool, scope: str, git: d
         lines.append("  files changed on both sides (different members): "
                      + ", ".join(sorted(git["both_files"])[:12])
                      + (" …" if len(git["both_files"]) > 12 else ""))
-    for label, brk in (("merging B into A would break uses in A", git["b_into_a"]),
-                       ("merging A into B would break uses in B", git["a_into_b"])):
+    for label, brk in (("merging B into A would break, in files A changed since the base",
+                        git["b_into_a"]),
+                       ("merging A into B would break, in files B changed since the base",
+                        git["a_into_b"])):
         if not brk:
             lines.append(f"{label}: none found")
             continue
@@ -1039,8 +1063,7 @@ def compare(a_label: str, b_label: str, diff, api_only: bool, scope: str, git: d
                 change = f"signature {b.old.signature[:70]} → {b.new.signature[:70]}"
             lines.append(f"  {S.short(b.symbol)}  ({change}; {b.source})")
             for u in b.uses[:8]:
-                tag = (f"  [{u.how}]" if u.how in ("overrides it", "concrete subtype") else "") \
-                    + ("  [new on this side]" if u.new else "")
+                tag = f"  [{u.how}]" if u.how in ("overrides it", "concrete subtype") else ""
                 lines.append(f"    {container_label(u.caller) or '(top level)'}  {u.source}:"
                              + ",".join(map(str, u.lines[:5])) + tag)
             if len(b.uses) > 8:

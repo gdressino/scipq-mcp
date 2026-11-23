@@ -39,11 +39,30 @@ def test_compare_worktrees(tmp_path, sample_root):
               "com/example/model/Group.java.scip"):
         os.unlink(b / p)
     run(b, "commit", "-qam", "drop Group")
-    out = Service(str(a), cache_dir=str(tmp_path / "cache")).compare(str(b))
-    every = Service(str(a), cache_dir=str(tmp_path / "cache")).compare(all_worktrees=True)
+    svc = Service(str(a), cache_dir=str(tmp_path / "cache"))
+    out = svc.compare(str(b))
+    assert "removed in B" in out and "Group#add()" in out   # classified against the base
+    assert "since the merge base" in out and "B 2 files (1 .java)" in out
+    # A did not touch Service.java: after the merge it is B's version, adapted by B.
+    assert "merging B into A would break, in files A changed since the base: none found" in out
+    # A edits Service.java (which uses Group): that version survives the merge and breaks.
+    svc_java = a / "app/src/main/java/com/example/app/Service.java"
+    svc_java.write_text(svc_java.read_text() + "// edited in A\n")
+    out = svc.compare(str(b))
+    brk = out.split("merging B into A would break, in files A changed since the base", 1)[1]
+    assert "Group" in brk and "Service.java" in brk.split("merging A into B")[0]
+    assert "merging A into B would break, in files B changed since the base: none found" in out
+    every = svc.compare(all_worktrees=True)
     assert "feature" in every and "merging it here breaks" in every, every
-    assert "only in A" in out and "Group#add()" in out
-    assert "since the merge base" in out
-    brk = out.split("merging B into A would break uses in A:", 1)[1]
-    assert "Group" in brk and "Service.java" in brk
-    assert "merging A into B would break uses in B: none found" in out
+
+
+def test_classify_against_the_merge_base():
+    E = CMP.Entry
+    d = CMP.ApiDiff(only_a={"p/A#n().": E("method", "public void n()", "A.java", 1),
+                            "p/B#gone().": E("method", "public void gone()", "B.java", 1)},
+                    only_b={"p/C#c().": E("method", "public void c()", "C.java", 1)},
+                    changed={"p/D#d().": (E("method", "public int d()", "D.java", 1),
+                                          E("method", "public long d()", "D.java", 1))})
+    g = CMP.classify(d, files_a={"A.java"}, files_b={"B.java", "C.java", "D.java"})
+    assert set(g["added in A"]) == {"p/A#n()."} and set(g["removed in B"]) == {"p/B#gone()."}
+    assert set(g["added in B"]) == {"p/C#c()."} and set(g["changed in B"]) == {"p/D#d()."}

@@ -839,7 +839,8 @@ def git_diff_hunks(root: str, base: str, staged: bool, paths: list[str]
         raise GraphError("git is not available")
     # --relative: paths relative to the project root (and only below it), as in the shards,
     # also when the build lives in a subdirectory of its git repository.
-    cmd = [git, "-C", root, "diff", "-U0", "--no-color", "--no-ext-diff", "--relative"]
+    cmd = [git, "-C", root, "-c", "core.quotePath=false", "diff", "-U0", "--no-color",
+           "--no-ext-diff", "--relative"]
     if staged:
         cmd.append("--cached")
     if base:
@@ -853,7 +854,11 @@ def git_diff_hunks(root: str, base: str, staged: bool, paths: list[str]
     current = None
     for line in proc.stdout.split(b"\n"):
         if line.startswith(b"+++ "):
-            name = line[4:].decode("utf-8", errors="replace")
+            # git ends a name holding spaces with a TAB in this header, and quotes names
+            # with special characters
+            name = line[4:].rstrip(b"\t").decode("utf-8", errors="replace")
+            if name.startswith('"') and name.endswith('"'):  # core.quotePath=false: only
+                name = name[1:-1].replace('\\"', '"').replace("\\\\", "\\")  # " and \
             current = name[2:] if name.startswith("b/") else (None if name == "/dev/null"
                                                               else name)
             if current is not None:

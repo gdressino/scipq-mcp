@@ -14,7 +14,7 @@ import subprocess
 from dataclasses import dataclass, field
 
 from . import symbols as S
-from .graph import Graph, git_diff_hunks, scope_matches
+from .graph import Graph, scope_matches
 from .index import REL_IMPLEMENTATION
 
 _API = re.compile(r"\b(public|protected)\b")
@@ -208,15 +208,14 @@ def merge_base(a_root: str, b_root: str) -> str:
 
 
 def changed_files(root: str, base: str) -> set[str]:
-    """Files changed since `base` in a checkout (commits and working tree), and untracked
-    ones; relative to the project root."""
-    out = set(git_diff_hunks(root, base, False, []))
-    names = _git(root, "diff", "--name-only", "--relative", base)
-    if names:
-        out |= set(names.splitlines())
-    untracked = _git(root, "ls-files", "--others", "--exclude-standard")
-    if untracked:
-        out |= set(untracked.splitlines())
+    """Files changed since `base` in a checkout (commits and working tree, deleted ones too),
+    and untracked ones; relative to the project root."""
+    out: set[str] = set()
+    for args in (("diff", "--name-only", "-z", "--relative", base),
+                 ("ls-files", "-z", "--others", "--exclude-standard")):
+        names = _git(root, "-c", "core.quotePath=false", *args)
+        if names:
+            out |= {n for n in names.split("\0") if n}
     return out
 
 
@@ -249,7 +248,10 @@ def breaks(removed_or_changed: list[tuple[str, str, Entry | None, Entry | None]]
     """What merging this side into the other would break: of the symbols this side removed,
     changed or added abstract (how, the other side's entry, this side's), those in files only
     this side touched, with what the other side has that depends on them: its uses, its
-    overrides (a changed or removed method), its concrete subtypes (a new abstract method)."""
+    overrides (a changed or removed method), its concrete subtypes (a new abstract method).
+
+    Only in files the other side modified or added since the merge base: a file it did not
+    touch ends up as this side's version, which this side already adapted (it compiles)."""
     picked = []
     for sym, how, old, new in removed_or_changed:
         src = (old or new).source
@@ -268,12 +270,42 @@ def breaks(removed_or_changed: list[tuple[str, str, Entry | None, Entry | None]]
         else:
             us = list(uses.get(sym, [])) + [Use(u.caller, u.source, u.lines, how="overrides it")
                                             for u in over.get(sym, [])]
+        us = [u for u in us if u.source in changed_there]
         if not us:
             continue
         for u in us:
-            u.new = u.source in changed_there
+            u.new = True
         out.append(Break(sym, how, old, new, us))
     out.sort(key=lambda b: (-len(b.uses), b.symbol))
+    return out
+
+
+GROUPS = ("added in A", "removed in B", "added in B", "removed in A", "changed in A",
+          "changed in B", "changed on both sides", "unclear")
+
+
+def classify(diff: ApiDiff, files_a: set[str], files_b: set[str]) -> dict[str, dict]:
+    """With a merge base: who did what. A symbol only in A is "added in A" when only A touched
+    its file since the base, "removed in B" when only B did; likewise for B and for another
+    signature; files both touched are "changed on both sides", neither "unclear"."""
+    out: dict[str, dict] = {g: {} for g in GROUPS}
+
+    def who(src: str) -> str:
+        a, b = src in files_a, src in files_b
+        return "A" if a and not b else "B" if b and not a else "both" if a else "none"
+
+    for sym, e in diff.only_a.items():
+        w = who(e.source)
+        out[{"A": "added in A", "B": "removed in B", "both": "changed on both sides"}.get(
+            w, "unclear")][sym] = e
+    for sym, e in diff.only_b.items():
+        w = who(e.source)
+        out[{"B": "added in B", "A": "removed in A", "both": "changed on both sides"}.get(
+            w, "unclear")][sym] = e
+    for sym, (ea, eb) in diff.changed.items():
+        w = who(ea.source)
+        out[{"A": "changed in A", "B": "changed in B", "both": "changed on both sides"}.get(
+            w, "unclear")][sym] = (ea, eb)
     return out
 
 
