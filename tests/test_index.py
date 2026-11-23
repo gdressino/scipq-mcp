@@ -464,3 +464,25 @@ def test_git_diff_names_with_spaces_and_accents(tmp_path):
         (tmp_path / n).write_text("a\nb\n")
     assert set(git_diff_hunks(str(tmp_path), "HEAD", False, [])) == set(names)
     assert changed_files(str(tmp_path), "HEAD") == set(names)
+
+
+def test_a_file_written_again_unchanged_is_not_stale(sample_copy, tmp_path):
+    """A build up to date by content (Gradle) leaves the shard older than a file written
+    again with the same text: the index's hash of the compiled source tells it apart."""
+    from scipq_mcp.service import Service
+    svc = Service(sample_copy, cache_dir=str(tmp_path / "cache"))
+    svc.census()                                       # builds the auxiliary index
+    src = os.path.join(sample_copy, "core/src/main/java/com/example/model/Entity.java")
+    text = open(src, encoding="utf-8").read()
+    open(src, "w", encoding="utf-8").write(text)       # same content, newer mtime
+    ws = svc.workspace(None)
+    assert ws.freshness().stale == []
+    assert ws.freshness_of(["core/src/main/java/com/example/model/Entity.java"]).stale == []
+    assert "not counted: 1 files" in svc.index_status()
+    open(src, "w", encoding="utf-8").write(text + "// edited\n")
+    assert ws.freshness().stale == ["core/src/main/java/com/example/model/Entity.java"]
+    # Without the auxiliary index, mtimes decide as before.
+    other = Service(sample_copy, cache_dir=str(tmp_path / "empty"))
+    open(src, "w", encoding="utf-8").write(text)
+    assert other.workspace(None).freshness().stale == [
+        "core/src/main/java/com/example/model/Entity.java"]

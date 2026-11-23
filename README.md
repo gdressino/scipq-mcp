@@ -351,6 +351,12 @@ What scipq-mcp sees is the **last compilation**. Every answer ends with a warnin
   appear in the answer;
 - a `.java` file was created after the last compilation of its module and has no shard yet.
 
+A file written again with the same text (a `git checkout` and back, re-applying a patch, an
+editor saving it unchanged) is newer than its shard, but Gradle, which compares contents, does
+not recompile it. The auxiliary index keeps the SHA-1 of each source as it was compiled, so
+such a file is not reported stale (`index_status` counts them apart); without the auxiliary
+index, the dates decide.
+
 `--freshness full` (default) checks every shard against its source in parallel with the query
 (~0.1 s on 10,000 files, mostly hidden behind the query); `results` checks only the files in
 the answer; `off` disables it.

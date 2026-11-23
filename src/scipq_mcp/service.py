@@ -30,9 +30,9 @@ from . import jvm as JVM
 from . import refactor as R
 from . import context as C
 from . import libsrc as L
-from .cachedir import CacheError
+from .cachedir import CacheError, default_base, entry_name
 from .graph import Graph, GraphError
-from .index import Index, IndexError_
+from .index import Index, IndexError_, unchanged_sources
 from .queries import AmbiguousName, Navigator, QueryError
 from .workspace import Freshness, Workspace, WorkspaceError, build_running, find_project_root
 
@@ -97,7 +97,14 @@ class Service:
         return find_project_root(root)
 
     def workspace(self, project_root: str | None) -> Workspace:
-        return Workspace(self._root(project_root), self.shards_dir)
+        ws = Workspace(self._root(project_root), self.shards_dir)
+        # The auxiliary index keeps the hash of each source as compiled: a file written again
+        # unchanged (Gradle up to date by content) is not reported stale. Read-only: nothing
+        # is created when there is no index yet.
+        path = os.path.join(self.cache_dir or default_base(), entry_name(ws.root),
+                            "index.sqlite")
+        ws.content_check = lambda sources: unchanged_sources(path, ws.root, sources)
+        return ws
 
     def _run(self, project_root: str | None, *bodies: Body, foot_first: bool = False) -> str:
         try:
@@ -658,7 +665,8 @@ class Service:
             root = nav.ws.root
             if verify:
                 meta, _patch = R.load_meta(root, plan_id, self.cache_dir)
-                lines = R.verify(nav, meta)
+                ix = Index(nav.ws, self.cache_dir, self.index_external, self.build_workers)
+                lines = R.verify(nav, meta, confirm=lambda srcs: ix.record_compiled(srcs))
                 ok = lines and lines[0].startswith("verified")
                 text = "\n".join(lines)
                 if ok:

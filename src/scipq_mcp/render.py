@@ -575,6 +575,10 @@ def status(st, root: str) -> str:
         lines.append(f"orphan shards (source deleted, ignored): {len(st.orphans)}")
     lines.append(f"stale (source edited after its shard): {len(st.stale)}"
                  + (": " + _some(st.stale) if st.stale else ""))
+    if getattr(st, "same_content", 0):
+        lines.append(f"  not counted: {st.same_content} files newer than their shard but with "
+                     "the content they were compiled from (written again unchanged; the "
+                     "build is up to date)")
     lines.append(f"new since the last compilation, not indexed: {len(st.uncompiled)}"
                  + (": " + _some(st.uncompiled) if st.uncompiled else ""))
     if st.without_shard is None:

@@ -7,6 +7,11 @@ version and date when releasing.
 
 ### Fixed
 
+- A source written again with the content it was compiled from (a checkout and back,
+  re-applying a patch) is no longer reported stale forever: Gradle finds the build up to date
+  by content and never rewrites the shard. The auxiliary index keeps each source's SHA-1 as
+  compiled (index schema 5: rebuilt once) and the freshness check compares it for the files
+  that look newer than their shards; `index_status` counts them apart.
 - `compare`: renaming a parameter is not a signature change (scip-javac's signatures carry
   parameter names); `all_worktrees` finds each worktree's build when it lives in a
   subdirectory of the repository; moved types are matched without rescanning every symbol.

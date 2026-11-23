@@ -124,7 +124,10 @@ def test_conflicts_and_bad_templates_are_refused(sample_copy, javaparser_cache):
     assert "REFUSED" in out and "change the same code" in out
     out = plan(svc, [{"replace_calls": {"symbol": "Entity#findById", "template": "a +"}}])
     assert "REFUSED" in out and "does not parse as expression" in out
-    os.utime(os.path.join(sample_copy, "core/src/main/java/com/example/model/Entity.java"))
+    # An edit after the last compilation (a new date alone, same content, is not one).
+    with open(os.path.join(sample_copy, "core/src/main/java/com/example/model/Entity.java"),
+              "a", encoding="utf-8") as fh:
+        fh.write("// edited\n")
     out = plan(svc, [{"rename": {"symbol": "Entity#setState", "to": "changeState"}}])
     assert "REFUSED" in out and "changed after their last compilation" in out
 
@@ -167,6 +170,9 @@ def test_persistent_rename_with_keep_column(refactor_root, javaparser_cache):
     assert "+import static com.example.shop.Prices.roundHalfUp;" in diff
     assert "{@link Prices#roundHalfUp(double)}" in diff and "@see Prices#roundHalfUp" in diff
     assert '"state == :p"' in out                                   # JDOQL: to review
+    review = os.path.join(os.path.dirname(re.search(r"^patch: (.+)$", out, re.M).group(1)),
+                          "review.txt")
+    assert '"state == :p"' in open(review, encoding="utf-8").read()  # the whole list, kept
     git_apply(refactor_root, out)
 
 

@@ -10,6 +10,7 @@ updates under an exclusive lock file so that only one process reprocesses shards
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import os
 from collections import deque
 import re
@@ -28,14 +29,18 @@ from .cachedir import default_base, entry_dir
 from .scip import DEFINITION, KIND_NAMES, read_documents
 from .workspace import SUFFIX, Workspace
 
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS shards (
     id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, source TEXT NOT NULL,
     module TEXT NOT NULL, mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL,
-    orphan INTEGER NOT NULL DEFAULT 0, test INTEGER NOT NULL DEFAULT 0);
+    orphan INTEGER NOT NULL DEFAULT 0, test INTEGER NOT NULL DEFAULT 0,
+    -- SHA-1 of the source when it was not newer than this shard (the text it compiled from);
+    -- NULL when it already was. Tells a file written again with the same content (an
+    -- up-to-date build by content) from a stale one.
+    src_sha1 TEXT);
 CREATE TABLE IF NOT EXISTS symbols (id INTEGER PRIMARY KEY, symbol TEXT UNIQUE NOT NULL,
     pkg TEXT NOT NULL DEFAULT '');                     -- dotted package, for grouping
 CREATE TABLE IF NOT EXISTS defs (
@@ -312,7 +317,73 @@ def _is_annotation(line: str, col: int) -> bool:
 
 
 def _extract_job(args):
-    return args[0], extract(*args[1:])
+    sid, path, source, root, shard_mtime_ns = args
+    rows = extract(path, source, root)
+    rows["src_sha1"] = source_sha1(root, source, shard_mtime_ns)
+    return sid, rows
+
+
+def source_sha1(root: str, source: str, shard_mtime_ns: int | None = None) -> str | None:
+    """SHA-1 of a source file; with shard_mtime_ns, None when the file is newer than the
+    shard (its text is not the one compiled)."""
+    full = os.path.join(root, source)
+    try:
+        if shard_mtime_ns is not None and os.stat(full).st_mtime_ns > shard_mtime_ns:
+            return None
+        h = hashlib.sha1()
+        with open(full, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def unchanged_sources(index_path: str, root: str, sources: list[str]) -> set[str]:
+    """Of these sources (newer than their shards), those whose content is still the one their
+    shards were compiled from, as recorded by the auxiliary index; nothing without it."""
+    if not sources or not os.path.exists(index_path):
+        return set()
+    try:
+        con = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True, timeout=2)
+    except sqlite3.Error:
+        return set()
+    rows: dict[str, list[tuple[str, int, str | None]]] = {}
+    try:
+        for i in range(0, len(sources), 500):
+            chunk = sources[i:i + 500]
+            q = ",".join("?" * len(chunk))
+            for path, source, mt, sha in con.execute(
+                    f"SELECT path, source, mtime_ns, src_sha1 FROM shards WHERE source IN ({q})",
+                    chunk):
+                rows.setdefault(source, []).append((path, mt, sha))
+    except sqlite3.Error:
+        return set()
+    finally:
+        con.close()
+    out = set()
+    for source, shards in rows.items():
+        current = None
+        ok = True
+        for path, mt, sha in shards:
+            try:
+                if os.stat(path).st_mtime_ns != mt:
+                    ok = False   # the shard changed since the hash was taken
+                    break
+            except OSError:
+                ok = False
+                break
+            if sha is None:
+                ok = False
+                break
+            if current is None:
+                current = source_sha1(root, source)
+            if current != sha:
+                ok = False
+                break
+        if ok and current is not None:
+            out.add(source)
+    return out
 
 
 # --- the database -----------------------------------------------------------------------------
@@ -371,6 +442,32 @@ class Index:
                 os.unlink((path or self.path) + suffix)
             except FileNotFoundError:
                 pass
+
+    def record_compiled(self, sources: list[str]) -> int:
+        """Records the current content of these sources as the one their shards were compiled
+        from (for a caller that established it: a patched file whose shard was written after
+        the patch, an up-to-date build). Only for shards the index already holds unchanged."""
+        if not sources or not os.path.exists(self.path):
+            return 0
+        n = 0
+        con = sqlite3.connect(self.path, timeout=30)
+        try:
+            for source in sources:
+                rows = list(con.execute("SELECT id, path, mtime_ns FROM shards WHERE source = ?",
+                                        (source,)))
+                sha = source_sha1(self.ws.root, source)
+                for sid, path, mt in rows:
+                    try:
+                        if os.stat(path).st_mtime_ns != mt or sha is None:
+                            continue
+                    except OSError:
+                        continue
+                    con.execute("UPDATE shards SET src_sha1 = ? WHERE id = ?", (sha, sid))
+                    n += 1
+            con.commit()
+        finally:
+            con.close()
+        return n
 
     def _needs_scratch(self) -> bool:
         """No usable index yet (missing, unreadable, or for another schema, checkout or
@@ -530,7 +627,7 @@ class Index:
                                   (path, source, module, mt, size, orphan,
                                    int(is_test_shard(module, source)))).lastrowid
             if not orphan:
-                jobs.append((sid, path, source, ws.root))
+                jobs.append((sid, path, source, ws.root, mt))
         stats.processed = len(jobs)
         self.unreadable = 0
         for n, (sid, rows) in enumerate(self._extract_all(jobs), 1):
@@ -594,6 +691,7 @@ class Index:
             con.execute("UPDATE shards SET size = -1 WHERE id = ?", (sid,))  # force a retry
             self.unreadable += 1
             return
+        con.execute("UPDATE shards SET src_sha1 = ? WHERE id = ?", (rows.get("src_sha1"), sid))
         syms = {d[0] for d in rows["defs"]}
         syms |= {r[0] for r in rows["refs"]} | {r[1] for r in rows["refs"] if r[1]}
         syms |= {r[0] for r in rows["rels"]} | {r[1] for r in rows["rels"]}

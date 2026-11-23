@@ -50,6 +50,7 @@ SELECT_KEYS = {"symbol", "symbols", "overloads", "role", "family", "accessors", 
                "in", "kind", "where"}
 STEP_KEYS = {"select", "do", "imports", "description", "comment"}
 MAX_STEPS = 50
+MAX_REVIEW = 20000   # uses by name kept per search (all shown in review.txt)
 MAX_SITES = 20000
 MAX_TEMPLATE = 20000
 DIFF_LINES = 150
@@ -465,8 +466,10 @@ class Planner:
             globs.append("*.feature")
         if java_only:
             globs = ["*.java"]
-        hits = X.uses_by_name(self.root, names, globs, set(), limit=600)
-        kept = 0
+        hits = X.uses_by_name(self.root, names, globs, set(), limit=MAX_REVIEW)
+        if len(hits) >= MAX_REVIEW:
+            self.notes.append(f"uses by name of {', '.join(names)}: more than {MAX_REVIEW}; "
+                              "the review list stops there")
         prose = (".feature", ".md", ".txt", ".adoc")
         alts = "|".join(re.escape(n) for n in names)
         # In prose: between quotes, or a table cell (| campo |: fixtures read by reflection).
@@ -481,9 +484,6 @@ class Planner:
             if quoted and h.source.endswith(".java") and not _code_like(h.text, names):
                 continue
             self.review.append((h.source, h.line, h.text, label))
-            kept += 1
-            if kept >= 150:
-                break
 
     def users_of(self, type_symbol: str) -> set[str]:
         """Files that use a type (or define it)."""
@@ -841,8 +841,9 @@ class Planner:
         sites = []
         for m in dict.fromkeys(members):
             sites += self.sites_of(m, role="references")
-        self.add(Op(k, f"replace calls of {S.short(sym)}", "replace", {"template": tpl},
-                    sites, node="call", imports=_imports(a)))
+        self.add(Op(k, f"replace calls of {S.short(sym)}" + (f" ({len(syms)} overloads)"
+                                                             if len(syms) > 1 else ""),
+                    "replace", {"template": tpl}, sites, node="call", imports=_imports(a)))
         self.summary.append(f"step {k} replace calls of {S.short(sym)} with {tpl[:60]!r}")
 
     def m_annotate(self, k: int, a: dict) -> None:
@@ -2578,13 +2579,16 @@ def _store(p: Planner, plan: dict, outcome: Outcome, cache_base: str | None, w) 
     patch_path = os.path.join(d, "patch.diff")
     with open(patch_path, "wb") as fh:
         fh.write(patch)
-    if p.review:
+    edited = {(path, fs.text.line_of(e.start) + 1)
+              for path, (fs, _r, edits) in outcome.files.items() for e in edits}
+    review = [r for r in _ranked(p.review) if (r[0], r[1]) not in edited]
+    if review:
         with open(os.path.join(d, "review.txt"), "w", encoding="utf-8") as fh:
-            for a, b, c, d_ in _ranked(p.review):
+            for a, b, c, d_ in review:
                 fh.write(f"{a}:{b}  {c}  ({d_})\n")
     meta = {"plan": plan, "root": os.path.realpath(root), "created": time.time(),
             "files": meta_files, "expect": outcome.expect, "templates": outcome.templates,
-            "level": p.unit_level, "review": [list(r) for r in _ranked(p.review)],
+            "level": p.unit_level,
             "javaparser": w.version, "summary": p.summary,
             # Tests and features that name the old names in text: after the change they may
             # fail, or pass without checking anything.
@@ -2800,7 +2804,7 @@ def _class_files(nav: Navigator, sources: list[str], since: float | None = None)
     return out
 
 
-def verify(nav: Navigator, meta: dict) -> list[str]:
+def verify(nav: Navigator, meta: dict, confirm: Callable | None = None) -> list[str]:
     root = nav.ws.root
     lines: list[str] = []
     problems: list[str] = []
@@ -2841,6 +2845,8 @@ def verify(nav: Navigator, meta: dict) -> list[str]:
         except OSError:
             return False
     same = [t for t in fresh.stale if t in patched and shard_after_plan(t)]
+    if same and confirm is not None:
+        confirm(same)   # recorded: freshness checks stop calling them stale
     if same:
         lines.append(f"note: {len(same)} patched files are newer than their shards but hold "
                      "the patched content, compiled after the plan (an up-to-date build): "
@@ -2852,7 +2858,14 @@ def verify(nav: Navigator, meta: dict) -> list[str]:
                         + (f" — compile ({', '.join(sorted(fresh.tasks))}) and verify again"
                            if fresh.tasks else " — compile and verify again"))
         return problems + lines
-    problems += _class_files(nav, targets, created if same else None)
+    missing_classes = _class_files(nav, targets, created if same else None)
+    by_task: dict[str, list[str]] = {}
+    for m in missing_classes:
+        task = re.search(r"did (\w+) fail", m)
+        by_task.setdefault(task.group(1) if task else "?", []).append(m.split(":", 1)[0])
+    for task, srcs in sorted(by_task.items()):
+        problems.append(f"{len(srcs)} patched files have no class file newer than their source "
+                        f"(did {task} fail?): {', '.join(srcs[:4])}{' …' if len(srcs) > 4 else ''}")
     # Each renamed identifier must now be an occurrence of a symbol with that name, not a
     # local (a local capturing a renamed field shows up here).
     wrong = []

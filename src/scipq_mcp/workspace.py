@@ -19,7 +19,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Callable, Iterable
 
 DEFAULT_SHARDS_DIR = os.path.join("build", "scip-targetroot")
 # Shards written this recently suggest a compilation in progress: a shard cut short loses its
@@ -58,6 +58,7 @@ class Freshness:
     recent: int = 0                                      # shards written in the last RECENT_SECONDS
     newest_age: float = 0.0                              # seconds since the newest shard was written
     build_running: bool | None = None                    # a gradle/mvn command in this checkout
+    same_content: int = 0     # newer than their shard, but with the content compiled
 
     def __bool__(self) -> bool:
         return bool(self.stale or self.uncompiled or self.recent)
@@ -162,6 +163,8 @@ class Workspace:
         self._files: list[tuple[int, str]] | None = None
         self._root_prefixes: list[str] | None = None
         self._grep = gnu_grep()
+        # (sources newer than their shards) -> those still holding the compiled content.
+        self.content_check: Callable[[list[str]], set[str]] | None = None
 
     # --- layout -------------------------------------------------------------------------
 
@@ -387,17 +390,18 @@ class Workspace:
             task_of_source[source] = k
             task_of_dir.setdefault(source.rpartition("/")[0], k)
         modules = [m for _r, m in self.scip_roots()]
+        newer: list[tuple[str, str]] = []
         for source, mt in java_mtimes.items():
             sm = shard_of.get(source)
             if sm is not None:
                 if mt > sm:
-                    result.stale.append(source)
-                    result.tasks.add(build_task(modules[task_of_source[source]]))
+                    newer.append((source, build_task(modules[task_of_source[source]])))
             else:
                 k = task_of_dir.get(source.rpartition("/")[0])
                 if k is not None and mt > newest.get(k, 0.0):
                     result.uncompiled.append(source)
                     result.tasks.add(build_task(modules[k]))
+        self._add_stale(result, newer)
         result.stale.sort()
         result.uncompiled.sort()
         return result
@@ -409,6 +413,7 @@ class Workspace:
         if not want:
             return result
         mtimes = []
+        newer: list[tuple[str, str]] = []
         for k, rel in self.files():
             source = rel[:-len(SUFFIX)]
             if source not in want:
@@ -417,13 +422,30 @@ class Workspace:
                 sm = os.stat(os.path.join(self.scip_roots()[k][0], rel)).st_mtime
                 mtimes.append(sm)
                 if os.stat(os.path.join(self.root, source)).st_mtime > sm:
-                    result.stale.append(source)
-                    result.tasks.add(build_task(self.scip_roots()[k][1]))
+                    newer.append((source, build_task(self.scip_roots()[k][1])))
             except OSError:
                 pass
+        self._add_stale(result, newer)
         result.stale = sorted(set(result.stale))
         self._note_recent(result, mtimes)
         return result
+
+    def _add_stale(self, result: Freshness, newer: list[tuple[str, str]]) -> None:
+        """Sources newer than their shards are stale, unless their content is still the one
+        compiled (written again unchanged: a build up to date by content does not touch the
+        shard). That is told by `content_check` (the auxiliary index's hashes) when set."""
+        same: set[str] = set()
+        if newer and self.content_check is not None:
+            try:
+                same = self.content_check(sorted({s for s, _t in newer}))
+            except Exception:  # noqa: BLE001 - a missing or busy cache never breaks a query
+                same = set()
+        for source, task in newer:
+            if source in same:
+                continue
+            result.stale.append(source)
+            result.tasks.add(task)
+        result.same_content = len(same)
 
     def _note_recent(self, result: Freshness, mtimes) -> None:
         now = time.time()

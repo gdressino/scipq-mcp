@@ -555,6 +555,7 @@ class Status:
     without_shard: list[str] | None       # git-tracked .java with no shard (None: not a git repo)
     refresh: list[str]                    # tasks to recompile
     settings: object = None               # config.Settings, filled by the service
+    same_content: int = 0                 # newer than their shard, content as compiled
 
 
 def index_status(nav: Navigator) -> Status:
@@ -573,7 +574,7 @@ def index_status(nav: Navigator) -> Status:
     tracked = _git_java_files(ws.root)
     without = sorted(set(tracked) - sources) if tracked is not None else None
     return Status(list(counts.items()), len(ws.files()), sorted(set(orphans)), f.stale,
-                  f.uncompiled, without, sorted(f.tasks))
+                  f.uncompiled, without, sorted(f.tasks), same_content=f.same_content)
 
 
 def _git_java_files(root: str) -> list[str] | None:
