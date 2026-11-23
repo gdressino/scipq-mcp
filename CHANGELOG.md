@@ -102,6 +102,8 @@ version and date when releasing.
   that names that type or a subtype, or from a file that names only the base type (a
   generic call on any implementation); calls on objects of another type are left out, and
   counted in a note. The same holds for code reached through such a dispatch.
+- `path` goes through dispatch as `impact` does: a call of a project method that a method
+  on the way overrides shows the overridden method, then the override.
 - `impact` follows template methods at every level: when an override of type X is reached,
   the base class's own calls to the method it overrides (`this.m()`) reach it too, also
   when the override is the symbol asked about; other objects' calls to the base method, and

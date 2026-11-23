@@ -634,3 +634,11 @@ def test_check_refs_library_types_only_in_old_versions(tmp_path):
     m.external_names, m._stale, m._cache_base = set(), {}, str(tmp_path)
     assert m.stale_library("OldRenderer") == "only in ui-data 2.10.5; 25.1.5 has none"
     assert m.stale_library("Grid") == ""
+
+
+def test_path_goes_through_dispatch(refactor_root, tmp_path):
+    # Gallery#show() calls View#measure() → render(), which SalesPage's chain overrides.
+    from scipq_mcp.service import Service
+    out = Service(refactor_root, cache_dir=str(tmp_path / "c")).path("Gallery#show",
+                                                                     "Pages#sales")
+    assert "Gallery#show()" in out and "SalesPage#body()" in out and "Page#body()" in out

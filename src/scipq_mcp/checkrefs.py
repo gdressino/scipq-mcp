@@ -598,27 +598,35 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     a, b = _segment(line, mo.start(), mo.end())
     glued = _glued_names(line[a:b], mo.group(0))
     near = [(x, y) for x, y in code if a <= x < b]
-    bare_names = glued or {x for p, q in near for x in
-                           re.findall(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q])}
+    segment_names = {x for p, q in near for x in
+                     re.findall(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q])}
     constructor = re.search(r"\bconstructor\b", line[a:b], re.I) is not None
     spans_here = []
     for src in fits:
-        syms = [x for x, at in named_here if a <= at < b and m.where.get(x, ("",))[0] == src
-                and (not glued or S.name_of(x) in glued)]
-        for t in m.types_in.get(src, []):
-            for name in bare_names:
-                syms += [x for x in m.member_syms.get((t, name), []) if S.is_method(x)]
-            if constructor:
-                syms += m.member_syms.get((t, S.name_of(t)), [])
+        def named(names: set[str] | None) -> list[str]:
+            out_ = [x for x, at in named_here if a <= at < b and
+                    m.where.get(x, ("",))[0] == src and (names is None or S.name_of(x) in names)]
+            for t in m.types_in.get(src, []):
+                for name in (names if names is not None else segment_names):
+                    out_ += [x for x in m.member_syms.get((t, name), []) if S.is_method(x)]
+                if constructor:
+                    out_ += m.member_syms.get((t, S.name_of(t)), [])
+            return out_
+        # The name glued to the path when it is one of the file's members, else the names
+        # of the mention's part of the line.
+        syms = (named(glued) if glued else []) or named(None)
         lines = text_cache.get(src) or []
         if not lines:
             _with_header(root, src, 1, text_cache)
             lines = text_cache.get(src) or []
-        called = {S.name_of(x) for x in syms if any(
-            re.search(r"(?<![\w$])" + re.escape(S.name_of(x)) + r"\s*\(", lines[k])
-            for k in range(max(0, n - 3), min(len(lines), n + 2)))}
-        if called:
-            return          # the line is a call of the name: the doc points at the call
+        # A single line that calls the name (in code, not a comment) is the call the doc
+        # points at; a range is a block of code, which must fall in the member.
+        if mo.group(3) is None:
+            code_lines = [lines[k] for k in range(max(0, n - 2), min(len(lines), n + 1))
+                          if not re.match(r"\s*(//|\*|/\*)", lines[k])]
+            if any(re.search(r"(?<![\w$])" + re.escape(S.name_of(x)) + r"\s*\(", c)
+                   for x in syms for c in code_lines):
+                return
         for sym in syms:
             w = m.where.get(sym)
             if w is None or w[0] != src:

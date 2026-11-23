@@ -759,7 +759,9 @@ class Graph:
     def path(self, src: str, dst: str, max_depth: int = 6, limit: int = 3,
              max_nodes: int = 100000) -> list[list[tuple[str, list[int]]]]:
         """Shortest call chains from `src` to `dst` ([(symbol, lines where it calls the next)]),
-        searching callers backwards from `dst`."""
+        searching callers backwards from `dst`. A call of a project method that a method on
+        the way overrides counts (dispatch, as in impact): the chain shows the overridden
+        method, then the override."""
         ids = self.ids([src, dst])
         if src not in ids or dst not in ids:
             return []
@@ -780,6 +782,12 @@ class Graph:
                     found = True
             if found or not nxt or len(parents) > max_nodes:
                 break
+            for override, base in self._project_overridden(nxt):
+                if base not in parents:
+                    parents[base] = [(override, "")]
+                    nxt.append(base)
+                    if base == a:
+                        found = True
             frontier = nxt
         if a not in parents:
             return []
