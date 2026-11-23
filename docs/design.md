@@ -1,6 +1,6 @@
 # scipq-mcp design
 
-Status: v1 and v2 implemented; v3 proposed.
+Status: v1 and v2 implemented; v3 items 1–9 implemented, 10 proposed.
 
 ## Principles
 
@@ -194,15 +194,24 @@ section. Unknown keys are reported, not ignored silently.
    worktrees; warns when either side is stale.
 3. Cucumber-JVM: step text → glue method (cucumber expressions → regex), method → steps and
    `.feature` files, diff → affected features and the filter to run them.
-4. Concept search with FTS5: identifiers split into words, signatures, javadoc and the profile's
-   annotation attributes.
-5. `doctor`: init script present, source sets or tasks without shards, class files much newer
-   than their shards (compiled without the plugin), cache size.
-6. `check_refs(files)`: resolve every `Type#member` mentioned in Markdown and report the missing
-   or changed ones.
-7. Entry points per profile on top of `impact`.
-8. Persistence model per profile: entities ↔ tables, fields ↔ columns, relations, and who writes
-   a field (setter uses, Lombok included, plus assignments found in the line).
+4. Concept search with FTS5 (`concepts`): per definition, its name split into words, its
+   annotations' texts, signature, javadoc, and the labels other code gives a type where it
+   registers it (strings of a call that also names `X.class`), in three FTS5 tables (names,
+   texts, javadoc: bm25 normalizes by row length). Query words as light stems (Spanish and
+   English), every match aggregated per symbol, owner names only as a bonus; tests, generated
+   files and `[concepts] exclude` left out unless asked.
+5. `doctor`: init script, tracked files without shards, classes newer than their task's shards
+   (built without the plugin) and shards without classes (failed javac), stale files, running
+   builds, the Gradle build cache, the cache and indexes of deleted checkouts, configuration
+   warnings, JDKs, what refactoring would use.
+6. `check_refs(files)`: `Type#member`, `Type.method(…)`, qualified names, `{@link}` and
+   `File.java:N` mentioned in Markdown, resolved at once from the auxiliary index; missing types
+   and members, wrong parameter lists, missing files, moved lines.
+7. Entry points per profile on top of `impact` and `changed`, by kind; rules may combine
+   supertypes and name globs, and take classes from XML descriptors (`web.xml`).
+8. Persistence model per profile (`persistence`): entities ↔ tables (inheritance,
+   discriminators), fields ↔ columns, relations, fetch groups; who writes a field (setter uses,
+   Lombok included, plus assignments found in the line) and who names it in strings.
 9. Refactoring plans (done ahead of 4–8): JSON data the agent writes — macros (rename,
    change_signature, replace_calls, move, annotate, create) or select/do primitives over the
    index's sites or nodes of a kind, with structural `where` patterns. Edits are text edits of
