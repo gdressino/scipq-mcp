@@ -49,6 +49,13 @@ version and date when releasing.
   profiles describe keys, versions, transient markers, inheritance, discriminators, mappedBy
   and join tables; `[persistence] column` takes several annotations.
 
+### Changed
+
+- An `[[entry_points]]` rule that gives both `supertypes` and `type_names` now needs both to
+  hold for the entry points `impact` and `changed` list (`dead_code` still keeps a class
+  that matches either). `doctor` and the configuration warnings flag such rules: split one
+  into two rules if either should do.
+
 ### Fixed
 
 - `impact`, `changed`, `tests(transitive)` and `callers(include_overridden)` no longer count

@@ -174,3 +174,14 @@ def test_a_string_where_a_list_is_expected_is_one_item(tmp_path):
                                               "by_name": {"globs": "*.xml"}})
     assert out["dead_code"]["exclude"] == ["gen/*"]
     assert out["by_name"]["globs"] == ["*.xml"]
+
+
+def test_rules_with_supertypes_and_type_names_are_flagged(tmp_path):
+    root = tmp_path / "p"
+    root.mkdir()
+    (root / ".scipq.toml").write_text(
+        '[[entry_points]]\nkind = "screen"\nsupertypes = ["com.example.Base"]\n'
+        'type_names = ["*Screen"]\n')
+    s = CFG.settings_for(str(root), home=str(tmp_path / "home"))
+    assert any("'screen' gives supertypes and type_names" in w and "split it" in w
+               for w in s.warnings)

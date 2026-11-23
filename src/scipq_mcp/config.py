@@ -476,6 +476,12 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
                 elements = x.get("elements", [])
                 xml.append(([files] if isinstance(files, str) else list(files),
                             [elements] if isinstance(elements, str) else list(elements)))
+        if ep.get("supertypes") and ep.get("type_names"):
+            s.warnings.append(
+                f"{origin or 'config'}: the entry_points rule {str(ep.get('kind', 'entry'))!r} "
+                "gives supertypes and type_names: since 0.6 impact and changed need both to "
+                "hold (dead_code keeps a class matching either); split it into two rules if "
+                "either should do")
         s.entry_specs.append({
             "kind": str(ep.get("kind", "entry")),
             "annotations": {to_symbol(a) for a in ep.get("annotations", [])},
