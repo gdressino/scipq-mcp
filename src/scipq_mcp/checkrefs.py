@@ -602,9 +602,10 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
             + ", ".join(f"{s}: {count_lines(s)} lines" for s in hits[:3]) + ")", "past-end")
         return
     # Another version of the file (`git show <sha>:path`, `main <sha>:path`): not this one.
-    if re.search(r"[0-9a-f]{7,40}:$|\bgit show\b[^`]*$", line[max(0, mo.start() - 60):
-                                                               mo.start()].rstrip("`")):
-        return
+    before = line[max(0, mo.start() - 80):mo.start()].rstrip("`")
+    if re.search(r"(?:[0-9a-f]{7,40}|[\w./~^-]*(?:main|master|HEAD|origin/[\w./-]+)[\w~^]*):$"
+                 r"|\bgit show\b[^`]*$|(?:^|[\s(`])/(?:home|Users|tmp|mnt|var)/\S*$", before):
+        return      # another version: <ref>:path, git show, an absolute path elsewhere
     # What the mention's own part of the line names: the name glued to the path (`name
     # (File:N)`, `File:N — name`, `File:N (name)`), else the names of its parentheses, its
     # sentence, cell or item (a table cell holding only the path: the cells next to it),
@@ -638,12 +639,20 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         return len(x) > 2 and re.search(r"(?<![\w$])" + q + r"\(|\." + q + r"(?![\w$])|#" +
                                         q + r"(?![\w$])", seg) is not None
 
+    spans_text = " ".join(line[p:q] for p, q in code if oa <= p < ob)
+
     def receiver_only(x: str) -> bool:
-        """x appears only as a receiver or a local of the doc's code (pm.foo(), q = …)."""
+        """x appears only as a receiver or a local of the doc's code spans (pm.foo(),
+        q = …); a member some type declares never is one."""
         q = re.escape(x)
-        return re.search(r"(?<![\w$.])" + q + r"\s*(?:\.|=[^=])", seg) is not None and \
-            re.search(r"(?<![\w$])" + q + r"\(|[.#]" + q + r"(?![\w$])", seg) is None
+        return x not in m.by_member and \
+            re.search(r"(?<![\w$.])" + q + r"\s*(?:\.|=[^=])", spans_text) is not None and \
+            re.search(r"(?<![\w$])" + q + r"\(|[.#]" + q + r"(?![\w$])", spans_text) is None
     names = [x for x in names if not receiver_only(x)]
+    declaring = [f for f in fits if any(m.member_syms.get((t, x)) for t in m.types_in.get(f, [])
+                                        for x in names)]
+    if declaring:
+        fits = declaring    # among same-named files, the one with the member named
     for src in fits:
         members = {x: [y for t in m.types_in.get(src, [])
                        for y in m.member_syms.get((t, x), []) if y not in m.generated]
