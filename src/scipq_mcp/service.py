@@ -1107,8 +1107,13 @@ class Service:
                 itself = [e for e in g.entry_points(
                     [G.Node(sym, 0, "", dd[0] if dd else "", dd[1] if dd else 0)],
                     specs, nav.ws.root) if e.kind != "test"]
+                left_out = g.left_out
             text = render.impact(sym, nodes, trunc, d, group_by, offset, limit, entries,
                                  itself, deep)
+            if left_out:
+                text += (f"\nnote: {left_out} callers of methods these override were left out: "
+                         "their files name another subtype, or a library type's own objects "
+                         "(nothing in them names the overriding type)")
             return render.index_note(stats) + note + text, {n.source for n in nodes}
         return body
 

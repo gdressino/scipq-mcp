@@ -48,7 +48,9 @@ version and date when releasing.
   endpoints, jobs, servlets, steps…), one row per type with its reached members, their depth
   and what identifies them (an endpoint's verb and route from the type's and the method's
   paths, an annotation's first string, the declared supertype, the descriptor with its URL
-  patterns). `impact` looks for them to depth 6 even when its rows stop sooner, and says
+  patterns, and which element names them: servlet, filter or listener). Overloads show
+  once (`save(+1)`). The `jdo` and `jpa` entity rules keep entities alive for `dead_code`
+  without listing them. `impact` looks for them to depth 6 even when its rows stop sooner, and says
   when the symbol is an entry point itself. A private method, or a controller's method
   without a route, is not one. A rule with `reached = false` keeps code alive for
   `dead_code` without being listed: the `spring` profile's beans; its events, schedules and
@@ -95,6 +97,11 @@ version and date when releasing.
 - `impact`, `changed`, `tests(transitive)` and `callers(include_overridden)` no longer count
   `super.m()` calls in other classes as possible dispatches to an override of `m`: they are
   bound to the caller's superclass.
+- `impact` no longer takes every call of a method an override overrides as a call of the
+  override: a call counts when it comes from the overriding type's hierarchy, from a file
+  that names that type or a subtype, or from a file that names only the base type (a
+  generic call on any implementation); calls on objects of another type are left out, and
+  counted in a note. The same holds for code reached through such a dispatch.
 - `impact` follows template methods at every level: when an override of type X is reached,
   the base class's own calls to the method it overrides (`this.m()`) reach it too, also
   when the override is the symbol asked about; other objects' calls to the base method, and

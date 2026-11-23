@@ -4,6 +4,7 @@ description = "Jakarta / javax Persistence (JPA)"
 
 [[entry_points]]
 kind = "entity"
+reached = false          # alive for dead_code (the persistence layer loads it), not an entry point
 annotations = [
   "jakarta.persistence.Entity", "jakarta.persistence.Embeddable",
   "jakarta.persistence.MappedSuperclass", "jakarta.persistence.Converter",

@@ -71,6 +71,7 @@ class Graph:
         self.index = index
         self.con: sqlite3.Connection = index.connect()
         self._shards: dict[int, tuple[str, str, int]] | None = None
+        self.left_out = 0       # impact: calls to overridden methods judged not to reach here
 
     def close(self) -> None:
         self.con.close()
@@ -438,6 +439,38 @@ class Graph:
                 families[t] = {t} | self._subtypes_of({t}) | (
                     set(self.names(self.ancestors(tid)).values()) if tid is not None else set())
             return families[t]
+        naming: dict[tuple, set[int]] = {}
+
+        def shards_naming(types: frozenset) -> set[int]:
+            """Shards that reference or define one of these types."""
+            if types not in naming:
+                tids = list(self.ids(types).values())
+                out_: set[int] = set()
+                for i in range(0, len(tids), 500):
+                    chunk = tids[i:i + 500]
+                    q = ",".join("?" * len(chunk))
+                    for table in ("refs", "defs"):
+                        out_ |= {x for (x,) in self.con.execute(
+                            f"SELECT DISTINCT shard_id FROM {table} WHERE symbol_id IN ({q})",
+                            chunk)}
+                naming[types] = out_
+            return naming[types]
+        def reaches(base_method: int, x: str, caller: int, shard_id: int) -> bool:
+            """Whether a call of a method X#m overrides may run X#m: from X's hierarchy; from
+            a file that names X or a subtype; or a generic call, from a file that names the
+            base type itself and none of its other subtypes (`Service a; a.start()`). A
+            file naming only another type (`DefaultFieldGroup form; form.setDataSource()`)
+            calls it on that type's objects."""
+            if S.owner_type(names.get(caller, "")) in family(x):
+                return True
+            if shard_id in shards_naming(frozenset({x} | self._subtypes_of({x}))):
+                return True
+            base = S.owner_type(names.get(base_method, ""))
+            if not base or shard_id not in shards_naming(frozenset({base})):
+                return False
+            others = frozenset(self._subtypes_of({base}) - family(x) - {base})
+            return shard_id not in shards_naming(others)
+        self.left_out = 0                   # calls to overridden methods left out
         nodes: dict[int, Node] = {}
         names: dict[int, str] = self.names(frontier)
         truncated = False
@@ -472,24 +505,30 @@ class Graph:
                 names.update(self.names({c for t, c, _s, _x in rows
                                          if (t in bound or t in dispatch or t in overridden)
                                          and c not in names}))
+            left: set[int] = set()
             nxt = []
             for target, caller, shard_id, sites in rows:
                 if caller in seen or shard_id not in sh:
                     continue
-                if target in dispatch and \
-                        S.owner_type(names.get(caller, "")) not in family(dispatch[target]):
+                x = dispatch.get(target) or (S.owner_type(symbol) if level == 1 and
+                                             target in overridden else "")
+                if x and not reaches(target, x, caller, shard_id):
+                    left.add(caller)
                     continue        # another object's call: it dispatches to its own type
                 if root and ((level == 1 and target in overridden) or target in dispatch):
                     sites = _not_super(root, sh[shard_id][0], sites,
                                        S.name_of(names.get(target, symbol)), texts)
                     if not sites:
                         continue
-                if root and target in bound and \
+                if target in bound and \
                         S.owner_type(names.get(caller, "")) not in family(bound[target]):
-                    # Another class's this.m(), m() or super.m() runs on its own object.
-                    sites = _not_super(root, sh[shard_id][0], sites,
-                                       S.name_of(names.get(target, "")), texts, own=True)
-                    if not sites:
+                    # Another class's this.m(), m() or super.m() runs on its own object, and
+                    # its other calls reach X's object only as `reaches` tells.
+                    if root:
+                        sites = _not_super(root, sh[shard_id][0], sites,
+                                           S.name_of(names.get(target, "")), texts, own=True)
+                    if not sites or not reaches(target, bound[target], caller, shard_id):
+                        left.add(caller)
                         continue
                 seen.add(caller)
                 nxt.append(caller)
@@ -508,6 +547,7 @@ class Graph:
                 if len(nodes) >= max_nodes:
                     truncated = True
                     break
+            self.left_out += len(left - seen)
             if truncated or not nxt:
                 break
             names.update(self.names(nxt))
@@ -703,7 +743,7 @@ class Graph:
                                 f", extends {direct}" if direct else "")
                         on_type = True
                     elif t in xml_types.get(k, {}):
-                        detail, on_type = f"in {xml_types[k][t]}", True
+                        detail, on_type = xml_types[k][t], True
                 if detail == "":
                     continue
                 if detail is not None:
@@ -1326,7 +1366,9 @@ def _xml_classes(root: str, rules: list) -> dict[str, str]:
                 if types:
                     sym = "/".join(pkg) + "/" + "#".join(types) + "#"
                     u = urls.get(m.group(2), [])
-                    out.setdefault(sym, path + (f" ({', '.join(u[:4])})" if u else ""))
+                    what = m.group(1).removesuffix("-class")
+                    out.setdefault(sym, f"{what} in {path}" + (f" ({', '.join(u[:4])})" if u
+                                                              else ""))
     return out
 
 

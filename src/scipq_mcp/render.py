@@ -718,14 +718,18 @@ def entry_points(entries, per_kind: int = 12, depth: int = 0, searched: int = 0)
             if all(S.kind_of(e.node.symbol) == "type" for e in es):
                 lines.append(head)
                 continue
-            members = []
-            for e in es[:6]:
-                m = S.name_of(e.node.symbol) + "()"
-                members.append(m + (f" {e.detail}" if not e.on_type else "")
-                               + (f" d{e.node.depth}" if e.node.depth != first.node.depth
-                                  else ""))
-            lines.append(head + "  — " + ", ".join(members)
-                         + (f" (+{len(es) - 6})" if len(es) > 6 else ""))
+            members: dict[str, list] = {}       # overloads once: name(+1)
+            for e in es:
+                members.setdefault(S.name_of(e.node.symbol), []).append(e)
+            shown = []
+            for name, group in list(members.items())[:6]:
+                e = group[0]
+                shown.append(name + (f"(+{len(group) - 1})" if len(group) > 1 else "()")
+                             + (f" {e.detail}" if not e.on_type else "")
+                             + (f" d{e.node.depth}" if e.node.depth != first.node.depth
+                                else ""))
+            lines.append(head + "  — " + ", ".join(shown)
+                         + (f" (+{len(members) - 6})" if len(members) > 6 else ""))
         if len(types) > per_kind:
             lines.append(f"  {kind}  … and {len(types) - per_kind} more types")
     return lines

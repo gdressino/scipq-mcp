@@ -453,7 +453,7 @@ def test_impact_lists_the_entry_points_reached(sample_copy, tmp_path):
                  'type_names = ["*Support"]\n')
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).impact("Entity#setState")
     assert "entry points reached (by kind): job 1 type, servlet 1 type (2 members)" in out
-    assert "servlet  d1  Service  app/src/main/java/com/example/app/Service.java  in " \
+    assert "servlet  d1  Service  app/src/main/java/com/example/app/Service.java  servlet in " \
         "app/src/main/webapp/WEB-INF/web.xml  — activate(), activateAll()" in out
     assert "job  d1  TestSupport  " in out and "named like *Support  — reset()" in out
 

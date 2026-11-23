@@ -4,6 +4,7 @@ description = "Java Data Objects (JDO)"
 
 [[entry_points]]
 kind = "entity"
+reached = false          # alive for dead_code (the persistence layer loads it), not an entry point
 annotations = ["javax.jdo.annotations.PersistenceCapable",
                "javax.jdo.annotations.PersistenceAware",
                "javax.jdo.annotations.EmbeddedOnly"]
