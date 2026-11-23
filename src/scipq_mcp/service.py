@@ -47,6 +47,15 @@ NO_SHARDS_HINT = ("This project has not been compiled with the scip-javac plugin
                   "returns the exact steps (scipq-mcp never changes the build or runs it).")
 
 
+def _summary_of_changed(text: str) -> str:
+    """`changed` without its list of definitions: the counts and what to run."""
+    lines = text.split("\n")
+    keep = [ln for ln in lines if ln.startswith(("changed since", "callers of"))]
+    start = next((k for k, ln in enumerate(lines) if ln.startswith(
+        ("tests to run", "cucumber", "no test"))), None)
+    return "\n".join(keep + (lines[start:] if start is not None else []))
+
+
 class Service:
     def __init__(self, default_root: str | None = None, shards_dir: str | None = None,
                  freshness: str = "full", cache_dir: str | None = None,
@@ -657,7 +666,7 @@ class Service:
                     try:
                         changed, _srcs = self._b_changed("HEAD", False, paths, 3)(nav)
                         text += "\n\nwhat the change reaches (changed since HEAD in the " \
-                                "patched files):\n" + changed
+                                "patched files):\n" + _summary_of_changed(changed)
                     except (QueryError, WorkspaceError) as e:
                         text += f"\n(tests to run: run changed(); {e})"
                 return text, {f["new"] for f in meta["files"]}
@@ -929,6 +938,10 @@ class Service:
                 raise QueryError("no git worktrees found for this checkout")
             rows, built, pending = [], [], []
             here = os.path.realpath(a_root)
+            # The build may live in a subdirectory of the repository: the same one in each
+            # worktree.
+            top = CMP._git(a_root, "rev-parse", "--show-toplevel") or a_root
+            sub = os.path.relpath(here, os.path.realpath(top.strip()))
             with self._graph(nav) as (g_a, _stats):
                 all_a = CMP.api_of(g_a, scope, False)
                 for w in wts:
@@ -942,7 +955,8 @@ class Service:
                         rows.append(f"  {label}: skipped ({why})")
                         continue
                     try:
-                        ws_b = self.workspace(path)
+                        ws_b = self.workspace(path if sub in (".", "") or sub.startswith("..")
+                                              else os.path.join(path, sub))
                         ws_b.files()
                     except WorkspaceError:
                         rows.append(f"  {label}: not compiled (no shards)")

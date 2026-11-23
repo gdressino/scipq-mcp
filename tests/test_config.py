@@ -166,3 +166,11 @@ def test_dead_code_exclude(sample_copy, tmp_path):
     out = svc.dead_code()
     assert "Point#scaled()" not in out
     assert "unreferenced definitions in [dead_code] exclude paths left out" in out
+
+
+def test_a_string_where_a_list_is_expected_is_one_item(tmp_path):
+    from scipq_mcp import config as CFG
+    out, warnings = CFG.sanitize_repo_config({"dead_code": {"exclude": "gen/*"},
+                                              "by_name": {"globs": "*.xml"}})
+    assert out["dead_code"]["exclude"] == ["gen/*"]
+    assert out["by_name"]["globs"] == ["*.xml"]

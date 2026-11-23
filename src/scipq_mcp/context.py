@@ -357,7 +357,9 @@ def field_sections(nav: Navigator, d: Definition, short: str
         line = lines.get(ln, "")
         text = line.strip()
         accessor = r.symbol != d.symbol
-        write = S.name_of(r.symbol).startswith("set") if accessor else is_write_at(
+        # A setter writes; a record's implicit accessor (`settings()`) only reads.
+        write = (r.symbol != implicit and re.match(r"set[A-Z_$]", S.name_of(r.symbol))
+                 is not None) if accessor else is_write_at(
             line, r.location.range.start_char, r.location.range.end_char, lines.get(ln + 1, ""))
         row = (f"  {render.container_label(r.container) or '(top level)'}  "
                f"{r.location.source}:{r.location.line}: {_clip(text, 110)}"

@@ -146,3 +146,31 @@ def test_name_notes_and_run_all():
                     [C.Scenario("a.feature", k, f"s{k}", []) for k in range(C.MAX_NAMED + 1)])
     assert C.run_commands(many, [big], "run '{names}'", "", run_all="./gradlew cucumber")[0] \
         .startswith("./gradlew cucumber   (the whole suite: 151 scenarios")
+
+
+def test_scenario_with_examples_and_changed_line_blocks():
+    f = C.parse_feature("""Feature: f
+  Scenario: eat <n>
+    Given there are <n> cucumbers
+    Examples:
+      | n  |
+      | 12 |
+      | 5  |
+
+  @slow
+  Scenario: plain
+    Given there are 1 cucumbers
+
+  Rule: taxes
+    Background:
+      Given a tax
+
+    Scenario: taxed
+      Given there are 2 cucumbers
+""", "f.feature")
+    assert [s.name for s in f.scenarios] == ["eat 12", "eat 5", "plain", "taxed"]
+    assert [s.text for s in f.steps if s.line == 3] == ["there are 12 cucumbers",
+                                                        "there are 5 cucumbers"]
+    assert C.pickles_at(f, {9}) == {2}         # the tag line above "plain": its own scenario
+    assert C.pickles_at(f, {14}) == {3}        # the Rule's Background: the Rule's scenarios
+    assert C.pickles_at(f, {1}) == {0, 1, 2, 3}

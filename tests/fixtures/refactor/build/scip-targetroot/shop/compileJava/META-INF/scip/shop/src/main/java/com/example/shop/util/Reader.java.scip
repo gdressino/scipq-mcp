@@ -1,0 +1,6 @@
+ý
+4shop/src/main/java/com/example/shop/util/Reader.javacom/B
+com/example/Bcom/example/shop/B com/example/shop/util/B$com/example/shop/util/sub/B +!com/example/shop/util/sub/Helper#B!'1com/example/shop/util/Reader#BZ	 4(com/example/shop/util/Reader#`<init>`().Bjava/lang/String#B:$com/example/shop/util/Reader#read().BZ +!com/example/shop/util/sub/Helper#B2(com/example/shop/util/sub/Helper#trim().B'com/example/shop/util/Writer#B!0&com/example/shop/util/Writer#header().B"('com/example/shop/util/Format#B.4+!com/example/shop/util/Format#CSV.B58“
+com/example/shop/util/Reader#KMoved with Writer; uses a subpackage's type, and a package-private helper. (2Reader:"java*public class ReaderM
+(com/example/shop/util/Reader#`<init>`().(	2<init>:"java*public Reader()L
+$com/example/shop/util/Reader#read().(2read:"java*public String read()"java

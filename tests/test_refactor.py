@@ -178,3 +178,108 @@ def test_unmatched_sites_and_overload_warnings(refactor_root, javaparser_cache):
     out = plan(svc, [{"change_signature": {"symbol": "Overloads#m(+1)",
                                            "parameters": [{"from": 1}, {"from": 0}]}}])
     assert "calls with null or lambdas may become ambiguous" in out
+
+
+def test_plan_keys_are_checked(sample_copy, tmp_path):
+    svc = Service(sample_copy, cache_dir=str(tmp_path / "c"))
+    out = plan(svc, [{"change_signature": {"symbol": "Entity#setState", "parameters": [],
+                                           "import": ["x.Y"]}}])
+    assert "does not take import" in out
+    out = plan(svc, [{"select": {"symbol": "Entity", "nodes": "call"}, "do": {"remove": True}}])
+    assert "select does not take nodes" in out
+    assert "unknown keys" in plan(svc, [{"rename": {"symbol": "Entity", "to": "E"}, "x": 1}])
+
+
+def test_generated_paths():
+    from scipq_mcp.refactor import _is_generated
+    assert _is_generated("app/build/generated/sources/annotationProcessor/java/main/a/B.java")
+    assert _is_generated("target/generated-sources/a/B.java")
+    assert not _is_generated("core/src/main/java/com/acme/build/Task.java")
+    assert not _is_generated("core/src/main/java/com/acme/out/Task.java")
+
+
+def test_moves_together_and_package_access(refactor_root, javaparser_cache):
+    svc = Service(refactor_root, cache_dir=javaparser_cache)
+    out = plan(svc, [{"move": {"symbol": "com.example.shop.util.Reader",
+                               "to": "com.example.shop.util.io"}},
+                     {"move": {"symbol": "com.example.shop.util.Writer",
+                               "to": "com.example.shop.util.io"}}])
+    diff = patch_of(out)
+    reader = diff.split("rename to shop/src/main/java/com/example/shop/util/io/Reader.java")[1] \
+        .split("diff --git")[0]
+    assert "+import com.example.shop.util.Format;" in reader      # the neighbour that stays
+    assert "import com.example.shop.util.Writer" not in reader    # moved with it: same
+    assert "import com.example.shop.util.io.Writer" not in reader  # package, no import
+    assert "import com.example.shop.util.Helper" not in reader    # a subpackage's type
+    assert "WILL NOT COMPILE: Writer#header() is package-private" in out
+    assert "util/Audit.java" in out
+
+
+def test_javadoc_links_of_overloads_and_name_boundaries(refactor_root, javaparser_cache):
+    svc = Service(refactor_root, cache_dir=javaparser_cache)
+    diff = patch_of(plan(svc, [{"rename": {"symbol": "com/example/shop/Units#m().",
+                                           "to": "count"}},
+                               {"rename": {"symbol": "Bar", "to": "Baz"}}]))
+    assert "{@link #count()} and {@link #m(String)}" in diff     # the other overload's stays
+    assert "{@link Baz} and {@link FooBar}" in diff               # FooBar is not Bar
+
+
+def test_varargs_and_hidden_fields_in_signatures(refactor_root, javaparser_cache):
+    svc = Service(refactor_root, cache_dir=javaparser_cache)
+    diff = patch_of(plan(svc, [{"change_signature": {"symbol": "Log#log", "parameters": [
+        {"add": "int level", "default": "0"}, {"from": 0}, {"from": 1}]}}]))
+    assert '+        return log(0, "%s %s", a, b) + log(0, "none");' in diff
+    out = plan(svc, [{"change_signature": {"symbol": "Counter#next", "parameters": [
+        {"add": "int count", "default": "0"}]}}])
+    assert "the new parameter `count` hides the `count` the body already uses" in out
+
+
+def test_anonymous_overrides_library_families_and_kinds_in_files(refactor_root, sample_copy,
+                                                                  javaparser_cache):
+    svc = Service(refactor_root, cache_dir=javaparser_cache)
+    diff = patch_of(plan(svc, [{"rename": {"symbol": "Hook#before", "to": "beforeAll"}}]))
+    assert diff.count("void beforeAll()") == 2 and "+        beforeAll();" in diff
+    svc = Service(sample_copy, cache_dir=javaparser_cache)
+    out = plan(svc, [{"select": {"symbol": "java/util/List#size().", "family": True,
+                                 "node": "call", "role": "references"},
+                      "do": {"replace": "$recv.toArray().length"}}])
+    assert "REFUSED" not in out and "members.toArray().length" in patch_of(out)
+    out = plan(svc, [{"select": {"files": "**/Group.java", "kind": "MethodCallExpr",
+                                 "where": "$x.size()"}, "do": {"replace": "$x.toArray().length"}}])
+    assert "2 nodes in 1 files" in out
+
+
+def test_create_and_what_verify_expects(sample_copy, javaparser_cache):
+    from scipq_mcp import refactor as R
+    svc = Service(sample_copy, cache_dir=javaparser_cache)
+    out = plan(svc, [{"create": {"path": "core/src/main/java/com/example/model/Made.java",
+                                 "template": "package com.example.model;\n\npublic class Made {}\n"}},
+                     {"replace_calls": {"symbol": "Entity#findById",
+                                        "template": "Entity.findById($0 + 0)"}}])
+    diff = patch_of(out)
+    assert "new file mode 100644" in diff and "+public class Made {}" in diff
+    meta, _p = R.load_meta(sample_copy, re.search(r"plan ([0-9a-f]{12}):", out).group(1),
+                           javaparser_cache)
+    assert meta["symbols"] == []      # a replace leaves its method in place
+
+
+def test_dry_run_runs_the_checks_and_verify_sees_failed_builds(refactor_root, sample_copy,
+                                                               javaparser_cache):
+    svc = Service(refactor_root, cache_dir=javaparser_cache)
+    out = plan(svc, [{"rename": {"symbol": "Counter#count", "to": "total"}}], dry_run=True)
+    assert "dry run" in out and "would capture the renamed field" in out
+    # A class folder where a compiled class is missing: the build failed after the shards.
+    from scipq_mcp.queries import Navigator
+    from scipq_mcp.refactor import _class_files
+    ws = Service(sample_copy).workspace(None)
+    ws.files()
+    nav = Navigator(ws)
+    src = "core/src/main/java/com/example/model/Entity.java"
+    classes = os.path.join(sample_copy, "core/build/classes/java/main/com/example/model")
+    os.makedirs(classes)
+    assert "no com/example/model/Entity.class" in _class_files(nav, [src])[0]
+    with open(os.path.join(classes, "Entity.class"), "wb") as fh:
+        fh.write(b"\xca\xfe")
+    assert _class_files(nav, [src]) == []
+    os.utime(os.path.join(classes, "Entity.class"), (1_000_000_000, 1_000_000_000))
+    assert "older than the source" in _class_files(nav, [src])[0]

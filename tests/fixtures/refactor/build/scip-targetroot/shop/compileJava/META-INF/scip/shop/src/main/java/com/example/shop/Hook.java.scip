@@ -1,0 +1,11 @@
+ž
+-shop/src/main/java/com/example/shop/Hook.java*com/example/shop/Hook#BZ -!com/example/shop/Hook#`<init>`().B3com/example/shop/Hook#before().BR com/example/shop/Hook#B4com/example/shop/Hook#wired().BZ  com/example/shop/Hook#Bjava/lang/Override#Blocal 1BZ	 2com/example/shop/Hook#run().B	Z )com/example/shop/Hook#before().BD
+com/example/shop/Hook#(2Hook:""java*public abstract class HookD
+!com/example/shop/Hook#`<init>`().(	2<init>:"java*public Hook()K
+com/example/shop/Hook#before().(B2before:"java*abstract void before()F
+com/example/shop/Hook#wired().(P2wired:"java*static Hook wired()d
+local 1"%
+com/example/shop/Hook#before().(2before:"java*@Override
+void before()Blocal 09
+com/example/shop/Hook#run().(2run:"java*
+void run()"java

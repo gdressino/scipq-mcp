@@ -85,13 +85,51 @@ def api_of(g: Graph, scope: str = "", api_only: bool = True) -> dict[str, Entry]
     return out
 
 
+def shape(signature: str) -> str:
+    """A signature as callers and overriders see it: parameter names and `final` left out
+    (scip-javac's signatures carry the names: renaming a parameter breaks nothing)."""
+    i = signature.find("(")
+    if i < 0:
+        return signature
+    depth, j = 0, -1
+    for k in range(i, len(signature)):
+        if signature[k] == "(":
+            depth += 1
+        elif signature[k] == ")":
+            depth -= 1
+            if depth == 0:
+                j = k
+                break
+    if j < 0:
+        return signature
+    params, depth, start = [], 0, i + 1
+    for k in range(i + 1, j):
+        c = signature[k]
+        if c in "<([":
+            depth += 1
+        elif c in ">)]":
+            depth -= 1
+        elif c == "," and depth == 0:
+            params.append(signature[start:k])
+            start = k + 1
+    params.append(signature[start:j])
+    out = []
+    for p in params:
+        p = re.sub(r"\bfinal\s+", "", p).strip()
+        m = re.match(r"(.*?[\w$\]>.])\s+[\w$]+((?:\s*\[\s*\])*)$", p, re.S)
+        if m:
+            p = m.group(1) + m.group(2).replace(" ", "")
+        out.append(" ".join(p.split()))
+    return signature[:i + 1] + ", ".join(x for x in out if x) + signature[j:]
+
+
 def api_diff(a: dict[str, Entry], b: dict[str, Entry]) -> ApiDiff:
     d = ApiDiff()
     for sym, e in a.items():
         other = b.get(sym)
         if other is None:
             d.only_a[sym] = e
-        elif other.signature != e.signature:
+        elif other.signature != e.signature and shape(other.signature) != shape(e.signature):
             d.changed[sym] = (e, other)
     for sym, e in b.items():
         if sym not in a:
@@ -99,8 +137,9 @@ def api_diff(a: dict[str, Entry], b: dict[str, Entry]) -> ApiDiff:
     # Same owner, kind and signature but another name: probably a rename.
     def key(sym: str, e: Entry) -> tuple:
         name = S.name_of(sym)
-        return (S.parent(sym), e.kind, re.sub(r"\b" + re.escape(name) + r"\b", "§",
-                                              e.signature) if name else e.signature)
+        sig = shape(e.signature)
+        return (S.parent(sym), e.kind, re.sub(r"\b" + re.escape(name) + r"\b", "§", sig)
+                if name else sig)
     in_b: dict[tuple, list[str]] = {}
     for sym, e in d.only_b.items():
         in_b.setdefault(key(sym, e), []).append(sym)
@@ -109,8 +148,20 @@ def api_diff(a: dict[str, Entry], b: dict[str, Entry]) -> ApiDiff:
         if len(cands) == 1:
             d.renamed.append((sym, cands[0]))
     # A type in another package (same simple name, mostly the same member names): moved.
+    # Member names per type, once per side (not per candidate pair).
+    tops_a = {s for s in d.only_a if S.is_type(s) and "#" not in s[:-1]}
+    tops_b = {s for s in d.only_b if S.is_type(s) and "#" not in s[:-1]}
+    by_parent: dict[int, dict[str, set[str]]] = {0: {}, 1: {}}
+    for k, (side, tops) in enumerate(((a, tops_a), (b, tops_b))):
+        if not tops:
+            continue
+        for s in side:
+            p = S.parent(s)
+            if p in tops:
+                by_parent[k].setdefault(p, set()).add(S.name_of(s))
+
     def members(side: dict[str, Entry], t: str) -> set[str]:
-        return {S.name_of(s) for s in side if S.parent(s) == t}
+        return by_parent[0 if side is a else 1].get(t, set())
     types_b: dict[str, list[str]] = {}
     for sym in d.only_b:
         if S.is_type(sym) and "#" not in sym[:-1]:  # top-level types

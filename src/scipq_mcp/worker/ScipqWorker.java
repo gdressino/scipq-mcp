@@ -303,8 +303,13 @@ public final class ScipqWorker {
             Map<String, Object> scope = asMap(s);
             Map<String, Object> out = map("id", scope.get("id"));
             try {
-                Ident at = locate(ids, scope, text);
-                Node decl = at.node.getParentNode().orElseThrow(() -> new Fail("no parent"));
+                Node decl;
+                if (scope.get("line") == null) {
+                    decl = cu;  // the whole file
+                } else {
+                    Ident at = locate(ids, scope, text);
+                    decl = at.node.getParentNode().orElseThrow(() -> new Fail("no parent"));
+                }
                 Class<? extends Node> kind = nodeClass(str(scope.get("kind")));
                 List<Object> found = new ArrayList<>();
                 Object where = scope.get("where");

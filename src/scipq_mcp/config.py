@@ -254,13 +254,16 @@ def sanitize_repo_config(data: dict) -> tuple[dict, list[str]]:
                 out[key] = clean
     dc = out.get("dead_code")
     if isinstance(dc, dict) and "exclude" in dc:
-        dc["exclude"] = [g for g in dc["exclude"] if _relative_glob(g, "dead_code.exclude",
-                                                                     warnings)]
+        dc["exclude"] = [g for g in _as_list(dc["exclude"], "dead_code.exclude", warnings)
+                         if _relative_glob(g, "dead_code.exclude", warnings)]
     bn = out.get("by_name")
     if isinstance(bn, dict):
         for k in ("globs", "exclude"):
             if k in bn:
-                bn[k] = [g for g in bn[k] if _relative_glob(g, f"by_name.{k}", warnings)]
+                bn[k] = [g for g in _as_list(bn[k], f"by_name.{k}", warnings)
+                         if _relative_glob(g, f"by_name.{k}", warnings)]
+        if "patterns" in bn:
+            bn["patterns"] = _as_list(bn["patterns"], "by_name.patterns", warnings)
         if len(bn.get("patterns", [])) > REPO_MAX_PATTERNS:
             warnings.append(f"{REPO_FILE}: by_name.patterns: only the first "
                             f"{REPO_MAX_PATTERNS} are used")
@@ -273,6 +276,16 @@ def sanitize_repo_config(data: dict) -> tuple[dict, list[str]]:
         warnings.append(f"{REPO_FILE}: tests.filter must be a string: ignored")
         out["tests"].pop("filter", None)
     return out, warnings
+
+
+def _as_list(value, where: str, warnings: list[str]) -> list:
+    """A list of strings: a single string becomes a list of one (not its characters)."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, str)]
+    warnings.append(f"{REPO_FILE}: {where} must be a list of strings: ignored")
+    return []
 
 
 def _capped(value, where: str, warnings: list[str]):
@@ -446,13 +459,17 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
             anns = [anns] if isinstance(anns, str) else anns
             target.append(({to_symbol(a) for a in anns}, spec.get("attribute", "name")))
     bn = data.get("by_name", {})
-    for g in bn.get("globs", []):
+
+    def strings(v) -> list[str]:
+        return [v] if isinstance(v, str) else [x for x in v if isinstance(x, str)] \
+            if isinstance(v, list) else []
+    for g in strings(bn.get("globs", [])):
         if g not in s.by_name_globs:
             s.by_name_globs.append(g)
-    s.by_name_exclude += list(bn.get("exclude", []))
-    s.by_name_patterns += list(bn.get("patterns", []))
-    s.dead_code_exclude += [g for g in data.get("dead_code", {}).get("exclude", [])
-                            if isinstance(g, str) and g]
+    s.by_name_exclude += strings(bn.get("exclude", []))
+    s.by_name_patterns += strings(bn.get("patterns", []))
+    s.dead_code_exclude += [g for g in strings(data.get("dead_code", {}).get("exclude", []))
+                            if g]
     s.concept_attributes += list(data.get("concepts", {}).get("attributes", []))
     cu = data.get("cucumber", {})
     if isinstance(cu.get("run"), str) and cu["run"]:

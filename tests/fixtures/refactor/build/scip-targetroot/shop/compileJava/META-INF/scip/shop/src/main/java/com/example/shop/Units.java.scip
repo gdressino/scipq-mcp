@@ -1,0 +1,16 @@
+ä	
+.shop/src/main/java/com/example/shop/Units.java+com/example/shop/Units#BZ ."com/example/shop/Units#`<init>`().B1com/example/shop/Units#m().BZ 3com/example/shop/Units#m(+1).B
+Z
+ java/lang/String#B
+local 0B
+R
+local 0B$java/lang/String#length().B3com/example/shop/Units#use().BZ com/example/shop/Bar#Blocal 1BR"com/example/shop/FooBar#Blocal 2BR%com/example/shop/Units#m().B'com/example/shop/Units#m(+1).B¡
+com/example/shop/Units#a Overloads in links: {@link #m()} and {@link #m(String)}; types: {@link Bar} and {@link FooBar}.
+(2Units:"java*public class UnitsF
+"com/example/shop/Units#`<init>`().(	2<init>:"java*public Units():
+com/example/shop/Units#m().(2m:"java*public int m()D
+com/example/shop/Units#m(+1).(2m:"java*public int m(String s)=
+local 02s:"java*String sBcom/example/shop/Units#m(+1).H
+com/example/shop/Units#use().(2use: "java*int use(Bar b, FooBar f):
+local 12b:"java*Bar bBcom/example/shop/Units#use().=
+local 22f:"java*FooBar fBcom/example/shop/Units#use()."java

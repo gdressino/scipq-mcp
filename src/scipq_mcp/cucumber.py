@@ -98,6 +98,9 @@ class Feature:
     language: str
     scenarios: list[Scenario] = field(default_factory=list)
     steps: list[Step] = field(default_factory=list)
+    # Where each Rule and Scenario block starts (its tag lines included): (line, "rule" |
+    # "scenario", rule name | Scenario line). Lines before the first one are the feature's.
+    marks: list[tuple[int, str, object]] = field(default_factory=list)
 
 
 # --- glue -------------------------------------------------------------------------------------
@@ -348,15 +351,27 @@ def parse_feature(text: str, source: str) -> Feature | None:
     known = language in STEP_KEYWORDS
     feat = Feature(source, "", [], language)
     pending_tags: list[str] = []
+    tag_start = 0                     # line of the first tag line before a header
     rule, rule_tags = "", []
-    section = ""                      # background, scenario, outline, examples, rule, feature
-    scenario_name, scenario_tags, scenario_line = "", [], 0
-    outline_steps: list[tuple[int, str, str]] = []
+    section = ""                      # background, scenario, examples, rule, feature
+    # The scenario being read: its steps are kept until it is known whether Examples follow
+    # (Gherkin 6+: a Scenario with Examples is an outline, one pickle per row).
+    sc: dict | None = None
     examples_tags: list[str] = []
     header: list[str] | None = None
     backgrounds: list[tuple[str, list[Step]]] = []   # (rule, its steps)
-    current: Step | None = None
     in_doc = ""
+
+    def flush() -> None:
+        nonlocal sc
+        if sc is not None and not sc["rows"] and not sc["outline"]:
+            feat.scenarios.append(Scenario(source, sc["line"], sc["name"],
+                                           feat.tags + rule_tags + sc["tags"], rule, feat.name,
+                                           sc["line"]))
+            idx = len(feat.scenarios) - 1
+            for ln, kw, txt in sc["steps"]:
+                feat.steps.append(Step(source, ln, kw, txt, [idx]))
+        sc = None
 
     for i, raw in enumerate(lines, 1):
         line = raw.strip()
@@ -370,33 +385,35 @@ def parse_feature(text: str, source: str) -> Feature | None:
         if not line or line.startswith("#"):
             continue
         if line.startswith("@"):
+            if not pending_tags:
+                tag_start = i
             pending_tags += [t for t in line.split() if t.startswith("@")]
             continue
         m = _SECTION_LINE.match(raw)
         kind = _SECTION_OF.get(m.group(1).strip().lower()) if m else None
         if kind:
             tags, pending_tags = pending_tags, []
+            begin = tag_start if tags else i
+            if kind != "examples":
+                flush()
             if kind == "feature":
                 feat.name, feat.tags, section = m.group(2).strip(), tags, "feature"
             elif kind == "rule":
                 rule, rule_tags, section = m.group(2).strip(), tags, "rule"
+                feat.marks.append((begin, "rule", rule))
             elif kind == "background":
                 section = "background"
                 backgrounds.append((rule, []))
             elif kind in ("scenario", "outline"):
-                section = kind
-                scenario_name, scenario_tags, scenario_line = m.group(2).strip(), tags, i
-                outline_steps = []
-                if kind == "scenario":
-                    feat.scenarios.append(Scenario(source, i, scenario_name,
-                                                   feat.tags + rule_tags + tags, rule, feat.name,
-                                                   i))
+                section = "scenario"
+                sc = {"name": m.group(2).strip(), "tags": tags, "line": i, "steps": [],
+                      "rows": 0, "outline": kind == "outline"}
+                feat.marks.append((begin, "scenario", i))
             elif kind == "examples":
                 section, header, examples_tags = "examples", None, tags
-            current = None
             continue
         if line.startswith("|"):  # a data table (an argument), or an Examples row
-            if section == "examples" and outline_steps:
+            if section == "examples" and sc is not None:
                 cells = [c.strip() for c in line.strip("|").split("|")]
                 if header is None:
                     header = cells
@@ -406,33 +423,31 @@ def parse_feature(text: str, source: str) -> Feature | None:
                 def fill(t: str) -> str:
                     return re.sub(r"<([^<>]+)>", lambda x: row.get(x.group(1), x.group(0)), t)
                 feat.scenarios.append(Scenario(
-                    source, i, fill(scenario_name),
-                    feat.tags + rule_tags + scenario_tags + examples_tags, rule, feat.name,
-                    scenario_line))
+                    source, i, fill(sc["name"]),
+                    feat.tags + rule_tags + sc["tags"] + examples_tags, rule, feat.name,
+                    sc["line"]))
+                sc["rows"] += 1
                 idx = len(feat.scenarios) - 1
-                for ln, kw, txt in outline_steps:
+                for ln, kw, txt in sc["steps"]:
                     feat.steps.append(Step(source, ln, kw, fill(txt), [idx]))
             continue
-        if section not in ("background", "scenario", "outline"):
+        if section not in ("background", "scenario"):
             continue  # a description line
         kt = _keyword(line, language) if known else ("", line)
         if kt is None:
             continue  # a description line under the scenario's title
         kw, txt = kt
-        if section == "outline":
-            outline_steps.append((i, kw, txt))
+        if section == "scenario":
+            sc["steps"].append((i, kw, txt))
         else:
-            current = Step(source, i, kw, txt)
-            if section == "scenario":
-                current.pickles = [len(feat.scenarios) - 1]
-                feat.steps.append(current)
-            else:
-                current.background = True
-                backgrounds[-1][1].append(current)
-                feat.steps.append(current)
+            st = Step(source, i, kw, txt, background=True)
+            backgrounds[-1][1].append(st)
+            feat.steps.append(st)
+    flush()
+    feat.steps.sort(key=lambda st: (st.line, st.pickles[:1]))
     # A Background's steps run in every scenario of its scope (the feature, or its Rule).
     for bg_rule, bg_steps in backgrounds:
-        idx = [k for k, sc in enumerate(feat.scenarios) if not bg_rule or sc.rule == bg_rule]
+        idx = [k for k, x in enumerate(feat.scenarios) if not bg_rule or x.rule == bg_rule]
         for st in bg_steps:
             st.pickles = idx
     return feat if feat.name or feat.scenarios or feat.steps else None
@@ -556,7 +571,7 @@ class Suite:
             return {}
         out = {source: pickles_at(f, lines)}
         if self.included(source):
-            first = min((sc.header for sc in f.scenarios), default=None)
+            first = min((m[0] for m in f.marks), default=None)
             if first is None or any(ln < first for ln in lines):
                 for src, idx in self.reach(source).items():
                     out.setdefault(src, set()).update(idx)
@@ -591,15 +606,20 @@ def matcher(glues: list[Glue]):
 
 
 def pickles_at(feat: Feature, lines: set[int]) -> set[int]:
-    """The pickles whose scenario contains one of these lines (1-based); a line before the
-    first scenario (the feature's header, tags or Background) affects them all."""
-    headers = sorted({sc.header for sc in feat.scenarios})
+    """The pickles a change on these lines (1-based) affects: a scenario's block (its tag
+    lines, header, steps and Examples) its own pickles; a Rule's header or Background, the
+    Rule's scenarios; the feature's header or Background, all of them."""
+    marks = sorted(feat.marks)
     out: set[int] = set()
     for ln in lines:
-        before = [h for h in headers if h <= ln]
+        before = [m for m in marks if m[0] <= ln]
         if not before:
             return set(range(len(feat.scenarios)))
-        out |= {k for k, sc in enumerate(feat.scenarios) if sc.header == before[-1]}
+        _start, kind, key = before[-1]
+        if kind == "rule":
+            out |= {k for k, sc in enumerate(feat.scenarios) if sc.rule == key}
+        else:
+            out |= {k for k, sc in enumerate(feat.scenarios) if sc.header == key}
     return out
 
 

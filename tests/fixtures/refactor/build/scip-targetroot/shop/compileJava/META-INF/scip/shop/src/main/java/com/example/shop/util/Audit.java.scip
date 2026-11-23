@@ -1,0 +1,5 @@
+ò
+3shop/src/main/java/com/example/shop/util/Audit.java0com/example/shop/util/Audit#BZ 3'com/example/shop/util/Audit#`<init>`().Bjava/lang/String#B:$com/example/shop/util/Audit#check().BZ 'com/example/shop/util/Writer#B0&com/example/shop/util/Writer#header().B}
+com/example/shop/util/Audit#8Stays: calls a package-private method of a moved class. (2Audit:"java*public class AuditK
+'com/example/shop/util/Audit#`<init>`().(	2<init>:"java*public Audit()N
+$com/example/shop/util/Audit#check().(2check:"java*public String check()"java

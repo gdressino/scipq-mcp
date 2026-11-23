@@ -1,0 +1,21 @@
+¹
+
+,shop/src/main/java/com/example/shop/Log.java)com/example/shop/Log#BZ 6 com/example/shop/Log#`<init>`().BZ java/lang/String#B1com/example/shop/Log#log().BZ java/lang/String#B#local 0B$'R'java/lang/Object#B)/local 1B37R)7java/lang/String#B$java/lang/String#format().Blocal 0B local 1B"&java/lang/String#B
+1com/example/shop/Log#use().B
+Z
+ java/lang/Object#B
+local 2B
+R
+java/lang/Object#B
+ &local 3B
+'(R
+ (%com/example/shop/Log#log().Blocal 2Blocal 3B %com/example/shop/Log#log().B$'>
+com/example/shop/Log#(2Log:"java*public final class LogC
+ com/example/shop/Log#`<init>`().(	2<init>:"java*private Log()a
+com/example/shop/Log#log().(P2log:;"java*3public static String log(String fmt, Object[] args)?
+local 02fmt:"java*
+String fmtBcom/example/shop/Log#log().C
+local 12args:"java*Object[] argsBcom/example/shop/Log#log().S
+com/example/shop/Log#use().(P2use:-"java*%static String use(Object a, Object b);
+local 22a:"java*Object aBcom/example/shop/Log#use().;
+local 32b:"java*Object bBcom/example/shop/Log#use()."java

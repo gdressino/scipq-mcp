@@ -5,6 +5,18 @@ version and date when releasing.
 
 ## Unreleased
 
+### Fixed
+
+- `compare`: renaming a parameter is not a signature change (scip-javac's signatures carry
+  parameter names); `all_worktrees` finds each worktree's build when it lives in a
+  subdirectory of the repository; moved types are matched without rescanning every symbol.
+- Cucumber: a `Scenario` with `Examples` (Gherkin 6+) gets one scenario per row; a changed tag
+  line belongs to the scenario below it, a Rule's header or Background to the Rule's
+  scenarios.
+- `context`: reads of a record component named `set…` are not listed as writes.
+- `.scipq.toml` and user configuration: a string where a list of globs is expected counts as
+  one glob (it was split into characters, one of them `*`).
+
 ### Added
 
 - Refactoring (V3 item 9): `refactor(plan, dry_run)` runs a plan (JSON: macros `rename`,
@@ -18,6 +30,17 @@ version and date when releasing.
   (`keep_column`, `migration`); lists uses by name to review. `refactor(plan_id,
   verify=true)` checks the index after the patch is applied and compiled. `refactor_help`
   documents the format; an MCP prompt `refactor` walks through it.
+- Refactoring checked on a large project (a rename over 823 files, a change of signature, an
+  API migration with templates, a move, a persistent-field rename): moves done in several
+  steps are computed together, with package-private access across the new boundaries
+  reported; overrides in anonymous classes are renamed; `select` takes `symbols` and
+  `overloads`, and `family` with library methods; `change_signature` keeps varargs
+  arguments, imports the types it adds and reports a new parameter hiding a field; javadoc
+  links of other overloads, or of types whose names end like the renamed one, are left
+  alone; the review list keeps a persistent field's query paths and fixture tables (and
+  drops prose); dry runs show the checks' refusals; `verify` catches a failed build from its
+  class files and lists the tests that named the old names in text; unknown plan keys are
+  refused.
 - `scipq-mcp tools install javaparser` (pinned version and SHA-256) and `tools status`.
   JavaParser is not bundled: the newest jar in the cache, the Maven repository or Gradle's
   cache is used, in a short-lived JVM at the lowest priority.

@@ -427,6 +427,11 @@ def _hunks(a: list[str], b: list[str]) -> list[str]:
     return fixed
 
 
+def _lines(text: str) -> list[str]:
+    """Lines as git sees them: split at "\n" only (not at form feeds, U+0085, U+2028…)."""
+    return re.findall(r"[^\n]*\n|[^\n]+$", text)
+
+
 def file_patch(old: Source | None, new_path: str, new_text: str | None,
                new_source: Source | None = None) -> bytes:
     """A `git diff`-style patch of one file: changed, renamed (old.path != new_path), created
@@ -454,7 +459,7 @@ def file_patch(old: Source | None, new_path: str, new_text: str | None,
         head.append(f"index {blob_id(old_bytes)}..{blob_id(new_bytes)} {mode}\n")
     head.append(f"--- {_quote('a/' + a_path) if old else '/dev/null'}\n")
     head.append(f"+++ {_quote('b/' + new_path) if new_text is not None else '/dev/null'}\n")
-    a_lines = old.text.splitlines(keepends=True) if old else []
-    b_lines = new_text.splitlines(keepends=True) if new_text is not None else []
+    a_lines = _lines(old.text) if old else []
+    b_lines = _lines(new_text) if new_text is not None else []
     body = "".join(_hunks(a_lines, b_lines))
     return "".join(head).encode("utf-8") + body.encode(enc.encoding)

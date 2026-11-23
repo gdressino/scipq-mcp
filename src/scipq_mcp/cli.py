@@ -117,8 +117,11 @@ def _run_query(a) -> str:
     if t == "refactor":
         plan = a.plan
         if plan.startswith("@"):
-            with open(plan[1:], encoding="utf-8") as fh:
-                plan = fh.read()
+            try:
+                with open(plan[1:], encoding="utf-8") as fh:
+                    plan = fh.read()
+            except OSError as e:
+                raise SystemExit(f"error: {e}") from e
         return svc.refactor(plan or None, dry_run=a.dry_run, plan_id=a.plan_id, verify=a.verify)
     if t == "steps":
         return svc.steps(a.query, check=a.check, offset=a.offset, limit=a.limit)
