@@ -12,3 +12,9 @@ build/
 !tests/fixtures/cucumber/build/
 !tests/fixtures/refactor/build/
 tests/fixtures/.jars/
+# IDE and Gradle files an editor leaves next to the fixtures
+.gradle/
+.settings/
+.project
+.classpath
+.idea/
