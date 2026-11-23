@@ -596,6 +596,9 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     # Type#member mentions and method names in its code spans that the files' types declare.
     # The line number must fall in one of them, or be a call of it.
     a, b = _segment(line, mo.start(), mo.end())
+    if line.lstrip().startswith("|") and not any(a <= at < b for _x, at in named_here) and \
+            not re.search(r"[a-z_$][\w$]*\s*\(", line[a:b].replace(mo.group(0), "")):
+        a, b = 0, len(line)     # a table cell with only the path: the row names the member
     glued = _glued_names(line[a:b], mo.group(0))
     near = [(x, y) for x, y in code if a <= x < b]
     segment_names = {x for p, q in near for x in
