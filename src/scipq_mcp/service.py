@@ -1099,12 +1099,13 @@ class Service:
                 nodes = [n for n in every if n.depth <= d]
                 trunc = trunc and max((n.depth for n in every), default=0) <= d
                 st = self.settings(nav.ws.root, g)
-                entries = g.entry_points(every, st.entry_specs, nav.ws.root)
+                specs = [x for x in st.entry_specs if x.get("reached", True)]
+                entries = g.entry_points(every, specs, nav.ws.root)
                 defs = g.definitions(g.ids([sym]).values())
                 dd = next(iter(defs.values()), None)
                 itself = [e for e in g.entry_points(
                     [G.Node(sym, 0, "", dd[0] if dd else "", dd[1] if dd else 0)],
-                    st.entry_specs, nav.ws.root) if e.kind != "test"]
+                    specs, nav.ws.root) if e.kind != "test"]
             text = render.impact(sym, nodes, trunc, d, group_by, offset, limit, entries,
                                  itself, deep)
             return render.index_note(stats) + note + text, {n.source for n in nodes}
@@ -1168,8 +1169,8 @@ class Service:
                 cuke = self._cucumber_affected(
                     nav, g, st, set(res["definitions"]) | set(nodes), feature_hunks)
                 entries = g.entry_points([n for n in nodes.values() if n.depth > 0],
-                                         [x for x in st.entry_specs if x["kind"] != "test"],
-                                         nav.ws.root)
+                                         [x for x in st.entry_specs if x["kind"] != "test"
+                                          and x.get("reached", True)], nav.ws.root)
             tests_line = self._tests_line(nav.ws.root, tests, st.tests_filter)
             if cuke:
                 tests_line = (tests_line + "\n" if tests_line else "") + cuke

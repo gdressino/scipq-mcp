@@ -2,8 +2,11 @@
 name = "spring"
 description = "Spring Framework and Spring Boot"
 
+# Beans are alive (dead_code), but being in one does not make a method an entry point: impact
+# and changed do not list this kind (reached = false).
 [[entry_points]]
 kind = "bean"
+reached = false
 annotations = [
   "org.springframework.stereotype.Component", "org.springframework.stereotype.Service",
   "org.springframework.stereotype.Repository", "org.springframework.stereotype.Controller",
@@ -12,10 +15,26 @@ annotations = [
   "org.springframework.boot.autoconfigure.SpringBootApplication",
   "org.springframework.beans.factory.annotation.Autowired",
   "org.springframework.beans.factory.annotation.Value",
+]
+
+# What Spring calls by itself: events, schedules, startup.
+[[entry_points]]
+kind = "event"
+annotations = [
   "org.springframework.context.event.EventListener",
-  "org.springframework.scheduling.annotation.Scheduled",
   "org.springframework.transaction.event.TransactionalEventListener",
 ]
+supertypes = ["org.springframework.context.ApplicationListener"]
+
+[[entry_points]]
+kind = "job"
+annotations = ["org.springframework.scheduling.annotation.Scheduled"]
+
+[[entry_points]]
+kind = "startup"
+annotations = ["jakarta.annotation.PostConstruct", "javax.annotation.PostConstruct"]
+supertypes = ["org.springframework.boot.CommandLineRunner",
+              "org.springframework.boot.ApplicationRunner"]
 
 [[entry_points]]
 kind = "endpoint"

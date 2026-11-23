@@ -51,6 +51,8 @@ class Entry:
 
 
 _HTTP_VERBS = {v: v for v in ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS")}
+# Annotations of a type that hold its routes: its methods are endpoints only with a route.
+_ROUTE_HOLDERS = {"Path", "RequestMapping", "RestController", "Controller"}
 _MAPPINGS = {"GetMapping": "GET", "PostMapping": "POST", "PutMapping": "PUT",
              "DeleteMapping": "DELETE", "PatchMapping": "PATCH", "RequestMapping": ""}
 
@@ -462,6 +464,15 @@ class Graph:
             path = "/" + "/".join(x.strip("/") for x in (base, own) if x.strip("/"))
             return f"{verb} {path}".strip()
 
+        sigs: dict[str, str] = {}
+
+        def private(sym: str) -> bool:
+            if sym not in sigs:
+                d = self.definitions([ids[sym]]).get(ids[sym]) if sym in ids else None
+                sigs[sym] = d[4] if d else ""
+            head = sigs[sym].split("(", 1)[0]
+            return re.search(r"\bprivate\b", re.sub(r"@\w+(\([^)]*\))?", " ", head)) is not None
+
         declared: dict[str, str] = {}
 
         def declared_super(t: str) -> str:
@@ -485,11 +496,18 @@ class Graph:
             owner = S.owner_type(sym)
             for k, spec in enumerate(specs):
                 detail, on_type = None, False
+                if S.kind_of(sym) == "method" and private(sym) and not any(
+                        a in spec["annotations"] for a, _s, _l in anns.get(sym, [])):
+                    continue        # a private method is reached through its class's code
                 for target in (sym, owner):
                     hit = [a for a, _s, _l in anns.get(target, []) if a in spec["annotations"]]
                     if hit:
                         on_type = target != sym or S.kind_of(sym) == "type"
                         detail = route(sym, owner)
+                        if target != sym and S.kind_of(sym) == "method" and not detail and \
+                                S.name_of(hit[0]) in _ROUTE_HOLDERS:
+                            detail = ""     # a controller's helper, not one of its routes
+                            break
                         if not detail:
                             text = next((first_string(a) for _n, a in
                                          args_of(target, {S.name_of(hit[0])})), "")
@@ -514,6 +532,8 @@ class Graph:
                         on_type = True
                     elif t in xml_types.get(k, {}):
                         detail, on_type = f"in {xml_types[k][t]}", True
+                if detail == "":
+                    continue
                 if detail is not None:
                     out.append(Entry(spec["kind"], n, detail, on_type))
                     break

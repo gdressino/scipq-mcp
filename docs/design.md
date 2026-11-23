@@ -133,6 +133,11 @@ kind = "test"                     # e.g. in the junit profile
 annotations = ["org.junit.jupiter.api.Test", "org.junit.Test"]
 type_names = ["*Test", "*IT"]     # globs on simple names
 
+[[entry_points]]
+kind = "bean"                     # alive for dead_code, but not an entry point impact lists
+reached = false
+annotations = ["org.springframework.stereotype.Service"]
+
 # Persistence model (v3 item 8). Attribute values come from the annotation's source text.
 [persistence]
 entity = ["jakarta.persistence.Entity", "javax.persistence.Entity"]
@@ -206,9 +211,13 @@ section. Unknown keys are reported, not ignored silently.
    warnings, JDKs, what refactoring would use.
 6. `check_refs(files)`: `Type#member`, `Type.method(…)`, qualified names, `{@link}` and
    `File.java:N` mentioned in Markdown, resolved at once from the auxiliary index; missing types
-   and members, wrong parameter lists, missing files, moved lines.
-7. Entry points per profile on top of `impact` and `changed`, by kind; rules may combine
-   supertypes and name globs, and take classes from XML descriptors (`web.xml`).
+   and members, wrong parameter lists, missing files, moved lines. Library types, placeholders,
+   examples, negated mentions, other languages' snippets and archive folders are left alone.
+7. Entry points per profile on top of `impact` and `changed`, by kind, one row per type;
+   rules may combine supertypes and name globs (both must hold), take classes from XML
+   descriptors (`web.xml`, with URL patterns), and be `reached = false` (alive for
+   `dead_code` only: Spring beans). Endpoints show their route; a private method or a
+   controller's helper is not an entry point; `impact` searches them to depth 6.
 8. Persistence model per profile (`persistence`): entities ↔ tables (inheritance,
    discriminators), fields ↔ columns, relations, fetch groups; who writes a field (setter uses,
    Lombok included, plus assignments found in the line) and who names it in strings.

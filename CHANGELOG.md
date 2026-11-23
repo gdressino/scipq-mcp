@@ -46,7 +46,11 @@ version and date when releasing.
   and what identifies them (an endpoint's verb and route from the type's and the method's
   paths, an annotation's first string, the declared supertype, the descriptor with its URL
   patterns). `impact` looks for them to depth 6 even when its rows stop sooner, and says
-  when the symbol is an entry point itself. An `[[entry_points]]` rule may
+  when the symbol is an entry point itself. A private method, or a controller's method
+  without a route, is not one. A rule with `reached = false` keeps code alive for
+  `dead_code` without being listed: the `spring` profile's beans; its events, schedules and
+  startup hooks (`@EventListener`, `@Scheduled`, `@PostConstruct`, runners) are kinds of
+  their own. An `[[entry_points]]` rule may
   combine `supertypes` and `type_names` (a type must match both) and name classes listed in
   XML files (`[[entry_points.xml]] files, elements`); `dead_code` keeps those classes too.
   A `servlet` profile (annotations and `web.xml`), and Vaadin 7/8 UIs and views in `vaadin`.

@@ -492,7 +492,9 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
             "annotations": {to_symbol(a) for a in ep.get("annotations", [])},
             "supertypes": {to_symbol(t) for t in ep.get("supertypes", [])},
             "type_names": list(ep.get("type_names", [])),
-            "xml": xml})
+            "xml": xml,
+            # false: keeps code alive for dead_code, but is not an entry point to list
+            "reached": ep.get("reached", True) is not False})
         s.entry_annotations |= {to_symbol(a) for a in ep.get("annotations", [])}
         s.entry_packages += list(ep.get("packages", []))
         if ep.get("kind") == "test":

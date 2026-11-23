@@ -453,7 +453,8 @@ def test_entry_points_routes_supertypes_depth_and_the_symbol_itself(refactor_roo
     from scipq_mcp.service import Service
     with open(os.path.join(refactor_root, ".scipq.toml"), "w") as fh:
         fh.write('profiles = ["jaxrs", "jdo"]\n\n[[entry_points]]\nkind = "screen"\n'
-                 'supertypes = ["com.example.shop.Widget"]\n')
+                 'supertypes = ["com.example.shop.Widget"]\n\n[[entry_points]]\n'
+                 'kind = "alive"\nreached = false\ntype_names = ["Steps"]\n')
     svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
     out = svc.impact("Steps#base", depth=3)
     # The endpoint is five calls away and the screen three: searched deeper than the rows.
@@ -461,6 +462,9 @@ def test_entry_points_routes_supertypes_depth_and_the_symbol_itself(refactor_roo
         "endpoint 1 type, screen 1 type" in out
     assert "endpoint  d5  OrderResource  " in out and "— create() POST /orders" in out
     assert "screen  d3  MainScreen  " in out and "extends BaseScreen (a Widget)  — show()" in out
+    assert "render" not in out.split("shop:")[0]          # private: reached through show()
+    assert "helper" not in out.split("shop:")[0]          # in the resource, but not a route
+    assert "alive" not in out                             # reached = false: dead_code only
     assert "  d4  " not in out and "  d5  Steps#first()" not in out    # rows stop at 3
     out = svc.impact("OrderDao#openFilter")
     assert "find() GET /orders/{id}" in out

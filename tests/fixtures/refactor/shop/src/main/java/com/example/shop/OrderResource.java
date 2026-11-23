@@ -12,6 +12,11 @@ public class OrderResource {
         return Steps.first();
     }
 
+    /** Not a route: a helper of the resource. */
+    public String helper() {
+        return Steps.second();
+    }
+
     @GET
     @Path("/{id}")
     public String find() {

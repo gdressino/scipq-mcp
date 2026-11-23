@@ -1,8 +1,10 @@
-ä
-3shop/src/main/java/com/example/shop/MainScreen.java0com/example/shop/MainScreen#BZ 3'com/example/shop/MainScreen#`<init>`().B&com/example/shop/BaseScreen#B *java/lang/String#B9#com/example/shop/MainScreen#show().BZ !com/example/shop/Steps#B)com/example/shop/Steps#third().BÒ
+á
+3shop/src/main/java/com/example/shop/MainScreen.java0com/example/shop/MainScreen#BZ 3'com/example/shop/MainScreen#`<init>`().B&com/example/shop/BaseScreen#B *java/lang/String#B9#com/example/shop/MainScreen#show().BZ !com/example/shop/Steps#B)com/example/shop/Steps#third().Bjava/lang/String#B;%com/example/shop/MainScreen#render().BZ
+ !com/example/shop/Steps#B	* com/example/shop/Steps#fourth().B	Ò
 com/example/shop/MainScreen#0A screen: it extends Widget through BaseScreen. " 
 com/example/shop/BaseScreen#"
 com/example/shop/Widget#(2
 MainScreen:2"java**public class MainScreen extends BaseScreenP
 'com/example/shop/MainScreen#`<init>`().(	2<init>:"java*public MainScreen()K
-#com/example/shop/MainScreen#show().(2show:"java*public String show()"java
+#com/example/shop/MainScreen#show().(2show:"java*public String show()R
+%com/example/shop/MainScreen#render().(2render:"java*private String render()"java

@@ -5,4 +5,8 @@ public class MainScreen extends BaseScreen {
     public String show() {
         return Steps.third();
     }
+
+    private String render() {
+        return Steps.fourth();
+    }
 }
