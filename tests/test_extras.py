@@ -395,6 +395,8 @@ def test_check_refs(sample_copy, tmp_path):
 - Partial and wrong packages: `model.Account#uid`, `com.example.Account`, `Outer$Inner#run()`.
 - Again: `Entity.reload()`.
 - Not indexed but there: `tools/Probe.java`, `Migrate.java`.
+- Paths here: `M/` = `core/src/main/java/com/example/model/`; `M/Account.java` and `X_main.java`.
+- Cut names: …Old.setValue(1) is not a type.
 - Constants, nested types, examples: `Service.DEFAULT.getState()`, `Service.NOPE.get()`,
   `Account.build()`, por ejemplo `Fulano.prefix()`; `Gone.java` borrado.
 ```python
@@ -412,7 +414,7 @@ svc = Client.__init__(url=None)  # Python: Entity.get_connection(x)
     out = svc.check_refs()
     assert "9 problems: " in out and "2 members not found" in out, out
     assert "Service.NOPE.get()  — Service has no member NOPE" in out
-    for x in ("Probe", "Migrate", "DEFAULT", "Account.build", "Fulano", "borrado", "__init__", "get_connection", "ancient"):
+    for x in ("M/Account", "X_main", "no type Old", "Probe", "Migrate", "DEFAULT", "Account.build", "Fulano", "borrado", "__init__", "get_connection", "ancient"):
         assert x not in out, x
     assert "1 files under archive folders" in out
     assert "no setState(String) in Entity: its overloads take (int)" in out

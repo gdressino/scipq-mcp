@@ -484,12 +484,13 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
                 elements = x.get("elements", [])
                 xml.append(([files] if isinstance(files, str) else list(files),
                             [elements] if isinstance(elements, str) else list(elements)))
-        if ep.get("supertypes") and ep.get("type_names"):
+        if ep.get("supertypes") and ep.get("type_names") and \
+                ep.get("match") not in ("all", "any"):
             s.warnings.append(
                 f"{origin or 'config'}: the entry_points rule {str(ep.get('kind', 'entry'))!r} "
                 "gives supertypes and type_names: since 0.6 impact and changed need both to "
-                "hold (dead_code keeps a class matching either); split it into two rules if "
-                "either should do")
+                "hold (dead_code keeps a class matching either); say match = \"all\" to keep "
+                "that, or match = \"any\" for either")
         s.entry_specs.append({
             "kind": str(ep.get("kind", "entry")),
             "annotations": {to_symbol(a) for a in ep.get("annotations", [])},
@@ -498,6 +499,7 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
             "xml": xml,
             # false: keeps code alive for dead_code, but is not an entry point to list
             "reached": ep.get("reached", True) is not False,
+            "match": "any" if ep.get("match") == "any" else "all",
             # types named as X.class in an annotation's attribute: @Route(layout = X.class)
             "referenced_by": [(to_symbol(r["annotation"]), str(r.get("attribute", "value")))
                               for r in ep.get("referenced_by", [])

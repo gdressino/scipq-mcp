@@ -730,6 +730,11 @@ class Graph:
                                                               & spec["supertypes"])
                     ok_name = not spec["type_names"] or any(
                         fnmatch.fnmatch(S.name_of(t), g) for g in spec["type_names"])
+                    if spec.get("match") == "any" and spec["supertypes"] and \
+                            spec["type_names"]:
+                        ok_super = ok_name = (bool(supers.get(t, set()) & spec["supertypes"])
+                                              or any(fnmatch.fnmatch(S.name_of(t), g)
+                                                     for g in spec["type_names"]))
                     if (spec["supertypes"] or spec["type_names"]) and ok_super and ok_name \
                             and not abstract(t):
                         sup = sorted(supers.get(t, set()) & spec["supertypes"])

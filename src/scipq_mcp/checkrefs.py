@@ -28,9 +28,9 @@ from .index import REL_IMPLEMENTATION
 
 # Type#member(…) / Type.member(…) / Type.member — Type starts upper case, may be qualified or
 # nested (Outer.Inner).
-_HASH = re.compile(r"(?<![\w$.])((?:[a-z_][\w$]*\.)*[A-Z][\w$]*(?:\.[A-Z][\w$]*)*)#"
+_HASH = re.compile(r"(?<![\w$.…])((?:[a-z_][\w$]*\.)*[A-Z][\w$]*(?:\.[A-Z][\w$]*)*)#"
                    r"([A-Za-z_$][\w$]*)(\(([^()]*)\))?")
-_DOT_CALL = re.compile(r"(?<![\w$.])((?:[a-z_][\w$]*\.)*[A-Z][\w$]*(?:\.[A-Z][\w$]*)*)\."
+_DOT_CALL = re.compile(r"(?<![\w$.…])((?:[a-z_][\w$]*\.)*[A-Z][\w$]*(?:\.[A-Z][\w$]*)*)\."
                        r"([a-z_$][\w$]*)\(([^()]*)\)?")
 # Not members: file extensions and class literals (Foo.feature, Foo.class).
 _NOT_MEMBERS = {"class", "java", "feature", "md", "xml", "sql", "json", "properties", "txt",
@@ -61,7 +61,7 @@ _BUILTIN_MEMBERS = {
     "getModifiers", "isEnum", "isInterface", "isRecord", "getEnumConstants",
     "getRecordComponents", "getClassLoader", "length"}
 _ENHANCER = re.compile(r"(dn|jdo)[A-Z_]\w*")
-_GONE = re.compile(r"no existen?\b|ya no (existe|est[aá])|no est[aá] m[aá]s|does(?: not|n't) "
+_GONE = re.compile(r"no existen?\b|\bni existen?\b|ya no (existe|est[aá])|no est[aá] m[aá]s|does(?: not|n't) "
                    r"exist|no longer|\bremoved\b|\bdeleted\b|\brenamed\b|\bdropped\b|"
                    r"eliminad[oa]s?\b|borrad[oa]s?\b|renombrad[oa]s?\b|retirad[oa]s?\b|"
                    r"quitad[oa]s?\b|se (borr|elimin|quit|retir|renombr)(ó|o|aron)\b|"
@@ -159,6 +159,7 @@ class Model:
                     con.close()
                 except sqlite3.Error:
                     pass
+            self._library |= _jar_class_names(used - {"java/lang", "java/util"})
         return self._library
 
     def is_library(self, simple: str) -> bool:
@@ -280,6 +281,34 @@ class Model:
         at = [_qualified(t) for t in self.types.get(simple, [])]
         return f" ({simple} is at {', '.join(at[:2])}{' …' if len(at) > 2 else ''})" if at \
             else ""
+
+
+def _jar_class_names(roots: set[str], max_jars: int = 400) -> set[str]:
+    """Simple names of the classes in the binary jars of these package roots (org/datanucleus)
+    in the Gradle and Maven caches: library classes whose sources are not downloaded."""
+    import glob
+    import zipfile
+    home = os.path.expanduser("~")
+    gradle = os.environ.get("GRADLE_USER_HOME") or os.path.join(home, ".gradle")
+    out: set[str] = set()
+    seen = 0
+    for r in sorted(roots):
+        group = r.replace("/", ".")
+        paths = glob.glob(os.path.join(gradle, "caches", "modules-2", "files-2.1", group + "*",
+                                       "*", "*", "*", "*.jar")) + \
+            glob.glob(os.path.join(home, ".m2", "repository", r, "**", "*.jar"), recursive=True)
+        for jar in paths:
+            if jar.endswith(("-sources.jar", "-javadoc.jar")) or seen >= max_jars:
+                continue
+            seen += 1
+            try:
+                with zipfile.ZipFile(jar) as z:
+                    for n in z.namelist():
+                        if n.endswith(".class") and "$" not in n:
+                            out.add(n.rsplit("/", 1)[-1][:-len(".class")])
+            except (OSError, zipfile.BadZipFile):
+                continue
+    return out
 
 
 def _pkg_path(sym: str) -> str:
@@ -408,6 +437,8 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
         except OSError:
             continue
         fence = None                 # the language of the fenced block we are in
+        # Path abbreviations the document declares: `I/` = `core/src/…/billing/`
+        abbrev = {k: v for k, v in re.findall(r"`([\w.-]+/)`\s*=\s*`([^`\s]+/)`", text)}
         for ln, line in enumerate(text.split("\n"), 1):
             f = _FENCE.match(line)
             if f:
@@ -458,7 +489,7 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                 checked += 1
                 at[0] = mo.start()
                 _check_path(m, root, mo, by_suffix, sources | unindexed, named_here, line,
-                            code, count_lines, add, text_cache, os.path.dirname(path))
+                            code, count_lines, add, text_cache, os.path.dirname(path), abbrev)
     return problems, checked, len(files), archived
 
 
@@ -515,8 +546,13 @@ def _with_header(root: str, src: str, lo: int, cache: dict) -> int:
 
 
 def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, code,
-                count_lines, add, text_cache: dict, doc_dir: str = "") -> None:
+                count_lines, add, text_cache: dict, doc_dir: str = "",
+                abbrev: dict | None = None) -> None:
     written, n0 = mo.group(1), mo.group(2)
+    for k, v in (abbrev or {}).items():
+        if written.startswith(k):
+            written = v + written[len(k):]
+            break
     hits = _find_path(written, by_suffix, sources)
     if not hits:
         for base_dir in ("", doc_dir):      # from the checkout, or from the document
@@ -536,8 +572,10 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         bare = written.lstrip("./")
         stem = base[:-len(".java")]
         if bare.startswith(_JDK_ROOTS) or _placeholder_type(stem) or \
-                (stem not in m.types and m.is_library(stem)):
-            return
+                (stem not in m.types and m.is_library(stem)) or \
+                re.search(r"(?i)(?:_(?:main|old|new|copy|bak|orig|tmp)$|^(?:main|old|copy)_)",
+                          stem):
+            return          # a library's, a placeholder, a scratch copy (X_main.java)
         pkg_like = re.match(r"(?:.*/)?((?:org|com|net|io|ar|es)/[\w$]+)/", bare)
         if pkg_like and pkg_like.group(1) not in m.roots and "src/" not in bare:
             return          # another project's or a library's package path
@@ -726,6 +764,11 @@ def _is_library_like(written: str) -> bool:
                                      "Duration", "BigDecimal", "Thread", "Class")
 
 
+def _cut(text: str, width: int = 80) -> str:
+    """A long mention cut in the middle, so that its end (a line number) stays."""
+    return text if len(text) <= width else text[:width // 2 - 1] + "…" + text[-(width // 2):]
+
+
 def render(problems: list[Problem], checked: int, nfiles: int, offset: int, limit: int,
            fmt: str = "text", archived: int = 0) -> str:
     if not nfiles:
@@ -760,7 +803,7 @@ def render(problems: list[Problem], checked: int, nfiles: int, offset: int, limi
             for key in by_file[f]:
                 lines = merged[key]
                 cell = ", ".join(str(x) for x in lines[:6]) + (" …" if len(lines) > 6 else "")
-                rows.append(f"| {f} | {cell} | `{key[1][:80]}` | {key[2].replace('|', '/')} |")
+                rows.append(f"| {f} | {cell} | `{_cut(key[1])}` | {key[2].replace('|', '/')} |")
         shown = rows[:2] + rows[2:][offset:offset + limit]
         more = offset + limit < len(rows) - 2
         return "\n".join([head, ""] + shown + ([f"\nnext offset {offset + limit}"] if more
@@ -773,7 +816,7 @@ def render(problems: list[Problem], checked: int, nfiles: int, offset: int, limi
             at = f"line {lines[0]}" + (
                 f" ×{len(lines)} (also {', '.join(map(str, lines[1:4]))}"
                 f"{' …' if len(lines) > 4 else ''})" if len(lines) > 1 else "")
-            rows.append(f"  {at}  {key[1][:80]}  — {key[2]}")
+            rows.append(f"  {at}  {_cut(key[1])}  — {key[2]}")
     lines_out = [head + " (by file):"] + rows[offset:offset + limit]
     if offset + limit < len(rows):
         lines_out.append(f"next offset {offset + limit}")

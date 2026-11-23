@@ -319,11 +319,14 @@ class Model:
         f.mapped_by, _ = self._spec_value(anns, self.st.persistence_attrs.get("mapped_by", []))
         for a, args in anns:
             if S.name_of(a) == "Column":
-                for attr, label in (("length", "length"), ("allowsNull", "allowsNull"),
-                                    ("nullable", "nullable"), ("jdbcType", "jdbcType")):
+                for attr in ("length", "allowsNull", "nullable", "jdbcType", "defaultValue"):
                     v = self.attribute(args, attr)
                     if v:
-                        f.details.append(f"{label} {v}")
+                        f.details.append(f"{attr} {v}")
+            if S.name_of(a) == "Persistent":
+                v = self.attribute(args, "defaultFetchGroup")
+                if v:
+                    f.details.append(f"defaultFetchGroup {v}")
         # A join table: its name and columns (JDO @Join/@Element, JPA @JoinTable).
         for a, args in anns:
             n = S.name_of(a)
@@ -431,8 +434,9 @@ def render_entity(m: Model, e: Entity, offset: int, limit: int) -> str:
                      + ", ".join(S.short(x) for x in e.subclasses[:12])
                      + (" …" if len(e.subclasses) > 12 else ""))
     keys = [f.name for f in e.fields if f.key]
-    lines.append("  identity: " + (", ".join(keys) if keys else "not declared in the fields "
-                                   "(datastore identity, or in a superclass)"))
+    lines.append("  identity: " + (", ".join(keys) if keys else
+                                   "not declared (datastore identity: the JDO default)"
+                                   if not e.superclass else "from the superclass"))
     persistent = [f for f in e.fields if f.persistent]
     rows = []
     for f in persistent:
@@ -634,7 +638,15 @@ def render_by_name(b: ByName, owner: str, offset: int, limit: int) -> list[str]:
             tier = t
             title = TIERS[t].format(owner=S.name_of(owner))
             if t == 2:
-                title += f" ({', '.join(a + '.' for a in b.aliases[:8])})"
+                used: dict[str, int] = {}
+                for tt, _s, _l, row_text in b.rows:
+                    if tt == 2:
+                        for a_ in b.aliases:
+                            if re.search(r"(?<![\w$])" + re.escape(a_) + r"\s*\.", row_text):
+                                used[a_] = used.get(a_, 0) + 1
+                top = sorted(used, key=lambda k: (-used[k], k))
+                title += f" ({', '.join(f'{a_}. {used[a_]}' for a_ in top[:6])}" + (
+                    f", {len(top) - 6} more names" if len(top) > 6 else "") + ")"
             lines.append(f"  {title}:")
         lines.append(f"    {src}:{line}  {text[:140]}")
     if offset + limit < len(b.rows):

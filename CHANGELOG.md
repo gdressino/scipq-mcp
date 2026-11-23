@@ -73,7 +73,7 @@ version and date when releasing.
   for a mappedBy collection, the join table and its columns; relations typed with an
   interface that one entity implements, and the mappedBy field on the other side; a version
   declared on the class (strategy, column, field), converters, unique constraint names,
-  length and nullability. A field: its column and relation, its accessors, who writes and
+  length, nullability, default values and the default fetch group. A field: its column and relation, its accessors, who writes and
   reads it (setters, Lombok's too, and assignments) and the lines that use it by name,
   ranked: strings in its type's own files (forms, annotations), paths through relations to
   the type, step tables that name the type, other strings read as code, other mentions; map
@@ -85,8 +85,8 @@ version and date when releasing.
 
 - An `[[entry_points]]` rule that gives both `supertypes` and `type_names` now needs both to
   hold for the entry points `impact` and `changed` list (`dead_code` still keeps a class
-  that matches either). `doctor` and the configuration warnings flag such rules: split one
-  into two rules if either should do.
+  that matches either). `doctor` and the configuration warnings flag such rules unless
+  they say `match = "all"` (both) or `match = "any"` (either).
 
 ### Fixed
 
