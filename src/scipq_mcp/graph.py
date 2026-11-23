@@ -149,8 +149,8 @@ class Graph:
         javadoc hold the query's words (as stems: prefixes, accents and plurals ignored). Every
         match counts, so the order does not depend on `limit`; the owner's name only adds to a
         member that matches by itself."""
-        stems = concept_terms(query)
-        if not stems:
+        groups = concept_terms(query)
+        if not groups:
             return []
         cond = ("" if include_tests else " AND s.test = 0") + \
             ("" if include_generated else " AND m.generated = 0")
@@ -164,15 +164,19 @@ class Graph:
         # One query per word (its family of prefixes), to know how many of the words each
         # definition holds: a definition with all of them beats one word in a name.
         total: dict[int, float] = {}
-        covered: dict[int, int] = {}
+        covered: dict[int, float] = {}
         try:
-            for stem_ in stems:
-                q = " OR ".join(f'"{v}"*' for v in prefix_family(stem_))
+            for group in groups:
+                q = " OR ".join(f'"{v}"*' for v in group)
                 name_of: dict[int, float] = {}
                 for sid, score in scores("concept_names", "", q):
                     name_of[sid] = max(name_of.get(sid, 0.0), -score)
                 text_of: dict[int, list[float]] = {}
-                for sid, score in scores("concepts", ", 5.0, 2.0, 4.0", q):   # ann, sig, calls
+                said: set[int] = set()      # in an annotation's text or a label
+                for sid, score in scores("concepts", ", 5.0, 2.0, 4.0", f"{{ann calls}} : ({q})"):
+                    text_of.setdefault(sid, []).append(-score)
+                    said.add(sid)
+                for sid, score in scores("concepts", ", 5.0, 2.0, 4.0", f"sig : ({q})"):
                     text_of.setdefault(sid, []).append(-score)
                 doc_of: dict[int, float] = {}
                 for sid, score in scores("concept_docs", "", q):
@@ -183,10 +187,14 @@ class Graph:
                     # others (labels from many call sites); then the javadoc.
                     total[sid] = total.get(sid, 0.0) + 3.0 * name_of.get(sid, 0.0) + \
                         (v[0] if v else 0.0) + 0.2 * sum(v[1:4]) + 0.5 * doc_of.get(sid, 0.0)
-                    covered[sid] = covered.get(sid, 0) + 1
+                    # How surely the definition is about this word: its name says it, its
+                    # annotations or labels, or only its signature (a parameter's type) or
+                    # javadoc.
+                    covered[sid] = covered.get(sid, 0.0) + (
+                        1.0 if sid in name_of else 0.8 if sid in said else 0.5)
         except sqlite3.OperationalError:
             return []
-        n_terms = len(stems)
+        n_terms = len(groups)
         for sid in total:
             total[sid] *= (covered[sid] / n_terms) ** 2
         names = self.names(total)
@@ -200,9 +208,9 @@ class Graph:
             if kind and {"field": "term"}.get(kind, kind) != k:
                 continue
             owner = " ".join(words_of_symbol_owner(sym, packages=True))
-            in_owner = sum(1 for t in stems if any(re.search(r"(?:^|\s)" + re.escape(v), owner)
-                                                   for v in prefix_family(t)))
-            score *= 1 + 0.4 * in_owner / len(stems)
+            in_owner = sum(1 for grp in groups if any(re.search(r"(?:^|\s)" + re.escape(v),
+                                                                owner) for v in grp))
+            score *= 1 + 0.4 * in_owner / len(groups)
             score *= (1.6 if k == "type" else 1.25 if k == "method" else
                       0.7 if re.fullmatch(r"[A-Z0-9_$]+", S.name_of(sym) or "") else 1.0)
             scored.append((score, sid, sym))
@@ -227,11 +235,14 @@ class Graph:
                     break
         return out
 
-    def member_hints(self, type_symbol: str, stems: list[str], limit: int = 3) -> list[str]:
+    def member_hints(self, type_symbol: str, groups: list[list[str]], limit: int = 3
+                     ) -> list[str]:
         """Members of a type or its supertypes whose names hold query words the type's own
         name does not: what a query like "the account's name" means (an inherited field)."""
         own = " ".join(words_of_symbol_owner(type_symbol + "x."))
-        missing = [t for t in stems if not re.search(r"(?:^|\s)" + re.escape(t), own)]
+        missing = [v for grp in groups
+                   if not any(re.search(r"(?:^|\s)" + re.escape(x), own) for x in grp)
+                   for v in grp]
         if not missing:
             return []
         sid = self.ids([type_symbol]).get(type_symbol)
@@ -1152,6 +1163,7 @@ from as into via""".split())
 
 
 _WHOLE: set[str] = set()       # stems that are whole words (nothing was taken off)
+_IES: set[str] = set()         # stems of plurals in -ies (entities, series): + y or + ie
 _KEEP_BASE: set[str] = set()   # stems also searched bare (none for now)
 _SUFFIXES = ("aciones", "iciones", "acion", "icion", "ciones", "cion", "adores", "adoras",
              "ador", "adora", "adas", "ados", "ada", "ado", "ando", "iendo", "ings", "ing",
@@ -1161,11 +1173,14 @@ _SUFFIXES = ("aciones", "iciones", "acion", "icion", "ciones", "cion", "adores",
 def stem(word: str) -> str:
     """A light stem for prefix search (Spanish and English): accents and plurals off, then a
     verb or noun ending: exportar/exportación/exporter -> export, facturas -> factura,
-    enviadas -> envi."""
+    enviadas -> envi, entities -> entit (searched as entity, entitie)."""
     w = "".join(c for c in unicodedata.normalize("NFD", word.lower())
                 if unicodedata.category(c) != "Mn")
-    # Plurals: -es after a consonant that takes it in Spanish (factores, funciones,
-    # ordenes), else -s (clases, states, tickets).
+    # Plurals: -ies (entities -> entity, series -> serie), -es after a consonant that takes
+    # it in Spanish (factores, funciones, ordenes), else -s (clases, states, tickets).
+    if len(w) > 4 and w.endswith("ies"):
+        _IES.add(w[:-3])
+        return w[:-3]
     if len(w) > 4 and w.endswith("es") and w[-3] in "lnrdzj":
         w = w[:-2]
     elif len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
@@ -1194,23 +1209,42 @@ def prefix_family(stem_: str) -> list[str]:
     stem followed by the starts of its usual endings (import -> importac, importar, importad,
     importer…), so that it does not match words that only share the start (importe)."""
     base = stem_
+    if base in _IES:
+        return [base + "y", base + "ie"]
     if len(base) < 4 or base in _WHOLE:
         return [base]
     fam = [base + x for x in ("ac", "ar", "ad", "er", "ing", "ion", "ed", "or", "ab", "ib")]
     return fam + [base] if base in _KEEP_BASE else fam
 
 
-def concept_terms(query: str) -> list[str]:
-    """The stems a concept query searches (one per word: no stopwords, identifiers split)."""
+def _plain(text: str) -> str:
+    """Lowercase words without accents, camelCase split: "Facturas Pendientes"."""
     from .index import words_of
-    out: list[str] = []
-    for tok in re.findall(r"[^\W_]+", query, re.UNICODE):
-        for w in (words_of(tok).split() if any(c.isupper() for c in tok[1:]) else [tok.lower()]):
+    words = []
+    for tok in re.findall(r"[^\W_]+", text, re.UNICODE):
+        words += words_of(tok).split() if any(c.isupper() for c in tok[1:]) else [tok.lower()]
+    return " ".join("".join(c for c in unicodedata.normalize("NFD", w)
+                            if unicodedata.category(c) != "Mn") for w in words)
+
+
+def concept_terms(query: str) -> list[list[str]]:
+    """What a concept query searches: one group of prefixes per word. Forms written by the
+    caller as alternatives (pago|pagar|payment) are searched as given, as prefixes (a
+    singular finds its plural); a word alone is reduced to a light stem and its usual
+    endings (see stem and prefix_family). Stopwords and identifiers split as for names."""
+    out: list[list[str]] = []
+    for tok in query.split():
+        if "|" in tok:
+            group = [v for v in dict.fromkeys(_plain(x) for x in tok.split("|")) if v]
+            if group and group not in out:
+                out.append(group)
+            continue
+        for w in _plain(tok).split():
             if len(w) < 2 or w in _STOPWORDS:
                 continue
-            st = stem(w)
-            if st not in out:
-                out.append(st)
+            group = prefix_family(stem(w))
+            if group not in out:
+                out.append(group)
     return out[:12]
 
 

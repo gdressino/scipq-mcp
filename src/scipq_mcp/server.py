@@ -508,8 +508,9 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
     @tool
     def concepts(
         query: Annotated[str, Field(description="Words for what you look for, in the code's "
-                                                "language: 'alta de cliente', 'retry "
-                                                "payment', 'audit log'")],
+                                                "language; a word's forms and synonyms as "
+                                                "alternatives with |: 'alta|crear cliente', "
+                                                "'retry|reintento payment|pago', 'audit log'")],
         project_root: ProjectRoot = "",
         kind: Annotated[Literal["any", "type", "method", "field"], Field(
             description="Only this kind of definition")] = "any",
@@ -522,8 +523,11 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
     ) -> str:
         """Definitions about something, when you do not know their names: words of their
         names (camelCase split), owners, annotation texts (columns, paths, step texts…),
-        signatures and javadoc, ranked; accents ignored, words also as prefixes. Word
-        matching, not meaning: try the project's own vocabulary and synonyms."""
+        signatures and javadoc, ranked by how many of the words they hold and how surely.
+        Word matching, not meaning: write each word's forms yourself as alternatives
+        (pago|pagar|payment: other stems, synonyms, the other language), each searched as a
+        prefix with accents ignored (a singular finds its plural); a word alone is reduced
+        to a light stem."""
         return service.concepts(query, project_root, kind, scope, include_tests, offset, limit,
                                 include_generated)
 

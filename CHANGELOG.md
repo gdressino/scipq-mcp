@@ -11,9 +11,13 @@ version and date when releasing.
   not known. The auxiliary index (schema 8) keeps one FTS5 row per definition: its name split
   into words, its owner, its annotations' texts, its signature, its javadoc, and the labels
   other code gives a type where it registers it (the strings of a call that names `X.class`).
-  Stopwords left out, words also as prefixes and in a light singular, ranked by bm25 (the name
-  first, types before methods before fields, constants last); tests, files whose header says
-  they are generated and `[concepts] exclude` paths are left out unless asked.
+  Each word is searched as a prefix with accents ignored; the caller writes a word's forms
+  and synonyms as alternatives (`pago|pagar|payment`), and a word alone is reduced to a
+  light stem (plurals and common Spanish and English endings off). Ranked by how many of the
+  query's words a definition holds and how surely (its name, then annotations and labels,
+  then signature or javadoc), then bm25, types before methods before fields, constants last,
+  words in the owner or package as a bonus; tests, files whose header says they are
+  generated and `[concepts] exclude` paths are left out unless asked.
 - `doctor()`: a checklist of what can make the index wrong or the tools weak: the plugin's
   setup, tracked `.java` files without shards (next to compiled ones, or where nothing
   compiles), classes built after the shards (an IDE build, the plugin off) and shards without

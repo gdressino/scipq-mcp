@@ -1313,12 +1313,16 @@ def concepts(query: str, terms: list[str], rows, docs: dict, offset: int, limit:
              more: bool, hints: dict | None = None) -> str:
     if not terms:
         return f"no words to search in {query!r}"
+    searched = " ".join("|".join(v + "*" for v in grp) for grp in terms)
+    tip = "" if "|" in query else (
+        "\n(each word was reduced to a stem; write a word's forms and synonyms as "
+        "alternatives to search exactly those: pago|pagar|payment)")
     if not rows:
-        return (f"no definition mentions {', '.join(terms)} (in names, owners, annotations, "
-                "signatures or javadoc; tests left out unless include_tests)")
-    lines = [f"definitions about {' '.join(t + '*' for t in terms)} (best first: their own "
-             f"name, annotations and labels, signature, javadoc, then the owner's name; words as "
-             f"stems; tests and generated files left out unless asked):"]
+        return (f"no definition mentions {searched} (in names, owners, annotations, "
+                "signatures or javadoc; tests left out unless include_tests)" + tip)
+    lines = [f"definitions about {searched} (best first: the more words, and the surer "
+             f"(name, then annotations and labels, then signature or javadoc), the better; "
+             f"tests and generated files left out unless asked):"]
     for k, (sym, score, d) in enumerate(rows, offset + 1):
         src, line, _mod, test, sig = d
         kind = {"term": "field"}.get(S.kind_of(sym), S.kind_of(sym) or "symbol")
@@ -1332,7 +1336,7 @@ def concepts(query: str, terms: list[str], rows, docs: dict, offset: int, limit:
             lines.append(f"       members about the other words: {', '.join(hints[sym])}")
     if more:
         lines.append(f"next offset {offset + limit}")
-    return "\n".join(lines)
+    return "\n".join(lines) + tip
 
 
 def cucumber_affected(run, reached: int) -> str:

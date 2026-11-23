@@ -507,3 +507,25 @@ def test_concepts(sample_copy, tmp_path):
     assert "ServiceTest" not in svc.concepts("service test") and \
         "ServiceTest" in svc.concepts("service test", include_tests=True)
     assert "no words to search" in svc.concepts("de la")
+    # Alternatives: each group is one word of the query, its forms searched as written.
+    out = svc.concepts("lifecycle|lifecycles state|status")
+    assert "definitions about lifecycle*|lifecycles* state*|status*" in out
+    assert out.index("Entity#setState()") < out.index("Entity#getState()")
+    assert "write a word's forms" not in out and "write a word's forms" in svc.concepts("state")
+
+
+def test_concept_stems_and_prefix_families():
+    from scipq_mcp.graph import concept_terms, prefix_family, stem
+    assert stem("facturas") == "factura" and prefix_family("factura") == ["factura"]
+    assert stem("clases") == "clase" and stem("states") == "state"    # -s, not -es
+    assert stem("funciones") == stem("función") == "func"
+    assert stem("exportación") == stem("exportar") == stem("exporter") == "export"
+    fam = prefix_family("export")
+    assert "exportac" in fam and "exporter" in fam and "export" not in fam   # not "exporte"
+    assert prefix_family(stem("entities")) == ["entity", "entitie"]
+    assert prefix_family(stem("series")) == ["sery", "serie"]
+    assert concept_terms("envío de la facturaPendiente") == [["envio"], ["factura"], ["pendiente"]]
+    # Forms given as alternatives are searched as written (one word of the query each).
+    assert concept_terms("Pago|pagar|payment de pedidos") == [
+        ["pago", "pagar", "payment"], ["pedido"]]
+    assert concept_terms("exportación|export") == [["exportacion", "export"]]
