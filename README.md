@@ -236,8 +236,9 @@ references to JDK and library symbols (smaller, slower to build).
 ### Profiles and project configuration
 
 Framework knowledge is declarative. Built-in profiles — `junit`, `spring`, `jaxrs`, `vaadin`,
-`cucumber`, `jpa`, `jdo` — list entry points (annotations, supertypes, type names) and the
-persistence model; with no configuration, the profiles whose annotations appear in the project
+`servlet`, `cucumber`, `jpa`, `jdo` — list entry points (annotations, supertypes, type names,
+classes named in XML descriptors such as `web.xml`) and the persistence model. `impact` and
+`changed` list the entry points a change reaches, by kind (screens, endpoints, jobs…); with no configuration, the profiles whose annotations appear in the project
 are used. A configuration file (`--config FILE`, default `$XDG_CONFIG_HOME/scipq/config.toml`)
 picks profiles and project settings per checkout:
 
@@ -257,7 +258,17 @@ globs = ["*.java", "*.xml"]
 exclude = ["ws-client/src/*"]              # generated code: never dead-code candidates
 
 [[project.entry_points]]
-type_names = ["*Screen"]
+kind = "screen"                            # shown by impact and changed
+type_names = ["*Screen"]                   # with supertypes too, a type must match both
+supertypes = ["com.vaadin.ui.Component"]
+
+[[project.entry_points]]
+kind = "job"                               # started by reflection: kept by dead_code too
+supertypes = ["com.example.jobs.Job"]
+
+[[project.entry_points.xml]]               # classes named in XML files
+files = ["**/WEB-INF/web.xml"]
+elements = ["servlet-class"]
 ```
 
 When several entries match, `path` beats `root_project`, which beats `git_remote`. Your own

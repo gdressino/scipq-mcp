@@ -26,6 +26,12 @@ version and date when releasing.
   not there (with the closest names), parameter lists no overload has, ambiguous names,
   missing files, lines past the end and line numbers that no longer fall in the symbol named
   next to them, by folder.
+- `impact` and `changed` list the entry points the change reaches, by kind (screens,
+  endpoints, jobs, servlets, steps…), with their depth and what identifies them (an
+  annotation's first string, the supertype, the descriptor). An `[[entry_points]]` rule may
+  combine `supertypes` and `type_names` (a type must match both) and name classes listed in
+  XML files (`[[entry_points.xml]] files, elements`); `dead_code` keeps those classes too.
+  A `servlet` profile (annotations and `web.xml`), and Vaadin 7/8 UIs and views in `vaadin`.
 
 ## 0.5.0 — 2026-11-23
 

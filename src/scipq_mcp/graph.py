@@ -344,6 +344,85 @@ class Graph:
         return sorted(nodes.values(), key=lambda n: (n.depth, n.module, n.source, n.line)), \
             truncated
 
+    def entry_points(self, nodes: list[Node], specs: list[dict], root: str
+                     ) -> list[tuple[str, Node, str]]:
+        """[(kind, node, detail)] for the reached nodes that are entry points by a profile's
+        [[entry_points]]: the member or its type carries one of the annotations, or the type
+        extends one of the supertypes and/or has a name matching type_names (both, when both
+        are given), or is named in a deployment descriptor (xml). `detail` is the first string
+        of the matching annotation (a path, a step text) or the rule that matched."""
+        if not nodes or not specs:
+            return []
+        syms = {n.symbol for n in nodes if n.symbol}
+        owners = {S.owner_type(x) for x in syms if S.owner_type(x)}
+        ids = self.ids(syms | owners)
+        by_id = {v: k for k, v in ids.items()}
+        anns: dict[str, list[tuple[str, int, int]]] = {}
+        if ids:
+            q = ",".join("?" * len(ids))
+            for def_id, ann, shard_id, line in self.con.execute(
+                    f"SELECT a.def_id, s.symbol, a.shard_id, a.line FROM annotations a JOIN "
+                    f"symbols s ON s.id = a.annotation_id WHERE a.def_id IN ({q})",
+                    list(ids.values())):
+                anns.setdefault(by_id[def_id], []).append((ann, shard_id, line))
+        supers: dict[str, set[str]] = {}
+        for t in owners:
+            if t in ids:
+                supers[t] = set(self.names(self.ancestors(ids[t])).values())
+        xml_types = {}
+        for k, spec in enumerate(specs):
+            if spec.get("xml"):
+                xml_types[k] = _xml_classes(root, spec["xml"])
+        sh = self.shards()
+        texts: dict[str, list[str]] = {}
+
+        def first_string(sym: str, ann: str) -> str:
+            for a, shard_id, line in anns.get(sym, []):
+                if a != ann or shard_id not in sh:
+                    continue
+                src = sh[shard_id][0]
+                if src not in texts:
+                    try:
+                        with open(os.path.join(root, src), encoding="utf-8",
+                                  errors="replace") as fh:
+                            texts[src] = fh.read().split("\n")
+                    except OSError:
+                        texts[src] = []
+                args = _annotation_args(texts[src], line, S.name_of(ann))
+                m = re.search(r'"((?:[^"\\]|\\.)*)"', args)
+                return m.group(1)[:80] if m else ""
+            return ""
+        out = []
+        for n in nodes:
+            sym = n.symbol
+            owner = S.owner_type(sym)
+            for k, spec in enumerate(specs):
+                detail = None
+                for target in (sym, owner):
+                    hit = [a for a, _s, _l in anns.get(target, []) if a in spec["annotations"]]
+                    if hit:
+                        detail = "@" + S.name_of(hit[0])
+                        text = first_string(target, hit[0])
+                        if text:
+                            detail += f'("{text}")'
+                        break
+                if detail is None and S.kind_of(sym) in ("type", "constructor", "method"):
+                    t = owner if owner else sym
+                    ok_super = not spec["supertypes"] or bool(supers.get(t, set())
+                                                              & spec["supertypes"])
+                    ok_name = not spec["type_names"] or any(
+                        fnmatch.fnmatch(S.name_of(t), g) for g in spec["type_names"])
+                    if (spec["supertypes"] or spec["type_names"]) and ok_super and ok_name:
+                        sup = sorted(supers.get(t, set()) & spec["supertypes"])
+                        detail = (f"extends {S.short(sup[0])}" if sup else "named like "
+                                  + "/".join(spec["type_names"]))
+                    elif t in xml_types.get(k, {}):
+                        detail = f"in {xml_types[k][t]}"
+                if detail is not None:
+                    out.append((spec["kind"], n, detail))
+                    break
+        return out
+
     def path(self, src: str, dst: str, max_depth: int = 6, limit: int = 3,
              max_nodes: int = 100000) -> list[list[tuple[str, list[int]]]]:
         """Shortest call chains from `src` to `dst` ([(symbol, lines where it calls the next)]),
@@ -534,7 +613,8 @@ class Graph:
 
     def dead_code(self, scope: str = "", public_is_api: bool = False,
                   include_tests: bool = False, entry_annotations=(), entry_supertypes=(),
-                  entry_type_names=(), entry_packages=(), by_name_globs=DEAD_CODE_GLOBS,
+                  entry_type_names=(), entry_packages=(), entry_xml=(),
+                  by_name_globs=DEAD_CODE_GLOBS,
                   by_name_exclude=(), root: str = "", exclude_paths=()) -> list[tuple]:
         """Candidates: project definitions nobody references. Left out: overrides and what is
         overridden (dispatch), Lombok-generated members and fields with generated accessors that
@@ -562,6 +642,8 @@ class Graph:
             annotated[def_id].add(ann)
         entry = set(entry_annotations)
         entry_types = self._subtypes_of(set(entry_supertypes)) if entry_supertypes else set()
+        if entry_xml and root:   # classes a deployment descriptor names (web.xml servlets…)
+            entry_types |= set(_xml_classes(root, list(entry_xml)))
         used_accessors = self._used_generated_accessors()
         rows = list(rows)
         owner_ids = self.ids({S.parent(r[1]) for r in rows})
@@ -901,6 +983,35 @@ def _lines(sites: str) -> list[int]:
         if s:
             out.append(int(s.split(":", 1)[0]) + 1)
     return sorted(set(out))
+
+
+def _xml_classes(root: str, rules: list) -> dict[str, str]:
+    """{type symbol: file} for the classes named by <element>…</element> in matching files
+    (web.xml's servlet-class…), searched with the repository's files."""
+    out: dict[str, str] = {}
+    for files, elements in rules:
+        if not elements:
+            continue
+        rx = re.compile(r"<(" + "|".join(re.escape(e) for e in elements) +
+                        r")>\s*([\w$.]+)\s*</\1>")
+        for path in candidate_files(root, [g.rsplit("/", 1)[-1] for g in files], []):
+            if not any(fnmatch.fnmatch(path, g) or fnmatch.fnmatch(path, g.replace("**/", ""))
+                       for g in files):
+                continue
+            try:
+                with open(os.path.join(root, path), encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            for m in rx.finditer(text):
+                fq = m.group(2).replace("$", ".")
+                parts = fq.split(".")
+                pkg = [p for p in parts if p[:1].islower()]
+                types = parts[len(pkg):]
+                if types:
+                    sym = "/".join(pkg) + "/" + "#".join(types) + "#"
+                    out.setdefault(sym, path)
+    return out
 
 
 _STOPWORDS = set("""de del la las el los lo un una unos unas y o u e en a al para por con sin

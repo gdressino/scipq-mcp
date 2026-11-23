@@ -83,6 +83,9 @@ class Settings:
     entry_supertypes: set[str] = field(default_factory=set)
     entry_type_names: list[str] = field(default_factory=list)  # globs on simple names
     entry_packages: list[str] = field(default_factory=list)    # packages used from outside
+    # The same, one per [[entry_points]] with its kind, for impact: {kind, annotations,
+    # supertypes, type_names, xml: [(file globs, element names)]}.
+    entry_specs: list[dict] = field(default_factory=list)
     test_annotations: set[str] = field(default_factory=set)    # entry points of kind "test"
     entity_annotations: set[str] = field(default_factory=set)
     table: list[tuple[set[str], str]] = field(default_factory=list)   # (annotations, attribute)
@@ -253,6 +256,13 @@ def sanitize_repo_config(data: dict) -> tuple[dict, list[str]]:
             clean = _capped(value, key, warnings)
             if clean is not None:
                 out[key] = clean
+    for ep in out.get("entry_points", []) if isinstance(out.get("entry_points"), list) else []:
+        if isinstance(ep, dict) and isinstance(ep.get("xml"), list):
+            for x in ep["xml"]:
+                if isinstance(x, dict) and "files" in x:
+                    x["files"] = [g for g in _as_list(x["files"], "entry_points.xml.files",
+                                                      warnings)
+                                  if _relative_glob(g, "entry_points.xml.files", warnings)]
     cc = out.get("concepts")
     if isinstance(cc, dict) and "exclude" in cc:
         cc["exclude"] = [g for g in _as_list(cc["exclude"], "concepts.exclude", warnings)
@@ -449,6 +459,21 @@ def settings_for(root: str, config_file: str | None = None, home: str | None = N
 
 def _apply(s: Settings, data: dict, origin: str = "") -> None:
     for ep in data.get("entry_points", []):
+        if not isinstance(ep, dict):
+            continue
+        xml = []
+        for x in ep.get("xml", []) if isinstance(ep.get("xml"), list) else []:
+            if isinstance(x, dict):
+                files = x.get("files", [])
+                elements = x.get("elements", [])
+                xml.append(([files] if isinstance(files, str) else list(files),
+                            [elements] if isinstance(elements, str) else list(elements)))
+        s.entry_specs.append({
+            "kind": str(ep.get("kind", "entry")),
+            "annotations": {to_symbol(a) for a in ep.get("annotations", [])},
+            "supertypes": {to_symbol(t) for t in ep.get("supertypes", [])},
+            "type_names": list(ep.get("type_names", [])),
+            "xml": xml})
         s.entry_annotations |= {to_symbol(a) for a in ep.get("annotations", [])}
         s.entry_packages += list(ep.get("packages", []))
         if ep.get("kind") == "test":

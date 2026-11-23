@@ -1,0 +1,14 @@
+[profile]
+name = "servlet"
+description = "Java Servlets: annotated, or declared in web.xml"
+
+[[entry_points]]
+kind = "servlet"
+annotations = ["jakarta.servlet.annotation.WebServlet", "jakarta.servlet.annotation.WebFilter",
+               "jakarta.servlet.annotation.WebListener", "javax.servlet.annotation.WebServlet",
+               "javax.servlet.annotation.WebFilter", "javax.servlet.annotation.WebListener"]
+
+# Classes named in deployment descriptors.
+[[entry_points.xml]]
+files = ["**/WEB-INF/web.xml", "**/web-fragment.xml"]
+elements = ["servlet-class", "filter-class", "listener-class"]

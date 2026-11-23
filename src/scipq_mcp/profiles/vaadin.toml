@@ -8,3 +8,8 @@ annotations = ["com.vaadin.flow.router.Route", "com.vaadin.flow.router.RouteAlia
                "com.vaadin.flow.component.ClientCallable", "com.vaadin.flow.component.EventHandler"]
 supertypes = ["com.vaadin.flow.server.VaadinServiceInitListener",
               "com.vaadin.flow.server.ServiceInitListener"]
+
+# Vaadin 7/8 (com.vaadin.ui): the UI classes a servlet starts, and views the navigator opens.
+[[entry_points]]
+kind = "screen"
+supertypes = ["com.vaadin.ui.UI", "com.vaadin.navigator.View"]

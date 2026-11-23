@@ -1092,7 +1092,9 @@ class Service:
             d = max(1, min(depth, 10))
             with self._graph(nav) as (g, stats):
                 nodes, trunc = g.impact(sym, d, include_overridden)
-            text = render.impact(sym, nodes, trunc, d, group_by, offset, limit)
+                st = self.settings(nav.ws.root, g)
+                entries = g.entry_points(nodes, st.entry_specs, nav.ws.root)
+            text = render.impact(sym, nodes, trunc, d, group_by, offset, limit, entries)
             return render.index_note(stats) + note + text, {n.source for n in nodes}
         return body
 
@@ -1153,9 +1155,15 @@ class Service:
                     nav.ws.root, base, staged, paths or []).items() if p.endswith(".feature")}
                 cuke = self._cucumber_affected(
                     nav, g, st, set(res["definitions"]) | set(nodes), feature_hunks)
+                entries = g.entry_points([n for n in nodes.values() if n.depth > 0],
+                                         [x for x in st.entry_specs if x["kind"] != "test"],
+                                         nav.ws.root)
             tests_line = self._tests_line(nav.ws.root, tests, st.tests_filter)
             if cuke:
                 tests_line = (tests_line + "\n" if tests_line else "") + cuke
+            if entries:   # screens, endpoints, jobs… to try by hand (tests are listed above)
+                tests_line = "\n".join(render.entry_points(entries)) + (
+                    "\n" + tests_line if tests_line else "")
             text = render.changed(res, base if not staged else f"{base} (staged)",
                                   [n for n in nodes.values() if n.depth > 0], tests_line, depth)
             return render.index_note(stats) + text, {e["source"] for e in
@@ -1197,6 +1205,7 @@ class Service:
                                    entry_supertypes=st.entry_supertypes,
                                    entry_type_names=st.entry_type_names,
                                    entry_packages=st.entry_packages,
+                                   entry_xml=[x for e in st.entry_specs for x in e["xml"]],
                                    by_name_globs=globs, by_name_exclude=st.by_name_exclude,
                                    root=nav.ws.root, exclude_paths=st.dead_code_exclude)
                 suppressed = dict(g.suppressed)

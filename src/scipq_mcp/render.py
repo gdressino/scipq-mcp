@@ -686,8 +686,29 @@ def index_note_plain(stats) -> str:
     return f"-- index updated: {stats.processed} shards, {stats.removed} removed\n"
 
 
+def entry_points(entries, per_kind: int = 12) -> list[str]:
+    """What a change reaches that someone starts from outside: screens, endpoints, jobs…"""
+    if not entries:
+        return []
+    by_kind: OrderedDict[str, list] = OrderedDict()
+    for kind, n, detail in sorted(entries, key=lambda e: (e[0], e[1].depth, e[1].source)):
+        by_kind.setdefault(kind, []).append((n, detail))
+    lines = ["entry points reached (by kind): " + ", ".join(
+        f"{k} {len(v)}" for k, v in sorted(by_kind.items(), key=lambda kv: -len(kv[1])))
+        + (" (tests: listed by tests(transitive=true))" if "test" in by_kind else "")]
+    for kind, items in sorted(by_kind.items(), key=lambda kv: -len(kv[1])):
+        if kind == "test":
+            continue
+        for n, detail in items[:per_kind]:
+            lines.append(f"  {kind}  d{n.depth}  {S.short(n.symbol)}  {n.source}:{n.line}  "
+                         f"{detail}")
+        if len(items) > per_kind:
+            lines.append(f"  {kind}  … and {len(items) - per_kind} more")
+    return lines
+
+
 def impact(symbol: str, nodes, truncated: bool, depth: int, group_by: str, offset: int,
-           limit: int) -> str:
+           limit: int, entries=None) -> str:
     if not nodes:
         return f"nothing in this project calls {S.short(symbol)}"
     groups: OrderedDict[str, list] = OrderedDict()
@@ -705,6 +726,7 @@ def impact(symbol: str, nodes, truncated: bool, depth: int, group_by: str, offse
              + " — lines are where each caller is defined (callers shows the calls)"]
     lines.append(f"by {group_by}: " + ", ".join(
         f"{g} {len(ns)}" for g, ns in sorted(groups.items(), key=lambda kv: -len(kv[1]))[:12]))
+    lines += entry_points(entries)
     rows = []
     for g, ns in sorted(groups.items(), key=lambda kv: -len(kv[1])):
         rows.append(f"{g}:")

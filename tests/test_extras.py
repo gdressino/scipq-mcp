@@ -361,3 +361,20 @@ def test_check_refs(sample_copy, tmp_path):
     assert "com.example.model.Ghost  — no such type" in out
     assert "line 3 is not in Entity#setState() any more (now lines 14–16)" in out
     assert "Gone.java  — no such file" in out and "Account.java  —" not in out
+
+
+def test_impact_lists_the_entry_points_reached(sample_copy, tmp_path):
+    import os
+    from scipq_mcp.service import Service
+    os.makedirs(os.path.join(sample_copy, "app/src/main/webapp/WEB-INF"))
+    with open(os.path.join(sample_copy, "app/src/main/webapp/WEB-INF/web.xml"), "w") as fh:
+        fh.write("<web-app><servlet><servlet-name>s</servlet-name>"
+                 "<servlet-class>com.example.app.Service</servlet-class></servlet></web-app>")
+    with open(os.path.join(sample_copy, ".scipq.toml"), "w") as fh:
+        fh.write('profiles = ["servlet"]\n\n[[entry_points]]\nkind = "job"\n'
+                 'type_names = ["*Support"]\n')
+    out = Service(sample_copy, cache_dir=str(tmp_path / "c")).impact("Entity#setState")
+    assert "entry points reached (by kind):" in out
+    assert "servlet  d1  Service#activate()" in out and "in app/src/main/webapp/WEB-INF/web.xml" \
+        in out
+    assert "job  d1  TestSupport#reset()" in out and "named like *Support" in out
