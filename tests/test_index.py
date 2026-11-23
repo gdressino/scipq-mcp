@@ -444,3 +444,23 @@ def test_by_name_skips_hidden_directories_and_lockfiles(tmp_path):
             fh.write("x\n")
     assert candidate_files(str(tmp_path), ["*.yaml", "*.json", "*.lock"]) == [
         "app/src/main/resources/app.yaml"]
+
+
+def test_git_diff_names_with_spaces_and_accents(tmp_path):
+    if not shutil.which("git"):
+        pytest.skip("git not available")
+    from scipq_mcp.compare import changed_files
+    from scipq_mcp.graph import git_diff_hunks
+    git = ["git", "-C", str(tmp_path), "-c", "user.email=t@example.com", "-c", "user.name=t"]
+    run = lambda *a: subprocess.run(git + list(a), check=True, capture_output=True)  # noqa
+    run("init", "-q")
+    names = ["src/My Report.java", "src/Año.java", "docs/notes (draft).md"]
+    for n in names:
+        os.makedirs(os.path.dirname(tmp_path / n), exist_ok=True)
+        (tmp_path / n).write_text("a\n")
+    run("add", "-A")
+    run("commit", "-qm", "base")
+    for n in names:
+        (tmp_path / n).write_text("a\nb\n")
+    assert set(git_diff_hunks(str(tmp_path), "HEAD", False, [])) == set(names)
+    assert changed_files(str(tmp_path), "HEAD") == set(names)
