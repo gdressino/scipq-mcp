@@ -683,7 +683,8 @@ def test_check_refs_follows_lines_through_git_history(sample_copy, tmp_path):
         fh.write(f"- `getState` ({e}:15) reads it.\n"
                  f"- `setState(0)` ({e}:25) resets it.\n"
                  f"- The old helper core/src/main/java/com/example/"
-                 f"model/Legacy.java; a planned core/src/main/java/com/example/model/Planned.java\n")
+                 f"model/Legacy.java; a planned core/src/main/java/com/example/model/Planned.java\n"
+                 f"- `Entity#reset()` was there; `Entity#rewind()` is planned.\n")
     _git(sample_copy, "init", "-q")
     _git(sample_copy, "add", "-A")
     _git(sample_copy, "commit", "-qm", "a", date="2026-01-02T10:00:00Z")
@@ -700,6 +701,10 @@ def test_check_refs_follows_lines_through_git_history(sample_copy, tmp_path):
     assert f"{e}:25  — line 25 changed since the doc named setState (2026-01-02, " in out
     assert "Legacy.java  — no such file (deleted 2026-01-05, " in out
     assert "Planned.java  — no such file, nor deleted since the doc was written" in out
+    assert "Entity has no member reset (reset is in TestSupport; gone from Entity.java since " \
+        "2026-01-05, " in out
+    assert "Entity has no member rewind (not there when the doc was written either: planned?)" \
+        in out
     assert "line 12 no longer mentions getState" in out          # an uncommitted doc line
     assert "1 line numbers that only moved" in out and "1 lines changed since" in out
 
@@ -714,7 +719,8 @@ def test_check_refs_reads_line_lists_getters_and_neighbouring_numbers(sample_cop
                  f"- `{e}:22` returns null, while `:15` is the body of `setState(…)`.\n"
                  f"- `{e}:23` returns null, and `setState()` (`:15`) writes it.\n"
                  f"- `main abc1234 {e}:3 — setState(int)` was elsewhere then.\n"
-                 f"- `{e}:3` — `setState(int)` is not there.\n")
+                 f"- `{e}:3` — `setState(int)` is not there.\n"
+                 f"- Reports: `TEST-com.example.model.Run<N>Test.xml`, `com.example.model.Ent*`.\n")
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
     assert "1 problem: 1 lines no longer in the symbol named" in out, out
     assert "line 6  " in out and "line 3 no longer mentions setState" in out

@@ -330,7 +330,7 @@ _IDENT_LIST = re.compile(r"[\w$.:]+(?:\s*[,;]\s*[\w$.:]+)+")
 
 def _label(s: str) -> bool:
     """A string that reads as a label, not code: words, no query operators, not a list of
-    identifiers (a field layout such as "fecha,cuenta;monto")."""
+    identifiers (a field layout such as "date,owner;amount")."""
     return bool(re.search(r"[^\W\d_]{2}", s)) and not _QUERY_LIKE.search(s) and \
         not _IDENT_LIST.fullmatch(s.strip())
 
@@ -394,7 +394,7 @@ _STRING = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
 
 
 def words_of(identifier: str) -> str:
-    """An identifier as words: getFechaCambioEstado -> "get fecha cambio estado"; a name that
+    """An identifier as words: getLastStateChange -> "get last state change"; a name that
     does not split stays whole (QOrder -> "qorder order")."""
     parts = [p.lower() for p in _HUMP.findall(identifier.replace("$", " ")) if len(p) > 1
              or p.isdigit()]

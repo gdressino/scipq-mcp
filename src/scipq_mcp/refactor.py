@@ -472,7 +472,7 @@ class Planner:
                               "the review list stops there")
         prose = (".feature", ".md", ".txt", ".adoc")
         alts = "|".join(re.escape(n) for n in names)
-        # In prose: between quotes, or a table cell (| campo |: fixtures read by reflection).
+        # In prose: between quotes, or a table cell (| field |: fixtures read by reflection).
         quotes = re.compile("[\"'`](" + alts + ")[\"'`]|\\|\\s*(" + alts + ")\\s*\\|")
         for h in hits:
             if any(part.startswith(".") for part in h.source.split("/")[:-1]):
@@ -771,7 +771,7 @@ class Planner:
         label = f"named like the field {old}"
         if persistent:
             # Queries and test fixtures name a persistent field through relations
-            # ("cuenta.campo") and by reflection: anywhere, not only near the class.
+            # ("owner.field") and by reflection: anywhere, not only near the class.
             self.by_name(X.property_names(sym), label, quoted=True)
             upper = old.upper()
             if upper != old and not a.get("keep_column"):
@@ -1107,7 +1107,7 @@ _LITERAL = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
 
 def _code_like(line: str, names: list[str]) -> bool:
     """A name inside a string literal used as code, not prose: the whole literal, a path
-    segment (cuenta.campo), a comparison (campo == :p), an element of a list."""
+    segment (owner.field), a comparison (field == :p), an element of a list."""
     alts = "|".join(re.escape(n) for n in names)
     rx = re.compile(rf"^\s*({alts})\s*$|\.({alts})\b|\b({alts})\.|\b({alts})\s*(==|!=|<=|>=|<|>"
                     rf"|=|\bin\b)|(^|[,;(])\s*({alts})\s*([,;)]|$)")

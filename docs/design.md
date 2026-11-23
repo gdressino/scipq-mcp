@@ -224,7 +224,8 @@ section. Unknown keys are reported, not ignored silently.
    Lines that only moved get their new number (when they still hold the name), lines edited
    since say so (and where the name is now), a name the file never had is not reported, and
    a missing file is told deleted (when, which commit) or never there since the doc was
-   written (a plan, another repository's).
+   written (a plan, another repository's); a missing member, gone from its type's file (the
+   newest commit that changed how often the file names it) or not there then either.
 7. Entry points per profile on top of `impact` and `changed`, by kind, one row per type;
    rules may combine supertypes and name globs (both must hold), take classes from XML
    descriptors (`web.xml`, with URL patterns), and be `reached = false` (alive for

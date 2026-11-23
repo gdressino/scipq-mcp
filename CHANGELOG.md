@@ -14,12 +14,15 @@ version and date when releasing.
   line that only moved says its new number ("line 120 is now 134"), a line edited since says
   so with the date, the commit and where the name is now; a name the file never had is not
   reported, and a missing file is told deleted (when, which commit) or never there since the
-  doc was written (planned, or another repository's file).
+  doc was written (planned, or another repository's file). A missing member likewise: gone
+  from its type's file since a date and commit, or not there when the doc was written either
+  (planned, when no close name or other type explains it).
 - `check_refs` reads more of how docs write line numbers: lists (`:40,42-43`, `:12/20`,
   `:12 + 80-84`, `:30→:35`) hold the name at any of their lines; a name written after
   another path or after a bare `:N` belongs to that one; `getX` holds where the field `x` is
   declared; implicit members (`toString`, `close`, `iterator`…) are never required at a
-  line; `main <sha> path` and `<sha> path` are another version; a table cell next to the
+  line; `main <sha> path` and `<sha> path` are another version; name templates
+  (`com.example.Run<N>Test`, `com.example.Run*`) are not type names; a table cell next to the
   path counts only up to its first clause, and only when the path's cell holds nothing else.
 
 ## 0.6.0 — 2026-11-23

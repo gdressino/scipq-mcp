@@ -94,6 +94,7 @@ KINDS = {"no-type": "types not found", "no-member": "members not found",
          "params": "parameter lists no overload has", "ambiguous": "names in several types",
          "no-file": "files not found", "past-end": "lines past the end",
          "never-file": "files the repository never had then",
+         "never-member": "members their type never had then",
          "line-moved": "lines no longer in the symbol named",
          "line-shifted": "line numbers that only moved (new number given)",
          "line-changed": "lines changed since the doc named them"}
@@ -509,8 +510,9 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                     m, mo.group(0).rstrip(), mo.group(1), mo.group(2), mo.group(3),
                     in_code(mo.start()), add, call=True)]
             for mo in _FQN.finditer(line):
-                if any(a <= mo.start() < b for a, b in spans) or not in_code(mo.start()):
-                    continue
+                if any(a <= mo.start() < b for a, b in spans) or not in_code(mo.start()) or \
+                        re.match(r"<[^<>\s,]*>[\w$]|[*{]", line[mo.end():]):
+                    continue        # a name template: com.x.RunGroup<N>Test, com.x.Run*
                 checked += 1
                 at[0] = mo.start()
                 named_here += [(x, mo.start()) for x in _check_qualified(m, mo.group(1), add)]
@@ -520,7 +522,7 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                 _check_path(m, root, mo, by_suffix, sources | unindexed, named_here, line,
                             code, count_lines, add, text_cache, os.path.dirname(path), abbrev)
     _since_written(root, problems)
-    _deleted(root, problems)
+    _gone(root, problems)
     return [p for p in problems if p.kind != "drop"], checked, len(files), archived
 
 
@@ -565,39 +567,82 @@ def _map_line(hunks: list[tuple[int, int, int, int]], n: int) -> int | None:
     return n + shift
 
 
-def _deleted(root: str, problems: list[Problem]) -> None:
-    """Missing files no other file of that name replaces: when the repository deleted them
-    (on any branch) since the doc's first version, or that it did not (a plan, another
-    repository's file)."""
-    gone = [p for p in problems if p.kind == "no-file" and p.name]
-    if not gone or not os.path.isdir(root) or shutil.which("git") is None:
+def _gone(root: str, problems: list[Problem]) -> None:
+    """Missing files (that no other file of that name replaces) and members: when the
+    repository dropped them (on any branch) since the doc's first version, or that it did
+    not have them then (a plan, another repository's)."""
+    files = [p for p in problems if p.kind == "no-file" and p.name]
+    members = [p for p in problems if p.kind == "no-member" and p.src and p.name]
+    if not (files or members) or not os.path.isdir(root) or shutil.which("git") is None:
         return
-    first = _git(root, "log", "--all", "--format=%ct", "--", *sorted({p.path for p in gone}))
-    if not first:
+    log = _git(root, "log", "--all", "--format=C %ct", "--name-only", "--",
+               *sorted({p.path for p in files + members}))
+    if not log:
         return              # docs git does not have: written now, against this checkout
-    since = min(int(x) for x in first.split()) - _READ_BEFORE
-    names = {p.name for p in gone}
-    log = _git(root, "log", "--all", "--no-renames", "--diff-filter=D", "--format=C %H %ct",
-               "--name-only", f"--since={since}")
-    if log is None:
-        return
-    last: dict[str, tuple[str, int]] = {}
-    commit = None
+    prefix = (_git(root, "rev-parse", "--show-prefix") or b"").decode().strip()
+    first: dict[str, int] = {}          # doc -> its first version's time
+    ts = 0
     for row in log.decode(errors="replace").splitlines():
         if row.startswith("C "):
-            _c, sha, ts = row.split()
-            commit = (sha, int(ts))
-        elif row and commit and os.path.basename(row) in names:
-            last.setdefault(os.path.basename(row), commit)     # newest first
-    for p in gone:
-        if p.name in last:
-            sha, ts = last[p.name]
-            p.what = f"no such file (deleted {time.strftime('%Y-%m-%d', time.gmtime(ts))}, " \
-                     f"{sha[:8]})"
+            ts = int(row.split()[1])
+        elif row.startswith(prefix) and row:
+            doc = row[len(prefix):]
+            first[doc] = min(first.get(doc, ts), ts)
+
+    def day(t: int) -> str:
+        return time.strftime("%Y-%m-%d", time.gmtime(t))
+    files = [p for p in files if p.path in first]
+    if files:
+        names = {p.name for p in files}
+        log = _git(root, "log", "--all", "--no-renames", "--diff-filter=D", "--format=C %H %ct",
+                   "--name-only", f"--since={min(first[p.path] for p in files) - _READ_BEFORE}")
+        last: dict[str, tuple[str, int]] = {}
+        commit = None
+        for row in (log or b"").decode(errors="replace").splitlines():
+            if row.startswith("C "):
+                _c, sha, t = row.split()
+                commit = (sha, int(t))
+            elif row and commit and os.path.basename(row) in names:
+                last.setdefault(os.path.basename(row), commit)     # newest first
+        for p in files:
+            if p.name in last:
+                sha, t = last[p.name]
+                p.what = f"no such file (deleted {day(t)}, {sha[:8]})"
+            elif log is not None:
+                p.what = "no such file, nor deleted since the doc was written (planned, or " \
+                         "another repository's?)"
+                p.kind = "never-file"
+    texts: dict[str, str] = {}
+    for p in members:
+        if p.path not in first:
+            continue
+        if p.src not in texts:
+            try:
+                with open(os.path.join(root, p.src), encoding="utf-8", errors="replace") as fh:
+                    texts[p.src] = fh.read()
+            except OSError:
+                texts[p.src] = ""
+        if re.search(r"(?<![\w$])" + re.escape(p.name) + r"(?![\w$])", texts[p.src]):
+            continue        # the file still names it (a call, a comment): no history to tell
+        # The newest commit that changed how often the file names it: where it went away.
+        out = _git(root, "log", "--all", "-1", "--format=%H %ct", f"-S{p.name}",
+                   f"--since={first[p.path] - _READ_BEFORE}", "--", p.src)
+        if out is None:
+            continue
+        if out.strip():
+            sha, t = out.decode().split()
+            p.what = _also(p.what, f"gone from {os.path.basename(p.src)} since {day(int(t))}, "
+                                   f"{sha[:8]}")
+        elif p.hint:            # a close name, or the name in another type: the doc's slip
+            p.what = _also(p.what, "not there when the doc was written either")
         else:
-            p.what = "no such file, nor deleted since the doc was written (planned, or " \
-                     "another repository's?)"
-            p.kind = "never-file"
+            p.what = _also(p.what, "not there when the doc was written either: planned?")
+            p.kind = "never-member"
+
+
+def _also(what: str, more: str) -> str:
+    """A message with one more remark in its parentheses."""
+    return what[:-1] + "; " + more + ")" if what.endswith(")") else what + f" ({more})"
 
 
 def _blobs(root: str, names: list[str]) -> dict[str, str]:
@@ -1315,8 +1360,9 @@ def _check_member(m: Model, mention: str, written_type: str, name: str, params,
     if sigs is None:
         if lib_super or simple in m.external_names or m.in_nested(t, name):
             return [t]          # maybe inherited from, or meant as, a library type
-        add(mention, f"{S.short(t)} has no member {name}"
-            + (_closest(name, m.names_in(t)) or m.elsewhere(name, t)), "no-member")
+        hint = _closest(name, m.names_in(t)) or m.elsewhere(name, t)
+        add(mention, f"{S.short(t)} has no member {name}" + hint, "no-member",
+            src=m.where.get(t, ("",))[0], name=name, hint=hint)
         return [t]
     syms = [x for c in cands for x in m.member_syms.get((c, name), [])]
     prims = {"boolean", "int", "long", "short", "byte", "char", "float", "double"}
@@ -1336,7 +1382,7 @@ def _check_member(m: Model, mention: str, written_type: str, name: str, params,
             shown = "; ".join("(" + ", ".join(h) + ")" for h in have[:3])
             add(mention, f"no {name}({', '.join(want)}) in {S.short(t)}: its overloads take "
                 f"{shown}", "params")
-        # The overload written is the one meant (guardar(boolean)).
+        # The overload written is the one meant (save(boolean)).
         exact = [x for x in syms if _param_types(_sig_of(m, x)) == want]
         syms = exact or syms
     return syms or [t]
