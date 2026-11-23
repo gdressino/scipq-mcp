@@ -399,7 +399,7 @@ def test_check_refs(sample_copy, tmp_path):
 - Cut names: …Old.setValue(1) is not a type.
 
 | `Entity.setState()` | core/src/main/java/com/example/model/Entity.java:3 | a row |
-- `app/src/main/java/com/example/app/Service.java:2` → `a.setState(1)`
+- `app/src/main/java/com/example/app/Service.java:2` — `a.setState(1)`
 - Constants, nested types, examples: `Service.DEFAULT.getState()`, `Service.NOPE.get()`,
   `Account.build()`, por ejemplo `Fulano.prefix()`; `Gone.java` borrado.
 ```python
@@ -423,9 +423,9 @@ svc = Client.__init__(url=None)  # Python: Entity.get_connection(x)
     assert "no setState(String) in Entity: its overloads take (int)" in out
     assert "line 4 ×2 (also 13)  Entity.reload()  — Entity has no member reload" in out
     assert "no type Nope" in out and "com.example.model.Ghost  — no such type" in out
-    assert "line 3 is not in Entity#setState() any more (now lines 9–16)" in out
+    assert "Entity.java:3  — line 3 no longer mentions setState (setState is at 14–16" in out
     assert "line 6 ×2 (also 18)  core/src/main/java/com/example/model/Entity.java:3" in out  # row
-    assert "Service.java:2  — line 2 no longer calls setState (calls at" in out
+    assert "Service.java:2  — line 2 no longer mentions setState (called at" in out
     assert "Gone.java  — no such file" in out and "Account.java  —" not in out
     assert "Old" not in out and "Gone#run" not in out             # said to be gone
     for x in ("Foo", "getX", "LOG", "hashCode", "dnGetState", "Lizt", "X.java", "uid"):
