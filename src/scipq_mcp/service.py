@@ -24,13 +24,14 @@ from . import render
 from . import setup as SETUP
 from . import symbols as S
 from . import config as CFG
+from . import compare as CMP
 from . import context as C
 from . import libsrc as L
 from .cachedir import CacheError
 from .graph import Graph, GraphError
 from .index import Index, IndexError_
 from .queries import AmbiguousName, Navigator, QueryError
-from .workspace import Freshness, Workspace, WorkspaceError, find_project_root
+from .workspace import Freshness, Workspace, WorkspaceError, build_running, find_project_root
 
 DEFAULT_LIMIT = 100
 FRESHNESS_MODES = ("full", "results", "off")
@@ -685,6 +686,154 @@ class Service:
         return (f"impact (depth 3): {len(nodes)} definitions ({tests} in tests"
                 + ("; truncated" if truncated else "") + ")" + modules + f" → impact({short})")
 
+    # --- compare checkouts -------------------------------------------------------------------
+
+    COMPARE_BUILDS_PER_CALL = 2  # all_worktrees: indexes built at most per call
+
+    def _b_compare(self, other_root: str = "", scope: str = "", api_only: bool = True,
+                   limit: int = 50, all_worktrees: bool = False) -> Body:
+        if all_worktrees:
+            return self._b_compare_all(scope)
+
+        def body(nav: Navigator):
+            if not other_root:
+                raise QueryError("pass other_root (a worktree or clone), or all_worktrees=True")
+            try:
+                ws_b = self.workspace(other_root)
+            except WorkspaceError as e:
+                raise QueryError(f"other checkout: {e}") from e
+            a_root, b_root = nav.ws.root, ws_b.root
+            if os.path.realpath(a_root) == os.path.realpath(b_root):
+                raise QueryError("both sides are the same checkout")
+            head_lines = []
+            fb = ws_b.freshness()
+            if fb:
+                head_lines.append("B: " + render.freshness(fb).replace("\n", "\nB: "))
+            ix_b = Index(ws_b, self.cache_dir, self.index_external, self.build_workers)
+            if (ix_b._needs_scratch() or ix_b.pending()) and build_running(b_root):
+                raise QueryError(f"a gradle/mvn build is running in {b_root}: its index is "
+                                 "not updated meanwhile; retry when it finishes")
+            try:
+                stats_b = ix_b.ensure()
+                g_b = Graph(ix_b)
+            except (CacheError, IndexError_, sqlite3.Error) as e:
+                raise QueryError(f"auxiliary index of B unavailable: {e}") from e
+            try:
+                with self._graph(nav) as (g_a, stats_a):
+                    all_a, all_b = CMP.api_of(g_a, scope, False), CMP.api_of(g_b, scope, False)
+                    full = CMP.api_diff(all_a, all_b)
+                    diff = full if not api_only else CMP.api_diff(
+                        {k: v for k, v in all_a.items() if CMP.is_api(v)},
+                        {k: v for k, v in all_b.items() if CMP.is_api(v)})
+                    # What a merge breaks does not depend on visibility: a package-private
+                    # member changed in one module breaks its callers there too.
+                    git = self._compare_git(a_root, b_root, g_a, g_b, full)
+            finally:
+                g_b.close()
+            notes = render.index_note(stats_a)
+            nb = render.index_note(stats_b)
+            if nb:
+                notes += nb.replace("-- index", "-- B: index", 1)
+            a_label = self._checkout_label(a_root)
+            b_label = self._checkout_label(b_root)
+            text = render.compare(a_label, b_label, diff, api_only, scope, git, limit)
+            return notes + ("\n".join(head_lines) + "\n" if head_lines else "") + text, set()
+        return body
+
+    def _b_compare_all(self, scope: str = "") -> Body:
+        """Every other worktree of this repository against this one, one line each."""
+        def body(nav: Navigator):
+            a_root = nav.ws.root
+            wts = CMP.worktrees(a_root)
+            if not wts:
+                raise QueryError("no git worktrees found for this checkout")
+            rows, built, pending = [], [], []
+            here = os.path.realpath(a_root)
+            with self._graph(nav) as (g_a, _stats):
+                all_a = CMP.api_of(g_a, scope, False)
+                for w in wts:
+                    path = w["path"]
+                    if os.path.realpath(path) == here or here.startswith(
+                            os.path.realpath(path) + os.sep):
+                        continue
+                    label = f"{path} ({w['branch'] or 'detached'} {w.get('head', '')[:10]})"
+                    if w["locked"] or w["prunable"]:
+                        why = "locked" if w["locked"] else "prunable"
+                        rows.append(f"  {label}: skipped ({why})")
+                        continue
+                    try:
+                        ws_b = self.workspace(path)
+                        ws_b.files()
+                    except WorkspaceError:
+                        rows.append(f"  {label}: not compiled (no shards)")
+                        continue
+                    ix_b = Index(ws_b, self.cache_dir, self.index_external, self.build_workers)
+                    needs = ix_b._needs_scratch() or ix_b.pending() > 0
+                    if needs and build_running(ws_b.root):
+                        rows.append(f"  {label}: compiling, retry when it finishes")
+                        continue
+                    if ix_b._needs_scratch() and len(built) >= self.COMPARE_BUILDS_PER_CALL:
+                        pending.append(path)
+                        rows.append(f"  {label}: index not built yet (call again)")
+                        continue
+                    try:
+                        st = ix_b.ensure()
+                        if st.built_from_scratch:
+                            built.append(path)
+                        g_b = Graph(ix_b)
+                    except (CacheError, IndexError_, sqlite3.Error) as e:
+                        rows.append(f"  {label}: index unavailable ({e})")
+                        continue
+                    try:
+                        full = CMP.api_diff(all_a, CMP.api_of(g_b, scope, False))
+                        git = self._compare_git(a_root, ws_b.root, g_a, g_b, full)
+                    finally:
+                        g_b.close()
+                    stale = "  [B stale]" if ws_b.freshness() else ""
+                    if git is None:
+                        rows.append(f"  {label}: no shared history; {len(full.only_a)} only "
+                                    f"here, {len(full.only_b)} only there{stale}")
+                        continue
+                    n_ba = sum(len(b.uses) for b in git["b_into_a"])
+                    n_ab = sum(len(b.uses) for b in git["a_into_b"])
+                    rows.append(f"  {label}: both changed {len(git['both_files'])} files, "
+                                f"{len(git['both_members'])} members; merging it here breaks "
+                                f"{n_ba} uses, merging here into it {n_ab}{stale}")
+            head = [f"worktrees compared with {a_root} (details: compare(other_root=…)):"]
+            if built:
+                head.append(f"-- indexes built in this call: {', '.join(built)}")
+            if pending:
+                head.append(f"-- {len(pending)} worktrees still need their index (at most "
+                            f"{self.COMPARE_BUILDS_PER_CALL} are built per call): call again")
+            return "\n".join(head + rows), set()
+        return body
+
+    @staticmethod
+    def _checkout_label(root: str) -> str:
+        commit, branch = CMP.head(root)
+        return root + (f" ({branch} {commit[:10]})" if commit else "")
+
+    @staticmethod
+    def _compare_git(a_root: str, b_root: str, g_a, g_b, diff) -> dict | None:
+        base = CMP.merge_base(a_root, b_root)
+        if not base:
+            return None
+        files_a = CMP.changed_files(a_root, base)
+        files_b = CMP.changed_files(b_root, base)
+        try:
+            members_a = g_a.changed(a_root, base)["definitions"]
+            members_b = g_b.changed(b_root, base)["definitions"]
+        except GraphError:
+            members_a, members_b = {}, {}
+        both = sorted(set(members_a) & set(members_b))
+        sources = {s: e.get("source", "") for s, e in members_a.items()}
+        # B's removals and changes break A's uses (and the other way around).
+        return {"base": base, "files_a": files_a, "files_b": files_b,
+                "both_files": files_a & files_b, "both_members": both,
+                "member_source": sources,
+                "b_into_a": CMP.breaks(CMP.merge_effects(diff, True), files_b, files_a, g_a),
+                "a_into_b": CMP.breaks(CMP.merge_effects(diff, False), files_a, files_b, g_b)}
+
     # --- v2: queries over the auxiliary index -----------------------------------------------
 
     @contextlib.contextmanager
@@ -914,6 +1063,11 @@ class Service:
         return self._run(project_root, self._b_callees(symbol, include_fields, include_types,
                                                        offset, limit))
 
+    def compare(self, other_root: str = "", project_root: str | None = None, scope: str = "",
+                api_only: bool = True, limit: int = 50, all_worktrees: bool = False) -> str:
+        return self._run(project_root, self._b_compare(other_root, scope, api_only, limit,
+                                                       all_worktrees), foot_first=True)
+
     def context(self, symbol: str, project_root: str | None = None,
                 token_budget: int = 4000) -> str:
         return self._run(project_root, self._b_context(symbol, token_budget), foot_first=True)
@@ -1007,7 +1161,7 @@ class Service:
         "tests": "_b_tests", "index_status": "_b_index_status",
         "impact": "_b_impact", "path": "_b_path", "changed": "_b_changed", "deps": "_b_deps",
         "dead_code": "_b_dead_code", "census": "_b_census", "cache_status": "_b_cache_status",
-        "context": "_b_context",
+        "context": "_b_context", "compare": "_b_compare",
     }
 
     def batch(self, queries: list[dict[str, Any]], project_root: str | None = None) -> str:

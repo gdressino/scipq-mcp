@@ -958,3 +958,94 @@ def unreadable(sources: list[str]) -> str:
     return (f"WARNING: {len(sources)} shard{'s' if len(sources) != 1 else ''} could not be read, "
             f"probably being written by a compilation right now (their results are missing; "
             f"retry when it finishes): {_some(sources)}")
+
+
+# --- compare ----------------------------------------------------------------------------------
+
+def _entries(d: dict, limit: int) -> list[str]:
+    rows = []
+    for sym, e in sorted(d.items(), key=lambda kv: (kv[1].source, kv[1].line))[:limit]:
+        rows.append(f"    {S.short(sym)}  {e.source}:{e.line}  — {e.signature[:120]}")
+    if len(d) > limit:
+        rows.append(f"    … and {len(d) - limit} more")
+    return rows
+
+
+def compare(a_label: str, b_label: str, diff, api_only: bool, scope: str, git: dict | None,
+            limit: int = 50) -> str:
+    what = "public/protected API" if api_only else "definitions"
+    lines = [f"compare A = {a_label} with B = {b_label}",
+             f"{what} (tests left out{', in ' + scope if scope else ''}): {len(diff.only_a)} only "
+             f"in A, {len(diff.only_b)} only in B, {len(diff.changed)} with another signature"
+             + (f", {len(diff.renamed)} maybe renamed" if diff.renamed else "")
+             + (f", {len(diff.moved)} maybe moved" if diff.moved else "")
+             + " (annotations ignored)"]
+    if diff.renamed:
+        lines.append("  maybe renamed (same owner, kind and signature but the name):")
+        lines += [f"    {S.short(a)} → {S.short(b)}" for a, b in diff.renamed[:limit]]
+    if diff.moved:
+        lines.append("  maybe moved (same simple name and members, another package):")
+        lines += [f"    {a} → {b}" for a, b in diff.moved[:limit]]
+    renamed = {x for pair in diff.renamed + diff.moved for x in pair}
+    only_a = {k: v for k, v in diff.only_a.items() if k not in renamed}
+    only_b = {k: v for k, v in diff.only_b.items() if k not in renamed}
+    if only_a:
+        lines.append(f"  only in A ({len(only_a)}):")
+        lines += _entries(only_a, limit)
+    if only_b:
+        lines.append(f"  only in B ({len(only_b)}):")
+        lines += _entries(only_b, limit)
+    if diff.changed:
+        lines.append(f"  another signature ({len(diff.changed)}):")
+        for sym, (ea, eb) in sorted(diff.changed.items(),
+                                    key=lambda kv: (kv[1][0].source, kv[1][0].line))[:limit]:
+            lines.append(f"    {S.short(sym)}  {ea.source}:{ea.line}")
+            lines.append(f"      A: {ea.signature[:120]}")
+            lines.append(f"      B: {eb.signature[:120]}")
+        if len(diff.changed) > limit:
+            lines.append(f"    … and {len(diff.changed) - limit} more")
+    if git is None:
+        lines.append("no shared git history (or no git): changes since a merge base, clashes "
+                     "and merge breaks are not shown")
+        return "\n".join(lines)
+    lines.append(f"since the merge base {git['base'][:10]}: A changed {len(git['files_a'])} "
+                 f"files, B {len(git['files_b'])}; both changed {len(git['both_files'])}")
+    if git["both_members"]:
+        lines.append(f"  members changed on both sides (merge conflicts likely, "
+                     f"{len(git['both_members'])}):")
+        for sym in git["both_members"][:limit]:
+            lines.append(f"    {S.short(sym)}  {git['member_source'].get(sym, '')}")
+    elif git["both_files"]:
+        lines.append("  files changed on both sides (different members): "
+                     + ", ".join(sorted(git["both_files"])[:12])
+                     + (" …" if len(git["both_files"]) > 12 else ""))
+    for label, brk in (("merging B into A would break uses in A", git["b_into_a"]),
+                       ("merging A into B would break uses in B", git["a_into_b"])):
+        if not brk:
+            lines.append(f"{label}: none found")
+            continue
+        n = sum(len(b.uses) for b in brk)
+        lines.append(f"{label}: {n} uses of {len(brk)} symbols")
+        shown = 0
+        for b in brk:
+            if shown >= limit:
+                lines.append(f"  … and {len(brk) - shown} more symbols")
+                break
+            if b.how == "removed":
+                change = "removed"
+            elif b.how == "abstract method added":
+                change = f"abstract method added: {b.new.signature[:90]}"
+            else:
+                change = f"signature {b.old.signature[:70]} → {b.new.signature[:70]}"
+            lines.append(f"  {S.short(b.symbol)}  ({change}; {b.source})")
+            for u in b.uses[:8]:
+                tag = (f"  [{u.how}]" if u.how in ("overrides it", "concrete subtype") else "") \
+                    + ("  [new on this side]" if u.new else "")
+                lines.append(f"    {container_label(u.caller) or '(top level)'}  {u.source}:"
+                             + ",".join(map(str, u.lines[:5])) + tag)
+            if len(b.uses) > 8:
+                lines.append(f"    … and {len(b.uses) - 8} more uses")
+            shown += 1
+    lines.append("(from both indexes, syntactic: behavior changes and overload resolution are "
+                 "not seen; scipq-mcp never merges)")
+    return "\n".join(lines)

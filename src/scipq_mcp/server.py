@@ -195,6 +195,27 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         return service.context(symbol, project_root, token_budget)
 
     @tool
+    def compare(
+        other_root: Annotated[str, Field(description="The other checkout: a worktree or clone "
+                                                     "of this project, compiled")] = "",
+        project_root: ProjectRoot = "",
+        scope: Annotated[str, Field(description="Only this package (prefix or glob) or, with "
+                                                "'/', source path glob")] = "",
+        api_only: Annotated[bool, Field(description="Only public/protected definitions")] = True,
+        limit: Annotated[int, Field(ge=1, le=1000, description="Rows per section")] = 50,
+        all_worktrees: Annotated[bool, Field(
+            description="Instead of other_root: every other git worktree of this repository, "
+                        "one line each (at most 2 missing indexes built per call)")] = False,
+    ) -> str:
+        """Compares this checkout (A) with another (B), e.g. two git worktrees: definitions only
+        in one side or with another signature (maybe-renamed pairs too) and, when they share git
+        history, what each changed since the merge base, members changed on both sides
+        (conflicts), and what merging one into the other would break: symbols one side removed
+        or changed in files only it touched, with the other side's uses. Builds B's auxiliary
+        index if missing (not while a build runs there). Read-only: never merges."""
+        return service.compare(other_root, project_root, scope, api_only, limit, all_worktrees)
+
+    @tool
     def source(symbol: Symbol, project_root: ProjectRoot = "",
                max_lines: Annotated[int, Field(ge=1, le=5000,
                                                description="Maximum source lines")] = 200) -> str:

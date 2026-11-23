@@ -7,6 +7,21 @@ version and date when releasing.
 
 ### Added
 
+- `compare(other_root)`: this checkout against another one (a worktree or a clone), from both
+  auxiliary indexes (B's is built if missing). Public/protected definitions only in one side
+  or with another signature, and maybe-renamed pairs; when both share git history, what each
+  changed since the merge base, members changed on both sides (conflicts likely), and what
+  merging one into the other would break: the symbols one side removed or changed in files
+  only it touched, with the uses the other side has of them (those in files it changed
+  itself marked new), their overrides of a changed or removed method, and their concrete
+  subtypes when a new abstract method appears. The API section covers public/protected
+  members; what a merge breaks covers every visibility. Annotations are ignored, a type's
+  header changing breaks nothing, and moved types (same simple name and members, another
+  package) are paired like renames. `all_worktrees=True`: every other worktree against this
+  one, one line each (at most 2 missing indexes built per call; locked, prunable, uncompiled
+  and compiling worktrees reported, not built). B's index is never built while a build runs
+  there. Freshness of both sides first. Read-only.
+
 - `[dead_code] exclude` (in `.scipq.toml` or a `[[project]]` entry): path globs whose
   definitions are never dead-code candidates, e.g. generated web-service clients; the answer
   says how many were left out.

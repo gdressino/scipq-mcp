@@ -56,6 +56,9 @@ def _query_parser(sub) -> None:
         globs={"nargs": "*", "default": None}, scope={"default": ""})
     add("def", "symbol")
     add("context", "symbol", budget={"type": int, "default": 4000})
+    add("compare", scope={"default": ""}, all={"action": "store_true"},
+        limit={"type": int, "default": 50}, other={"default": ""},
+        all_worktrees={"action": "store_true"})
     add("source", "symbol", max_lines={"type": int, "default": 200})
     add("impl", "symbol", **paging, direct={"action": "store_true"})
     add("supertypes", "symbol")
@@ -108,6 +111,9 @@ def _run_query(a) -> str:
         return svc.definition(a.symbol)
     if t == "context":
         return svc.context(a.symbol, token_budget=a.budget)
+    if t == "compare":
+        return svc.compare(a.other, scope=a.scope, api_only=not a.all, limit=a.limit,
+                           all_worktrees=a.all_worktrees)
     if t == "source":
         return svc.source(a.symbol, max_lines=a.max_lines)
     if t == "impl":

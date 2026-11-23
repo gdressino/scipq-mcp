@@ -150,6 +150,7 @@ query, and pinned sessions upgrade when you choose, not all at once mid-day.
 | `typed(symbol, categories)` | where a type is used: fields, parameters, return types, locals, supertypes, bodies, imports | — |
 | `tests(symbol)` | test classes that use a symbol directly, with a ready `--tests` / `-Dtest` filter | — |
 | `index_status()` | shards per task, stale and uncompiled files, tracked files without a shard, what to recompile | — |
+| `compare(other_root, scope, api_only)` | this checkout against another (e.g. two worktrees): definitions only in one side or with another signature, maybe-renamed pairs; with shared git history, members changed on both sides since the merge base and what merging one into the other would break (the other side's uses of what one removed or changed) | — |
 | `batch(queries)` | several of the above in one call | — |
 
 All tools are read-only and take an optional `project_root`. Lists take `offset`/`limit` and
