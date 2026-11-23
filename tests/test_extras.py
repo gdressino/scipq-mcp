@@ -742,7 +742,8 @@ def test_check_refs_reads_line_lists_getters_and_neighbouring_numbers(sample_cop
                  f"- `setState(1)` runs and `add` ({e}:23) adds.\n"
                  f"- Elsewhere: (v4 `Entity.rewind()`, main `Entity#wind`).\n"
                  f"- En main el alta (`{e}:3` `setState(int)`) era otra.\n"
-                 f"- `setState(int)` and `getState()` ({e}:3/:18).\n"
+                 f"- `setState(int)` and `getState()` ({e}:15/:18).\n"
+                 f"- `getState()` + `findById(1)` ({e}:18-19) read it.\n"
                  f"- `{e}:3` returns, `getState()` vacío (`:19`).\n"
                  f"- Files: v4 `{e}:3` (setState), `{e}:4` — `setState(int)`; v5 `{e}:24` — "
                  f"`setState(int)`.\n"
@@ -750,7 +751,8 @@ def test_check_refs_reads_line_lists_getters_and_neighbouring_numbers(sample_cop
     with open(os.path.join(sample_copy, ".scipq.toml"), "w") as fh:
         fh.write('[check_refs]\nother_versions = ["v4"]\n')
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
-    assert "4 problems: 4 lines no longer in the symbol named" in out, out
+    assert "5 problems: 5 lines no longer in the symbol named" in out, out
+    assert "line 18 no longer mentions findById" in out          # each name of a list
     assert "line 24 no longer mentions setState" in out and "line 4 no longer mentions setState" \
         not in out
     assert "line 6  " in out and "line 3 no longer mentions setState" in out

@@ -23,15 +23,18 @@ One section per version published on PyPI. `scripts/release.sh` turns `## Unrele
   or never there since the doc was written (planned, or another repository's file), in this
   checkout's history; a missing member, gone from its type's file since a date and commit, or not there when the
   doc was written either (planned, when no close name or other type explains it). A
-  statement the doc quotes right after a line number (`obj.setOwner(user)`), which the
-  doc's version had at that line and the file now has once, elsewhere, gives the line's new
-  number.
+  statement the doc quotes right after a line number (`obj.setOwner(user)`, also as
+  `File:N — `code`` with nested spans), which the doc's version had at those lines and the
+  file now has once, elsewhere, gives the new number (or, when its line was edited, that
+  the lines changed and where the code is now); when the lines still have it, they are
+  right.
 - `check_refs` reads more of how docs write line numbers: lists (`:40,42-43`, `:12/20`,
   `:12 + 80-84`, `:30→:35`, `` `:40` y `:45` ``, `:12 y 18`) hold the name at any of their
   lines; a name written after another path or after a bare `:N` belongs to that one; the
   word glued before a path's parenthesis counts only when it looks like code (`` `foo` ``,
-  `foo()`, `camelCase`), and when the glued names cannot be checked in that file, the
-  clause's are; a mention that opens its line takes the call that ended the line before;
+  `foo()`, `camelCase`), not after a negation, nor after an arrow unless the file declares
+  it; a list of names (`a()` + `b()` (File:N)) needs each of them at the lines; when the
+  glued names cannot be checked in that file, the clause's are; a mention that opens its line takes the call that ended the line before;
   `getX` holds where the field `x` is declared; implicit members (`toString`, `close`…) are
   required at a line only when the file declares them; a type's name holds anywhere in its
   body; `main <sha> path`, `<sha> path`, `path (main)`, "en main …" earlier in the clause

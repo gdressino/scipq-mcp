@@ -938,9 +938,9 @@ def _since_written(root: str, problems: list[Problem]) -> None:
         if old is None:
             return False
         text = old.split("\n")
-        if p.kind == "quoted":          # the doc's version had the code quoted at the line
+        if p.kind == "quoted":          # the doc's version had the code quoted at the lines
             return any(p.names[0] in re.sub(r"\s+", "", x)
-                       for x in text[max(0, p.lines[0] - 2):p.lines[0] + 1])
+                       for x in text[max(0, p.lines[0] - 2):p.lines[1] + 1])
         if p.kind == "weak":            # the doc pointed at the declaration then
             return _at_declaration(text, *p.lines, p.names or (p.name,))
         return any(_holds(text, max(1, lo - slack), hi + slack, p.names or (p.name,))
@@ -1020,12 +1020,24 @@ def _since_written(root: str, problems: list[Problem]) -> None:
             n, end = p.lines
             span = f"line {n}" if n == end else f"lines {n}-{end}"
             if p.kind == "quoted":
+                old = (olds.get(f"{sha}:{top}{p.src}") or "").split("\n")
+                was = [k + 1 for k in range(max(0, n - 2), min(len(old), end + 1))
+                       if p.names[0] in re.sub(r"\s+", "", old[k])]
                 at = [k + 1 for k, y in enumerate(now_lines(p.src))
                       if p.names[0] in re.sub(r"\s+", "", y)]
-                if len(at) == 1 and abs(at[0] - n) > 2:
-                    p.what = f"line {n} is now {at[0]} (the code quoted; moved since the " \
-                             f"doc's version of {day})"
-                    p.kind = "line-shifted"
+                if was and len(at) == 1 and abs(at[0] - was[0]) > 2:
+                    d = at[0] - was[0]
+                    same = n == end and old[was[0] - 1].strip() == \
+                        now_lines(p.src)[at[0] - 1].strip()
+                    if same:        # the very line, elsewhere
+                        p.what = f"line {n} is now {n + d} (the code quoted; moved since " \
+                                 f"the doc's version of {day})"
+                        p.kind = "line-shifted"
+                    else:           # the code quoted went on, its line or lines changed
+                        span = f"line {n}" if n == end else f"lines {n}-{end}"
+                        p.what = f"{span} changed since the doc's version ({day}, " \
+                                 f"{sha[:8]}); the code quoted is now at {at[0]}"
+                        p.kind = "line-changed"
                 else:
                     p.kind = "drop"
                 continue
@@ -1260,13 +1272,21 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
                        for x, y in _neighbour_cells(line, mo.start())
                        if re.match(r"\s*(?:`|[A-Za-z_$][\w$.#]*\()", line[x:y])]  # code, not a remark
     glued = _glued_names(line[oa:ob], mo.group(0))
+    # `a()` + `b()` (File:N): a list of names, each of them at the lines
+    need_all = {x[1:] for x in glued if x[:1] == "+"}
+    glued = {x for x in glued if x[:1] != "+"} | need_all
     glued = {x[1:] if x[:1] == "?" else x for x in glued
              if x[:1] != "?" or any(m.member_syms.get((t, x[1:])) for f in hits
                                     for t in m.types_in.get(f, []))}
     if re.search(r"(?:→|->)\s*$", line[max(0, oa - 4):oa]):
         # "a() → X (File:N)": the clause starts after the arrow; X is where the call goes
-        glued = {x for x in glued if not re.match(r"`?(?:[\w$]+[.#])*" + re.escape(x) + r"\b",
-                                                  line[oa:ob].lstrip())}
+        def declared_here(x: str) -> bool:
+            head = re.match(r"`?((?:[\w$]+[.#])*)" + re.escape(x) + r"\b", line[oa:ob].lstrip())
+            owner = head.group(1).rstrip(".#").split(".")[-1] if head else ""
+            return any(m.member_syms.get((t, x)) and (not owner or S.name_of(t) == owner)
+                       for f in hits for t in m.types_in.get(f, []))
+        glued = {x for x in glued if declared_here(x) or not re.match(
+            r"`?(?:[\w$]+[.#])*" + re.escape(x) + r"\b", line[oa:ob].lstrip())}
     if not any(x in m.by_member or x in m.types for x in glued):
         glued = set()       # glued words that name nothing in the code (`onClose`, a key)
     end_n = int(mo.group(3)) if mo.group(3) else n
@@ -1346,7 +1366,7 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         k = nx.end()
 
     def verdict(n: int, end_n: int, srcs: list[str], also: list[tuple[int, int]] = (),
-                strict: bool = False):
+                strict: bool = False, follow: bool = False):
         """None when the lines n..end_n of one of srcs still mention a name the doc gives
         (or no name can be checked there); else (name, where it is now, source). strict:
         they must start at the declaration of a name the file declares, or lie in it."""
@@ -1354,8 +1374,18 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
                                             m.types_in.get(f, []) for x in names)]
         failed = None
         for src in declaring or srcs:    # same-named files: the one with the member named
+            if need_all and not strict:
+                # A list of names over a list of lines: each name at one of the lines.
+                fails = [bad for x in names if x in need_all and all(
+                    (bad := _verdict_in(m, root, src, lo, hi, [x], as_code, text_cache))
+                    not in (None, "unchecked") for lo, hi in [(n, end_n), *also])]
+                if not fails:
+                    return None
+                failed = failed or fails[0] + (src,)
+                continue
             for lo, hi in [(n, end_n), *also]:
-                bad = _verdict_in(m, root, src, lo, hi, names, as_code, text_cache, strict)
+                bad = _verdict_in(m, root, src, lo, hi, names, as_code, text_cache, strict,
+                                  need_all, follow)
                 if bad == "unchecked" and fallback:
                     bad = _verdict_in(m, root, src, lo, hi, fallback, as_code, text_cache,
                                       strict)
@@ -1372,25 +1402,20 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
             recheck=lambda n2, m2, also=(): n2 <= count_lines(src) and
             verdict(n2, m2, [src], also) is None)
         return
+    # A statement the doc quotes right after the line number (`obj.setOwner(user)`): when
+    # the lines have it, they are right; else git decides whether the doc's version had it
+    # there, and where it stands now.
+    quote = _quote_after(line, mo, code)
+    if quote and not more:
+        if not text_cache.get(fits[0]):
+            _with_header(root, fits[0], 1, text_cache)      # reads the file into the cache
+        flat = [re.sub(r"\s+", "", x) for x in text_cache.get(fits[0]) or []]
+        if any(quote in y for y in flat[max(0, n - 3):end_n + 2]):
+            return
+        add(mo.group(0), "", "quoted", src=fits[0], lines=(n, end_n), names=(quote,),
+            recheck=lambda n2, m2, also=(): True)
     bad = verdict(n, end_n, fits, more)
     if bad is None:
-        # A statement the doc quotes for one line (`obj.setOwner(user)`), which the file
-        # has once, and not there: the line moved (another call of that name is there now).
-        cell_next = next((x for x, y in _neighbour_cells(line, mo.start()) if x > mo.start()),
-                         -1) if line.lstrip().startswith("|") else -1
-        quotes = [re.sub(r"\s+|;$", "", line[p + 1:q - 1]) for p, q in code
-                  if not p <= mo.start() < q and (
-                      re.fullmatch(r"`?\s*(?:—|–|-|:|\(|=)?\s*", line[mo.end():p]) or
-                      (cell_next >= 0 and re.fullmatch(r"\s*", line[cell_next:p])))][:1]
-        quotes = [x for x in quotes if len(x) >= 12 and re.search(r"[\w$)]\.[\w$]+\(|=", x)
-                  and "…" not in x and "..." not in x and not _PATH.search(x)]
-        for src in fits[:1] if quotes and n == end_n and not more else ():
-            flat = [re.sub(r"\s+", "", x) for x in text_cache.get(src) or []]
-            if any(quotes[0] in y for y in flat[max(0, n - 3):n + 2]):
-                break           # it is there
-            # git decides: the doc's version had it at that line, and it stands once elsewhere
-            add(mo.group(0), "", "quoted", src=src, lines=(n, n), names=tuple(quotes),
-                recheck=lambda n2, m2, also=(): True)
         # It holds through a call or a comment while the file declares the name elsewhere:
         # git may show the doc pointed at the declaration (then the lines moved).
         weak = verdict(n, end_n, fits, more, strict=True)
@@ -1406,7 +1431,8 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     extra = {"src": src, "lines": (n, end_n), "name": x, "hint": "; ".join(where),
              "names": tuple(dict.fromkeys(names + fallback)), "tight": tight,
              "more": tuple(more),
-             "recheck": lambda n2, m2, also=(): verdict(n2, m2, [src], also) is None,
+             "recheck": lambda n2, m2, also=(): verdict(n2, m2, [src], also,
+                                                        follow=True) is None,
              "span": _span_of(m, root, src, x, text_cache)}
     if where:
         add(mo.group(0), f"line {n} no longer mentions {x} ({'; '.join(where)})",
@@ -1414,6 +1440,31 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     else:
         add(mo.group(0), f"line {n} no longer calls {x} (no code in this file calls it now)",
             "line-moved", **extra)
+
+
+def _quote_after(line: str, mo, code: list) -> str | None:
+    """The statement a doc quotes right after a line number, without spaces: the code span
+    that follows it (`File:N` `code`, `File:N — code`, `File:N navega `code``), the next table
+    cell's, or the text after the path's own span when spans nest (`File:N — `code` …`)."""
+    own = next(((p, q) for p, q in code if p <= mo.start() < q), None)
+    text = None
+    if own and re.fullmatch(r"`?\s*(?:—|–|-|:)\s*`", line[mo.end():own[1]]):
+        nxt = line.find("`", own[1])        # nested: `path — `code` …`
+        text = line[own[1]:nxt] if nxt > own[1] else None
+    if text is None:
+        cell = next((x for x, _y in _neighbour_cells(line, mo.start()) if x > mo.start()), -1) \
+            if line.lstrip().startswith("|") else -1
+        start = own[1] if own else mo.end()
+        text = next((line[p + 1:q - 1] for p, q in code if p >= start and (
+            re.fullmatch(r"`?\s*(?:—|–|-|:|\(|=)?\s*(?:[^\s`|]+\s+)?", line[start:p]) or
+            (cell >= 0 and re.fullmatch(r"\s*", line[cell:p])))), None)
+    if text is None:
+        return None
+    x = re.sub(r"\s+|;$", "", text)
+    if len(x) < 12 or not re.search(r"[\w$)]\.[\w$]+\(|=", x) or "…" in x or "..." in x or \
+            _PATH.search(x):
+        return None
+    return x
 
 
 def _span_of(m: Model, root: str, src: str, x: str, text_cache: dict) -> tuple:
@@ -1431,7 +1482,8 @@ def _span_of(m: Model, root: str, src: str, x: str, text_cache: dict) -> tuple:
 
 
 def _verdict_in(m: Model, root: str, src: str, n: int, end_n: int, names: list[str], as_code,
-                text_cache: dict, strict: bool = False):
+                text_cache: dict, strict: bool = False, need_all: set = frozenset(),
+                follow: bool = False):
     """None when the lines n..end_n (±2) of src mention one of names, or fall in its lines;
     "unchecked" when no name can be checked in src; else (the first name, where it is now)."""
     members = {x: [y for t in m.types_in.get(src, [])
@@ -1447,7 +1499,9 @@ def _verdict_in(m: Model, root: str, src: str, n: int, end_n: int, names: list[s
     if not lines:
         _with_header(root, src, 1, text_cache)
         lines = text_cache.get(src) or []
-    span = lines[max(0, n - 3):min(len(lines), end_n + 2)]
+    # follow: lines a doc's older version names, now elsewhere: a call open there goes on
+    last = _statement_end(lines, n, end_n) if follow else end_n
+    span = lines[max(0, n - 3):min(len(lines), last + 2)]
     code_part = "\n".join(c for c in span if not re.match(r"\s*(//|\*|/\*)", c))
     comments = "\n".join(c for c in span if re.match(r"\s*(//|\*|/\*)", c))
 
@@ -1513,6 +1567,11 @@ def _verdict_in(m: Model, root: str, src: str, n: int, end_n: int, names: list[s
             return "unchecked"
         if any(at_declaration(x) for x in known):
             return None
+    elif need_all & set(known):         # a list of names: each of them
+        missing = [x for x in known if x in need_all and not (mentions(x) or contains(x))]
+        if not missing:
+            return None
+        known = missing + [x for x in known if x not in missing]
     elif any(mentions(x) or contains(x) for x in known):
         return None
     x = known[0]
@@ -1665,7 +1724,10 @@ def _glued_names(segment: str, path_mention: str) -> set[str]:
                 # `a()` + `b()` + `c()` (File:N): the whole list
                 while (lm := re.search(r"`([^`]+)`\s*(?:\+|,|\by\b|\band\b)\s*`?(?:[\w$]+[.#])*$",
                                        head)):
-                    out.update(re.findall(r"([a-z_$][\w$]*)\s*\(", lm.group(1)))
+                    found = re.findall(r"([a-z_$][\w$]*)\s*\(", lm.group(1))
+                    out.update("+" + x for x in found)
+                    if found:
+                        out.add("+" + name)     # the list's last one, too
                     head = head[:lm.start()]
             tail = segment[m_.start(1):m_.end(1) + 2] if k == 2 else ""
             if k == 2 and not (re.search(r"[a-z][A-Z]|[_$]", name) or
@@ -1824,10 +1886,10 @@ def _cut(text: str, width: int = 80) -> str:
 
 
 def _rank(p: Problem) -> int:
-    """Of several problems for one mention, the one to show: a new line number, then a hint
-    of where the name is."""
-    return 3 if p.kind == "line-shifted" else 2 if " is at " in p.what else \
-        1 if "called at" in p.what else 0
+    """Of several problems for one mention, the one to show: what the code the doc quotes
+    says, a new line number, then a hint of where the name is."""
+    return 4 if "the code quoted" in p.what else 3 if p.kind == "line-shifted" else \
+        2 if " is at " in p.what else 1 if "called at" in p.what else 0
 
 
 def render(problems: list[Problem], checked: int, nfiles: int, offset: int, limit: int,
