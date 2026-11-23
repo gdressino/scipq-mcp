@@ -322,6 +322,19 @@ class Graph:
             "SELECT DISTINCT target_id FROM rels WHERE symbol_id = ? AND kind = ?",
             (sid, REL_IMPLEMENTATION))]
 
+    def _project_overridden(self, ids: list[int]) -> list[tuple[int, int]]:
+        """(method, project method it overrides) for these definitions."""
+        out = []
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            q = ",".join("?" * len(chunk))
+            out.extend(self.con.execute(
+                f"SELECT r.symbol_id, r.target_id FROM rels r WHERE r.kind = ? AND "
+                f"r.symbol_id IN ({q}) AND r.target_id != r.symbol_id AND EXISTS "
+                f"(SELECT 1 FROM defs d WHERE d.symbol_id = r.target_id)",
+                (REL_IMPLEMENTATION, *chunk)))
+        return [(c, t) for c, t in out]
+
     def callers_of(self, targets: list[int]) -> list[tuple[int, int, int, str]]:
         """(target id, caller id, shard id, sites) of every non-empty caller."""
         out = []
@@ -338,9 +351,12 @@ class Graph:
     def impact(self, symbol: str, depth: int = 3, include_overridden: bool = True,
                max_nodes: int = 20000, root: str = "") -> tuple[list[Node], bool]:
         """Transitive callers, breadth first. With include_overridden, calls to the methods it
-        overrides count too (they may dispatch here), except `super.m()` calls (read from the
-        sources under `root`), which are bound to the caller's superclass. Returns (nodes,
-        truncated)."""
+        overrides count too (they may dispatch here); further up, for an override of type X
+        that is reached, the calls to the project methods it overrides made from X's own
+        hierarchy (a base class calling this.m(): template methods). `super.m()` calls, read
+        from the sources under `root`, are left out of those (bound to the caller's
+        superclass), and a method reached through such a dispatch for X keeps only the super
+        calls from X's hierarchy. Returns (nodes, truncated)."""
         start = self.ids([symbol]).get(symbol)
         if start is None:
             return [], False
@@ -351,23 +367,50 @@ class Graph:
             frontier += sorted(overridden)
         seen = set(frontier)
         texts: dict[str, list[str]] = {}
-        name = S.name_of(symbol)
+        dispatch: dict[int, str] = {}       # overridden method -> the type whose override
+        bound: dict[int, str] = {}          # reached through it -> that type
+        families: dict[str, set[str]] = {}
+
+        def family(t: str) -> set[str]:
+            if t not in families:
+                tid = self.ids([t]).get(t)
+                families[t] = {t} | self._subtypes_of({t}) | (
+                    set(self.names(self.ancestors(tid)).values()) if tid is not None else set())
+            return families[t]
         nodes: dict[int, Node] = {}
         names: dict[int, str] = self.names(frontier)
         truncated = False
         sh = self.shards()
         for level in range(1, depth + 1):
             rows = self.callers_of(frontier)
+            if bound or dispatch:
+                names.update(self.names({c for t, c, _s, _x in rows
+                                         if (t in bound or t in dispatch) and c not in names}))
             nxt = []
             for target, caller, shard_id, sites in rows:
                 if caller in seen or shard_id not in sh:
                     continue
-                if level == 1 and target in overridden and root:
-                    sites = _not_super(root, sh[shard_id][0], sites, name, texts)
+                if target in dispatch and \
+                        S.owner_type(names.get(caller, "")) not in family(dispatch[target]):
+                    continue        # another object's call: it dispatches to its own type
+                if root and ((level == 1 and target in overridden) or target in dispatch):
+                    sites = _not_super(root, sh[shard_id][0], sites,
+                                       S.name_of(names.get(target, symbol)), texts)
+                    if not sites:
+                        continue
+                if root and target in bound and \
+                        S.owner_type(names.get(caller, "")) not in family(bound[target]):
+                    sites = _not_super(root, sh[shard_id][0], sites,
+                                       S.name_of(names.get(target, "")), texts)
                     if not sites:
                         continue
                 seen.add(caller)
                 nxt.append(caller)
+                if target in dispatch:
+                    bound[caller] = dispatch[target]
+                elif target in bound and \
+                        S.owner_type(names.get(caller, "")) in family(bound[target]):
+                    bound[caller] = bound[target]   # still the same object's code
                 src, mod, test = sh[shard_id]
                 nodes[caller] = Node("", level, names.get(target, ""), src, 0, module_of(mod),
                                      bool(test), _lines(sites), mod)
@@ -378,6 +421,16 @@ class Graph:
                 break
             names.update(self.names(nxt))
             frontier = nxt
+            if include_overridden and level < depth:
+                extra = []
+                for caller, target in self._project_overridden(nxt):
+                    if target not in seen:
+                        seen.add(target)
+                        dispatch[target] = S.owner_type(names.get(caller, ""))
+                        extra.append(target)
+                if extra:
+                    names.update(self.names(extra))
+                    frontier = nxt + extra
         names.update(self.names(nodes))
         defs = self.definitions(nodes)
         for sid, n in nodes.items():
@@ -473,6 +526,14 @@ class Graph:
             head = sigs[sym].split("(", 1)[0]
             return re.search(r"\bprivate\b", re.sub(r"@\w+(\([^)]*\))?", " ", head)) is not None
 
+        def abstract(t: str) -> bool:
+            """An abstract class or an interface: a base of screens, jobs…, not one."""
+            if t not in sigs:
+                d = self.definitions([ids[t]]).get(ids[t]) if t in ids else None
+                sigs[t] = d[4] if d else ""
+            head = re.sub(r"@\w+(\([^)]*\))?", " ", sigs[t]).split("{", 1)[0]
+            return re.search(r"\babstract\b|\binterface\b", head) is not None
+
         declared: dict[str, str] = {}
 
         def declared_super(t: str) -> str:
@@ -519,7 +580,8 @@ class Graph:
                                                               & spec["supertypes"])
                     ok_name = not spec["type_names"] or any(
                         fnmatch.fnmatch(S.name_of(t), g) for g in spec["type_names"])
-                    if (spec["supertypes"] or spec["type_names"]) and ok_super and ok_name:
+                    if (spec["supertypes"] or spec["type_names"]) and ok_super and ok_name \
+                            and not abstract(t):
                         sup = sorted(supers.get(t, set()) & spec["supertypes"])
                         direct = declared_super(t)
                         if sup:

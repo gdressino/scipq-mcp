@@ -1,0 +1,8 @@
+®
+-shop/src/main/java/com/example/shop/Page.java*com/example/shop/Page#BZ -!com/example/shop/Page#`<init>`().Bjava/lang/String#B5com/example/shop/Page#render().BZ 'com/example/shop/Page#body().Bjava/lang/String#B4com/example/shop/Page#frame().BZ
+ )com/example/shop/Page#render().B	java/lang/String#B1com/example/shop/Page#body().B"R% 
+com/example/shop/Page#ZA template method: render() calls the body() each page overrides; frame() calls render(). (2Page:""java*public abstract class PageD
+!com/example/shop/Page#`<init>`().(	2<init>:"java*public Page()K
+com/example/shop/Page#render().(2render:"java*public String render()H
+com/example/shop/Page#frame().(2frame:"java*public String frame()Q
+com/example/shop/Page#body().(B2body:("java* protected abstract String body()"java

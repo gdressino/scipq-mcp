@@ -1,0 +1,8 @@
+–
+.shop/src/main/java/com/example/shop/Pages.java+com/example/shop/Pages#BZ
+ ."com/example/shop/Pages#`<init>`().Bjava/lang/String#B5com/example/shop/Pages#sales().BZ java/lang/String#B4com/example/shop/Pages#show().BZ	  com/example/shop/Page#Blocal 0BRlocal 0B)com/example/shop/Page#render().B>
+com/example/shop/Pages#(2Pages:"java*public class PagesF
+"com/example/shop/Pages#`<init>`().(	2<init>:"java*public Pages()I
+com/example/shop/Pages#sales().(P2sales:"java*static String sales()L
+com/example/shop/Pages#show().(P2show:""java*static String show(Page p)<
+local 02p:"java*Page pBcom/example/shop/Pages#show()."java

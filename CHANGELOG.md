@@ -87,6 +87,10 @@ version and date when releasing.
 - `impact`, `changed`, `tests(transitive)` and `callers(include_overridden)` no longer count
   `super.m()` calls in other classes as possible dispatches to an override of `m`: they are
   bound to the caller's superclass.
+- `impact` follows template methods at every level: when an override of type X is reached,
+  the base class's own calls to the method it overrides (`this.m()`) reach it too; other
+  objects' calls to the base method, and sibling classes' `super` calls into that code, are
+  left out. Abstract classes and interfaces are not entry points by supertype or name rules.
 
 ## 0.5.0 — 2026-11-23
 

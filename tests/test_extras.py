@@ -535,3 +535,17 @@ def test_super_calls_of_other_overrides_do_not_dispatch_here(refactor_root, tmp_
     assert "paint" in out and "Circle" not in out
     out = svc.callers("Shapes#Square#draw", include_overridden=True)
     assert "paint" in out and "Circle" not in out
+
+
+def test_impact_dispatches_through_template_methods(refactor_root, tmp_path):
+    # SalesPage#body() overrides Page#body(), which Page#render() calls on this; StockPage's
+    # super.render() runs StockPage's own body, so it is not reached.
+    import os
+    from scipq_mcp.service import Service
+    with open(os.path.join(refactor_root, ".scipq.toml"), "w") as fh:
+        fh.write('[[entry_points]]\nkind = "page"\ntype_names = ["*Page"]\n')
+    out = Service(refactor_root, cache_dir=str(tmp_path / "c")).impact("Pages#sales", depth=4)
+    assert "d1  SalesPage#body()" in out and "d2  Page#render()" in out
+    assert "d3  Pages#show()" in out and "d3  Page#frame()" in out
+    assert "StockPage" not in out                   # its super.render()/frame(): its own body
+    assert "page  d1  SalesPage" in out and "page  d2  Page " not in out    # abstract
