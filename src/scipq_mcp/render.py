@@ -342,7 +342,8 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None) -> st
     tasks = sorted(t for t in f.tasks if t)
     if tasks:
         lines.append("  recompile to refresh: " + ", ".join(tasks[:6])
-                     + (" …" if len(tasks) > 6 else "") + " (scipq-mcp does not build)")
+                     + (" …" if len(tasks) > 6 else "") + " (scipq-mcp does not build; if "
+                     "the task comes FROM-CACHE the shards are not rewritten: --rerun it)")
     elif f.stale or f.uncompiled:
         lines.append("  recompile the project to refresh (scipq-mcp does not build)")
     return "\n".join(lines)
@@ -593,7 +594,8 @@ def status(st, root: str) -> str:
     refresh = [t for t in st.refresh if t]
     if refresh:
         lines.append("recompile to refresh: " + ", ".join(refresh)
-                     + " (scipq-mcp does not build)")
+                     + " (scipq-mcp does not build; a task that comes FROM-CACHE does not "
+                     "rewrite the shards: --rerun it)")
     elif st.stale or st.uncompiled:
         lines.append("recompile the project to refresh (scipq-mcp does not build)")
     return "\n".join(lines)

@@ -844,7 +844,9 @@ class Planner:
         self.add(Op(k, f"replace calls of {S.short(sym)}" + (f" ({len(syms)} overloads)"
                                                              if len(syms) > 1 else ""),
                     "replace", {"template": tpl}, sites, node="call", imports=_imports(a)))
-        self.summary.append(f"step {k} replace calls of {S.short(sym)} with {tpl[:60]!r}")
+        self.summary.append(f"step {k} replace calls of {S.short(sym)}"
+                            + (f" ({len(syms)} overloads)" if len(syms) > 1 else "")
+                            + f" with {tpl[:60]!r}")
 
     def m_annotate(self, k: int, a: dict) -> None:
         syms = a.get("symbols") or ([a["symbol"]] if a.get("symbol") else [])
