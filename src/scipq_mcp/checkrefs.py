@@ -1027,9 +1027,16 @@ def _since_written(root: str, problems: list[Problem]) -> None:
                       if p.names[0] in re.sub(r"\s+", "", y)]
                 if was and len(at) == 1 and abs(at[0] - was[0]) > 2:
                     d = at[0] - was[0]
-                    same = n == end and old[was[0] - 1].strip() == \
-                        now_lines(p.src)[at[0] - 1].strip()
-                    if same:        # the very line, elsewhere
+                    # The doc's lines decide (intact: moved); the code quoted only places them.
+                    same = _block_at(old, now_lines(p.src), n, end, n + d) == (n + d, end + d) \
+                        if n != end else old[n - 1].strip() == \
+                        (now_lines(p.src)[n + d - 1] if 0 < n + d <= len(now_lines(p.src))
+                         else "").strip()
+                    if same and n != end:
+                        p.what = f"lines {n}-{end} are now {n + d}-{end + d} (the code quoted; " \
+                                 f"moved since the doc's version of {day})"
+                        p.kind = "line-shifted"
+                    elif same:      # the very line, elsewhere
                         p.what = f"line {n} is now {n + d} (the code quoted; moved since " \
                                  f"the doc's version of {day})"
                         p.kind = "line-shifted"
@@ -1410,10 +1417,9 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         if not text_cache.get(fits[0]):
             _with_header(root, fits[0], 1, text_cache)      # reads the file into the cache
         flat = [re.sub(r"\s+", "", x) for x in text_cache.get(fits[0]) or []]
-        if any(quote in y for y in flat[max(0, n - 3):end_n + 2]):
-            return
-        add(mo.group(0), "", "quoted", src=fits[0], lines=(n, end_n), names=(quote,),
-            recheck=lambda n2, m2, also=(): True)
+        if not any(quote in y for y in flat[max(0, n - 3):end_n + 2]):
+            add(mo.group(0), "", "quoted", src=fits[0], lines=(n, end_n), names=(quote,),
+                recheck=lambda n2, m2, also=(): True)
     bad = verdict(n, end_n, fits, more)
     if bad is None:
         # It holds through a call or a comment while the file declares the name elsewhere:
@@ -1458,6 +1464,10 @@ def _quote_after(line: str, mo, code: list) -> str | None:
         text = next((line[p + 1:q - 1] for p, q in code if p >= start and (
             re.fullmatch(r"`?\s*(?:—|–|-|:|\(|=)?\s*(?:[^\s`|]+\s+)?", line[start:p]) or
             (cell >= 0 and re.fullmatch(r"\s*", line[cell:p])))), None)
+    if text is None:
+        start = own[0] if own else mo.start()
+        text = next((line[p + 1:q - 1] for p, q in reversed(code) if q <= start and
+                     re.fullmatch(r"\s*(?:en|in|at|de|of)?\s*`?", line[q:start])), None)
     if text is None:
         return None
     x = re.sub(r"\s+|;$", "", text)
