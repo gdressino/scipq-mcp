@@ -1,29 +1,40 @@
 # Changelog
 
-One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
-version and date when releasing.
-
-## Unreleased
+One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased
 
 ### Changed
 
 - `check_refs` follows line numbers through git history. The version of the code a doc was
-  written against is the first commit, on any branch, whose copy of the doc has that line
-  (or the newest version of the file from the three weeks before it, merges included, whose
-  lines hold the name); the lines are mapped through the diff from it to the checkout. A
-  line that only moved says its new number ("line 120 is now 134"), a line edited since says
-  so with the date, the commit and where the name is now; a name the file never had is not
-  reported, and a missing file is told deleted (when, which commit) or never there since the
-  doc was written (planned, or another repository's file). A missing member likewise: gone
-  from its type's file since a date and commit, or not there when the doc was written either
-  (planned, when no close name or other type explains it).
+  written against is the first commit, on any branch and through the doc's renames, whose
+  copy of the doc has that line; the version just before that commit (doc and code
+  committed together); or, when the lines named do not hold the name there, the newest of
+  that commit's ancestors' versions of the file from the three weeks before it (merges
+  included) that does. From it to the checkout: a block whose text stands unchanged gives
+  its new number ("line 120 is now 134", a repeated line placed by its surroundings); lines
+  edited since, inside the range too, say so with the date (in the commit's own time zone),
+  the commit and where the name is now; lines that did not hold the name in the doc's own
+  version say that (and where that line went). A line that holds the name now only through
+  a call or a comment is reported when the doc's version had the declaration there. A name
+  the file never had is not reported; a missing file is told deleted (when, which commit)
+  or never there since the doc was written (planned, or another repository's file); a
+  missing member, gone from its type's file since a date and commit, or not there when the
+  doc was written either (planned, when no close name or other type explains it). A
+  statement the doc quotes for a line (`obj.setOwner(user)`) that the file has once,
+  elsewhere, gives the line's new number.
 - `check_refs` reads more of how docs write line numbers: lists (`:40,42-43`, `:12/20`,
-  `:12 + 80-84`, `:30→:35`) hold the name at any of their lines; a name written after
-  another path or after a bare `:N` belongs to that one; `getX` holds where the field `x` is
-  declared; implicit members (`toString`, `close`, `iterator`…) are never required at a
-  line; `main <sha> path` and `<sha> path` are another version; name templates
+  `:12 + 80-84`, `:30→:35`, `` `:40` y `:45` ``, `:12 y 18`) hold the name at any of their
+  lines; a name written after another path or after a bare `:N` belongs to that one; the
+  word glued before a path's parenthesis counts only when it looks like code (`` `foo` ``,
+  `foo()`, `camelCase`), and when the glued names cannot be checked in that file, the
+  clause's are; a mention that opens its line takes the call that ended the line before;
+  `getX` holds where the field `x` is declared; implicit members (`toString`, `close`…) are
+  required at a line only when the file declares them; a type's name holds anywhere in its
+  body; `main <sha> path`, `<sha> path`, `path (main)` and the labels of
+  `[check_refs] other_versions` (`v4 path`) are another version; name templates
   (`com.example.Run<N>Test`, `com.example.Run*`) are not type names; a table cell next to the
-  path counts only up to its first clause, and only when the path's cell holds nothing else.
+  path counts only when it starts with code, up to its first clause; a shorter parameter
+  list than every overload is shorthand (`put(Date)`). `Type.member` alone in a code span is
+  checked too, and reported only when git shows the type had that member.
 
 ## 0.6.0 — 2026-11-23
 

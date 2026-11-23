@@ -34,11 +34,14 @@ from .index import REL_IMPLEMENTATION
 # nested (Outer.Inner).
 _HASH = re.compile(r"(?<![\w$.…])((?:[a-z_][\w$]*\.)*[A-Z][\w$]*(?:\.[A-Z][\w$]*)*)#"
                    r"([A-Za-z_$][\w$]*)(\(([^()]*)\))?")
+_DOT_MEMBER = re.compile(r"((?:[a-z_][\w$]*\.)*[A-Z][\w$]*(?:\.[A-Z][\w$]*)*)\.([a-z_$][\w$]*)")
 _DOT_CALL = re.compile(r"(?<![\w$.…])((?:[a-z_][\w$]*\.)*[A-Z][\w$]*(?:\.[A-Z][\w$]*)*)\."
                        r"([a-z_$][\w$]*)\(([^()]*)\)?")
 # Not members: file extensions and class literals (Foo.feature, Foo.class).
 _NOT_MEMBERS = {"class", "java", "feature", "md", "xml", "sql", "json", "properties", "txt",
-                "groovy", "jrxml", "yml", "yaml", "html", "kt", "gradle", "jar", "log"}
+                "groovy", "jrxml", "yml", "yaml", "html", "kt", "gradle", "jar", "log", "csv",
+                "xls", "xlsx", "pdf", "png", "jpg", "svg", "zip", "sh", "py", "js", "ts", "css",
+                "toml", "ini", "conf", "jasper", "war", "ear", "tsv", "doc", "docx", "gz"}
 # A dotted chain that starts lower case (a package): com.example.Type, com.x.IVA.model.Type,
 # com.example.Outer.Inner; type arguments (<…>) end it.
 _FQN = re.compile(r"(?<![\w$./])([a-z_][\w$]*(?:\.[\w$]+){2,})(?![\w$(])")
@@ -69,8 +72,9 @@ _BUILTIN_MEMBERS = {
 _IMPLICIT = {"toString", "hashCode", "equals", "compareTo", "close", "iterator", "getClass",
              "finalize", "valueOf", "values", "ordinal"}
 # More line numbers of the same file after a path's: ,42-43 /50 , :61 + 80-84 y :61 →:70
-_MORE_LINES = re.compile(r"(?:[,/](\d+)(?:-(\d+))?|(?:,\s*|\s+(?:y|and|e)\s+|\s*(?:\+|→|->)\s*)"
-                         r":(\d+)(?:-(\d+))?|\s*(?:\+|→|->)\s*(\d+)(?:-(\d+))?)(?![\w.])")
+_MORE_LINES = re.compile(r"(?:[,/](\d+)(?:-(\d+))?|`?(?:,\s*|\s+(?:y|and|e)\s+|\s*(?:\+|→|->)\s*)"
+                         r"`?:(\d+)(?:-(\d+))?|\s*(?:\+|→|->)\s*(\d+)(?:-(\d+))?"
+                         r"|\s+(?:y|and)\s+(\d+)(?:-(\d+))?(?=\)|,|;|\s*$))(?![\w.])")
 # A line number alone after a path, for the same file: `:30`, (:41, :45)
 _BARE = re.compile(r"(?:(?<=[\s`(,/])|^):(\d+)(?:-(\d+))?(?![\w.])")
 _ENHANCER = re.compile(r"(dn|jdo)[A-Z_]\w*")
@@ -97,7 +101,8 @@ KINDS = {"no-type": "types not found", "no-member": "members not found",
          "never-member": "members their type never had then",
          "line-moved": "lines no longer in the symbol named",
          "line-shifted": "line numbers that only moved (new number given)",
-         "line-changed": "lines changed since the doc named them"}
+         "line-changed": "lines changed since the doc named them",
+         "line-off": "line numbers already off in the doc's own version"}
 
 
 @dataclass
@@ -113,6 +118,7 @@ class Problem:
     name: str = ""
     names: tuple = ()
     hint: str = ""
+    loose: bool = False         # Type.member without parentheses: only when git confirms
     # lines -> whether they would hold the name: to try the lines a newer version moved to
     recheck: object = field(default=None, repr=False, compare=False)
 
@@ -419,7 +425,8 @@ def _placeholder_type(written: str) -> bool:
 
 
 def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | None = None,
-          skip_archives: bool = True) -> tuple[list[Problem], int, int, int]:
+          skip_archives: bool = True, other_versions: list[str] = ()
+          ) -> tuple[list[Problem], int, int, int]:
     """(problems, mentions checked, files read, files left out as archives). With
     skip_archives, files under folders of closed or historical docs (archive/, done/…) are
     left out."""
@@ -469,7 +476,9 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
         fence = None                 # the language of the fenced block we are in
         # Path abbreviations the document declares: `I/` = `core/src/…/billing/`
         abbrev = {k: v for k, v in re.findall(r"`([\w.-]+/)`\s*=\s*`([^`\s]+/)`", text)}
+        prev = ""
         for ln, line in enumerate(text.split("\n"), 1):
+            before_line, prev = prev, line
             f = _FENCE.match(line)
             if f:
                 fence = None if fence is not None else f.group(2).lower()
@@ -500,6 +509,21 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                 named_here += [(x, mo.start()) for x in _check_member(
                     m, mo.group(0), mo.group(1), mo.group(2),
                     mo.group(4) if mo.group(3) else None, True, add)]
+            # A code span that is just `Type.member` (a field, or a method named without
+            # its parentheses).
+            # Without parentheses it may as well be a key (a YAML section's, an annotation
+            # attribute): reported only when git shows the type had that member.
+            for p_, q_ in code:
+                mo = _DOT_MEMBER.fullmatch(line, p_ + 1, q_ - 1)
+                if mo is None or mo.group(2) in _NOT_MEMBERS or \
+                        m.is_package(mo.group(0).replace(".", "/")):
+                    continue
+                spans.append(mo.span())
+                checked += 1
+                at[0] = mo.start()
+                named_here += [(x, mo.start()) for x in _check_member(
+                    m, mo.group(0), mo.group(1), mo.group(2), None, False,
+                    lambda *a, **e: add(*a, loose=True, **e))]
             for mo in _DOT_CALL.finditer(line):
                 if any(a <= mo.start() < b for a, b in spans) or mo.group(2) in _NOT_MEMBERS:
                     continue
@@ -520,10 +544,12 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                 checked += 1
                 at[0] = mo.start()
                 _check_path(m, root, mo, by_suffix, sources | unindexed, named_here, line,
-                            code, count_lines, add, text_cache, os.path.dirname(path), abbrev)
+                            code, count_lines, add, text_cache, os.path.dirname(path), abbrev,
+                            other_versions, before_line)
     _since_written(root, problems)
     _gone(root, problems)
-    return [p for p in problems if p.kind != "drop"], checked, len(files), archived
+    return [p for p in problems if p.kind not in ("drop", "weak") and
+            (not p.loose or "gone from" in p.what)], checked, len(files), archived
 
 
 def _git(root: str, *args: str, data: bytes | None = None) -> bytes | None:
@@ -563,7 +589,8 @@ def _map_line(hunks: list[tuple[int, int, int, int]], n: int) -> int | None:
             break
         if n < a + b:
             return None
-        shift = c + d - a - b
+        # Lines removed (d = 0): git gives the new line before the gap, as for insertions.
+        shift = c + d - a - b if d else c + 1 - a - b
     return n + shift
 
 
@@ -673,11 +700,15 @@ def _holds(lines: list[str], n: int, end: int, names: tuple) -> bool:
         return True
     span = "\n".join(c for c in lines[max(0, n - 3):end + 2]
                      if not re.match(r"\s*(//|\*|/\*)", c))
+    notes = "\n".join(c for c in lines[max(0, n - 3):end + 2]
+                      if re.match(r"\s*(//|\*|/\*)", c))
     for x in names:
-        if re.search(r"(?<![\w$])" + re.escape(x) + r"(?![\w$])", span):
-            return True
+        q = re.escape(x)
+        if re.search(r"(?<![\w$])" + q + r"(?![\w$])", span) or \
+                re.search(r"(?<![\w$])" + q + r"\(|[.#]" + q + r"(?![\w$])", notes):
+            return True         # in a comment, only written as code
         for y in (x, _property(x)):
-            if y and any(lo - 2 <= end and n <= hi + 1 for lo, hi in _declared(lines, y)):
+            if y and any(lo - 2 <= end and n <= hi + 1 for lo, _d, hi in _declared(lines, y)):
                 return True
     return False
 
@@ -691,9 +722,9 @@ def _property(name: str) -> str:
 _MODIFIERS = r"(?:public|protected|private|static|final|abstract|synchronized|default|native)"
 
 
-def _declared(lines: list[str], x: str) -> list[tuple[int, int]]:
+def _declared(lines: list[str], x: str) -> list[tuple[int, int, int]]:
     """Where the text of a Java file declares the method, field or type x: (first line with
-    its javadoc and annotations, last line of its body), 1-based."""
+    its javadoc and annotations, the declaration's line, last line of its body), 1-based."""
     q = re.escape(x)
     decl = re.compile(r"^\s*(?:@[\w.]+(?:\([^)]*\))?\s+)*(?:" + _MODIFIERS + r"\s+)*"
                       r"(?:(?:<[^>]*>\s*)?[\w$.]+(?:<[^;=]*>)?(?:\[\])*\s+" + q + r"\s*[(=;]"
@@ -715,7 +746,7 @@ def _declared(lines: list[str], x: str) -> list[tuple[int, int]]:
         top = k
         while top > 0 and _HEADER_LINE.match(lines[top - 1]):
             top -= 1
-        out.append((top + 1, j + 1))
+        out.append((top + 1, k + 1, j + 1))
     return out
 
 
@@ -725,12 +756,70 @@ _READ_BEFORE = 21 * 86400
 _VERSIONS_BACK = 8
 
 
+def _renamed_from(root: str, paths: list[str]) -> dict[str, str]:
+    """Older paths of files (paths from the repository's top): old path -> current one, from
+    the commits that added each path (a rename there, R100, keeps its history)."""
+    found: dict[str, str] = {}
+    frontier = {x: x for x in paths}
+    for _ in range(3):              # a doc renamed twice, three times
+        adds: dict[str, list[str]] = {}
+        commit = None
+        out = _git(root, "log", "--all", "--no-renames", "--diff-filter=A", "--format=C %H",
+                   "--name-only", "--", *[f":(top){x}" for x in frontier])
+        for row in (out or b"").decode(errors="replace").splitlines():
+            if row.startswith("C "):
+                commit = row[2:]
+            elif row in frontier and commit:
+                adds.setdefault(commit, []).append(row)
+        nxt: dict[str, str] = {}
+        for c in adds:
+            shown = _git(root, "show", "--format=", "-M", "--name-status", c) or b""
+            for row in shown.decode(errors="replace").splitlines():
+                parts = row.split("\t")
+                if len(parts) == 3 and parts[0].startswith("R") and parts[2] in frontier and \
+                        parts[1] not in found and parts[1] not in paths:
+                    nxt[parts[1]] = frontier[parts[2]]
+        if not nxt:
+            break
+        found.update(nxt)
+        frontier = nxt
+    return found
+
+
+def _block_at(old: list[str], cur: list[str], n: int, end: int, near: int):
+    """Where the lines n..end of an older version stand, unchanged, in the current one (the
+    occurrence nearest to near): (first, last) or None. Only a block with some text of its
+    own (not a lone brace or blank) counts."""
+    block = [x.strip() for x in old[n - 1:end]]
+    if len(block) != end - n + 1 or not any(len(x) > 3 and x not in ("} else {", "*/", "/**")
+                                             for x in block):
+        return None
+    k0 = next(k for k, x in enumerate(block) if len(x) > 3)
+    hits = [i - k0 for i, x in enumerate(cur) if x.strip() == block[k0] and i - k0 >= 0 and
+            [y.strip() for y in cur[i - k0:i - k0 + len(block)]] == block]
+    if not hits:
+        return None
+    # A repeated line: the copy whose surroundings match the old ones best, then the
+    # nearest.
+    around = {x.strip() for x in old[max(0, n - 7):n - 1] + old[end:end + 6] if len(x.strip()) > 3}
+
+    def context(h: int) -> int:
+        return len(around & {x.strip() for x in cur[max(0, h - 6):h] +
+                             cur[h + len(block):h + len(block) + 6]})
+    i = max(hits, key=lambda h: (context(h), -abs(h + 1 - near)))
+    return i + 1, i + len(block)
+
+
 def _since_written(root: str, problems: list[Problem]) -> None:
     """Line numbers written against an older version of the code. The version is the first
-    commit (on any branch) whose copy of the doc has that line, or, when the lines named do
-    not hold the name there, the newest of the file's versions from the weeks before that
-    does; the lines are mapped through the diff from it to the checkout. Lines that only
-    moved get their new number when they still hold the name; lines edited since say so."""
+    commit (on any branch, through the doc's renames) whose copy of the doc has that line,
+    the version just before it (doc and code committed together), or, when the lines named
+    do not hold the name there, the newest of its ancestors' versions of the file from the
+    weeks before that does. From it to the checkout, lines whose text stands unchanged get
+    their new number (when they still hold the name); lines edited since say so; lines that
+    did not hold the name in that version either say that. Lines that hold the name now only
+    through a call or a comment ("weak") are reported when that version had the
+    declaration there."""
     todo = [p for p in problems if p.recheck is not None]
     if not todo or not os.path.isdir(root) or shutil.which("git") is None:
         return
@@ -738,22 +827,34 @@ def _since_written(root: str, problems: list[Problem]) -> None:
     if prefix is None:
         return
     top = prefix.decode().strip()
-    docs = sorted({p.path for p in todo})
+    days: dict[str, str] = {}               # commit -> its day, in its own time zone
+
+    def commits(out: bytes | None):
+        """Rows of a log with --format=C %H %ct %cs: (commit, time) and each other row."""
+        commit = None
+        for row in (out or b"").decode(errors="replace").splitlines():
+            if row.startswith("C "):
+                _c, sha, ts, day = row.split()
+                commit = (sha, int(ts))
+                days[sha] = day
+            elif row and commit:
+                yield commit, row
+    doc_of = {top + d: d for d in {p.path for p in todo}}
+    doc_of.update({old: doc_of[now] for old, now in _renamed_from(root, list(doc_of)).items()})
     log = _git(root, "log", "--all", "--full-history", "--date-order", "--reverse", "--raw",
-               "--no-abbrev", "--no-renames", "--format=C %H %ct", "--", *docs)
+               "--no-abbrev", "--no-renames", "--format=C %H %ct %cs", "--",
+               *[f":(top){x}" for x in sorted(doc_of)])
     if not log:
         return
     versions: dict[str, list[tuple[str, int, str]]] = {}   # doc -> (commit, time, blob)
-    commit = None
-    for row in log.decode(errors="replace").splitlines():
-        if row.startswith("C "):
-            _c, sha, ts = row.split()
-            commit = (sha, int(ts))
-        elif row.startswith(":") and commit and "\t" in row:
+    for commit, row in commits(log):
+        if row.startswith(":") and "\t" in row:
             meta, path = row.split("\t", 1)
             blob = meta.split()[3]
-            if blob.strip("0") and path.startswith(top):
-                versions.setdefault(path[len(top):], []).append((*commit, blob))
+            if blob.strip("0") and path in doc_of:
+                versions.setdefault(doc_of[path], []).append((*commit, blob))
+    for vs in versions.values():
+        vs.sort(key=lambda v: v[1])         # oldest first, across the doc's paths
     blobs = sorted({b for vs in versions.values() for *_x, b in vs})
     doc_texts = {b: set(t.split("\n")) for b, t in _blobs(root, blobs).items()}
     doc_lines: dict[str, list[str]] = {}
@@ -770,73 +871,139 @@ def _since_written(root: str, problems: list[Problem]) -> None:
                       if text is not None and text in doc_texts.get(b, ())), None)
         if first:
             written.append((p, *first))
+        elif p.kind == "weak":
+            p.kind = "drop"
     if not written:
         return
-    # The code the author read: the version at that commit, else an earlier one (from the
-    # weeks before, any branch, merges too) that has the name at those lines.
-    olds = _blobs(root, sorted({f"{c}:{top}{p.src}" for p, c, _t in written}))
+    # The version just before each of those commits (the doc written, then committed with
+    # the code it describes).
+    parents: dict[str, tuple[str, int]] = {}
+    for (sha, _ts), row in commits(_git(root, "log", "--no-walk", "--format=C %H %ct %cs%n%P",
+                                        *sorted({c for _p, c, _t in written}))):
+        for parent in row.split()[:1]:
+            parents[sha] = (parent, 0)
+    for (sha, ts), _row in commits(_git(root, "log", "--no-walk", "--format=C %H %ct %cs%n",
+                                        *sorted({x for x, _t in parents.values()}))):
+        for k, v in parents.items():
+            if v[0] == sha:
+                parents[k] = (sha, ts)
+    olds = _blobs(root, sorted({f"{c}:{top}{p.src}" for p, c, _t in written} |
+                               {f"{parents[c][0]}:{top}{p.src}" for p, c, _t in written
+                                if c in parents}))
+
+    def held(p: Problem, old: str | None) -> bool:
+        if old is None:
+            return False
+        if p.kind == "weak":            # the doc pointed at the declaration then
+            return _at_declaration(old.split("\n"), *p.lines, p.names or (p.name,))
+        return _holds(old.split("\n"), *p.lines, p.names or (p.name,))
     base: dict[tuple[str, int], list[Problem]] = {}
+    holding: set[int] = set()           # problems whose version held the name there
     later: list[tuple[Problem, str, int]] = []
     for p, c, t in written:
-        old = olds.get(f"{c}:{top}{p.src}")
-        if old is not None and _holds(old.split("\n"), *p.lines, p.names or (p.name,)):
-            base.setdefault((c, t), []).append(p)
+        first = [(c, t)] + ([parents[c]] if c in parents else [])
+        hit = next((v for v in first if held(p, olds.get(f"{v[0]}:{top}{p.src}"))), None)
+        if hit:
+            base.setdefault(hit, []).append(p)
+            holding.add(id(p))
+        elif p.kind == "weak":
+            p.kind = "drop"     # it was not the declaration then either: a call is fine
         else:
             later.append((p, c, t))
     if later:
-        # -m: a merge's version of the file is one too (a branch that just took main's).
+        # The file's versions in the weeks before, among the commit's ancestors (-m: a
+        # merge's version is one too, a branch that just took main's).
         log = _git(root, "log", "--all", "--full-history", "-m", "--no-renames",
-                   "--format=C %H %ct", "--name-only",
+                   "--format=C %H %ct %cs", "--name-only",
                    f"--since={min(t for *_x, t in later) - _READ_BEFORE}",
                    f"--until={max(t for *_x, t in later)}", "--",
-                   *sorted({p.src for p, _c, _t in later})) or b""
+                   *sorted({p.src for p, _c, _t in later}))
         touched: dict[str, list[tuple[str, int]]] = {}     # src -> (commit, time)
-        commit = None
-        for row in log.decode(errors="replace").splitlines():
-            if row.startswith("C "):
-                _c, sha, ts = row.split()
-                commit = (sha, int(ts))
-            elif row and commit and row.startswith(top) and \
-                    commit not in touched.get(row[len(top):], ()):
+        for commit, row in commits(log):
+            if row.startswith(top) and commit not in touched.get(row[len(top):], ()):
                 touched.setdefault(row[len(top):], []).append(commit)
-        backs = [sorted((x for x in touched.get(p.src, []) if t - _READ_BEFORE <= x[1] <= t
+        ancestors: dict[str, set[str]] = {}
+        for c, t in {(c, t) for _p, c, t in later}:
+            out = _git(root, "rev-list", f"--since={t - _READ_BEFORE}", c) or b""
+            ancestors[c] = set(out.decode().split())
+        backs = [sorted((x for x in touched.get(p.src, []) if x[0] in ancestors.get(c, ())
                          and x[0] != c), key=lambda x: -x[1])[:_VERSIONS_BACK]
                  for p, c, t in later]
         olds.update(_blobs(root, sorted({f"{c2}:{top}{p.src}" for (p, _c, _t), back in
                                          zip(later, backs) for c2, _t2 in back})))
         for (p, c, t), back in zip(later, backs):
-            texts = [(c2, t2, old) for c2, t2 in [(c, t), *back]
+            seen = [(c, t)] + ([parents[c]] if c in parents else []) + back
+            texts = [(c2, t2, old) for c2, t2 in seen
                      if (old := olds.get(f"{c2}:{top}{p.src}")) is not None]
             if not p.hint and p.name and texts and not any(
                     re.search(r"(?<![\w$])" + re.escape(p.name) + r"(?![\w$])", old)
                     for *_x, old in texts):
                 p.kind = "drop"     # the file never had the name: not what the doc meant
                 continue
-            held = next(((c2, t2) for c2, t2, old in texts[1:] if _holds(
-                old.split("\n"), *p.lines, p.names or (p.name,))), None)
+            hit = next(((c2, t2) for c2, t2, old in texts if held(p, old)), None)
+            if hit:
+                holding.add(id(p))
             # Held nowhere: the version the doc was committed with.
-            base.setdefault(held or (c, t), []).append(p)
+            base.setdefault(hit or (c, t), []).append(p)
     current: dict[str, list[str]] = {}
+
+    def now_lines(src: str) -> list[str]:
+        if src not in current:
+            try:
+                with open(os.path.join(root, src), encoding="utf-8", errors="replace") as fh:
+                    current[src] = fh.read().split("\n")
+            except OSError:
+                current[src] = []
+        return current[src]
     for (sha, ts), group in base.items():
         diff = _git(root, "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", sha,
                     "--", *sorted({p.src for p in group}))
         if diff is None:
             continue
         hunks = _hunks(diff.decode(errors="replace"))
-        day = time.strftime("%Y-%m-%d", time.gmtime(ts))
+        day = days.get(sha) or time.strftime("%Y-%m-%d", time.gmtime(ts))
         for p in group:
             h = hunks.get(top + p.src, [])
             if h is None:
                 continue        # the file was not there (or not at that path) back then
             n, end = p.lines
+            span = f"line {n}" if n == end else f"lines {n}-{end}"
+            if id(p) not in holding:
+                if p.kind == "weak":
+                    p.kind = "drop"
+                else:           # off already in the doc's own version
+                    old = (olds.get(f"{sha}:{top}{p.src}") or "").split("\n")
+                    n2 = _map_line(h, n)
+                    went = _block_at(old, now_lines(p.src), n, p.lines[1], n2 or n)
+                    p.what = _also(p.what, f"so in the doc's version too: {day}, {sha[:8]}" +
+                                   (f"; that line is now {went[0]}" if went and
+                                    went[0] != n else ""))
+                    p.kind = "line-off"
+                continue
             n2, end2 = _map_line(h, n), _map_line(h, end)
-            if (n2, end2) == (n, end):
-                continue        # unchanged since: the doc was off already
-            if n2 is None or end2 is None:
-                span = f"line {n}" if n == end else f"lines {n}-{end}"
-                now = _edited_to(h, n, end)
+            edited = n2 is None or end2 is None or end2 - n2 != end - n or any(
+                (b and a <= end and n < a + b) or (not b and n <= a < end) for a, b, _c, _d in h)
+            if (n2, end2) == (n, end) and not edited:
+                if p.kind == "weak":
+                    p.kind = "drop"
+                continue
+            old = (olds.get(f"{sha}:{top}{p.src}") or "").split("\n")
+            near = n2 if n2 is not None else (_edited_to(h, n, end) or (n,))[0]
+            # The block by its text (a repeated line: by its surroundings); git's alignment
+            # when the text is not found.
+            moved = _block_at(old, now_lines(p.src), n, end, near) or \
+                (None if edited else (n2, end2))
+            if moved and p.recheck(*moved):
+                m2, e2 = moved
+                p.what = (f"line {n} is now {m2}" if n == end else
+                          f"lines {n}-{end} are now {m2}-{e2}") + f" (moved since {day})"
+                p.kind = "line-shifted"
+            elif edited:
+                mapped = n2 is not None and end2 is not None
+                now = (n2, end2) if mapped else _edited_to(h, n, end)
                 if now and p.recheck(*now):
-                    at = _naming(root, p.src, *now, p.names or (p.name,), current) or now
+                    at = now if mapped else \
+                        _naming(root, p.src, *now, p.names or (p.name,), current) or now
                     where = f"; now at {at[0]}" if at[0] == at[1] else \
                         f"; now in {at[0]}-{at[1]}"
                 else:
@@ -844,10 +1011,17 @@ def _since_written(root: str, problems: list[Problem]) -> None:
                 p.what = (f"{span} changed since the doc named {p.name or 'them'} ({day}, "
                           f"{sha[:8]})" + where)
                 p.kind = "line-changed"
-            elif p.recheck(n2, end2):
-                p.what = (f"line {n} is now {n2}" if n == end else
-                          f"lines {n}-{end} are now {n2}-{end2}") + f" (moved since {day})"
-                p.kind = "line-shifted"
+            elif p.kind == "weak":
+                p.what = f"{span} no longer hold {p.name}'s declaration" + \
+                    (f" ({p.hint})" if p.hint else "")
+                p.kind = "line-moved"
+
+
+def _at_declaration(lines: list[str], n: int, end: int, names: tuple) -> bool:
+    """The lines n..end of an older version start at the declaration of one of names (its
+    javadoc, annotations or first line), or lie in it."""
+    return any(top - 2 <= n <= decl + 2 or (top <= n and end <= hi + 1)
+               for x in names if x for top, decl, hi in _declared(lines, x))
 
 
 def _naming(root: str, src: str, lo: int, hi: int, names: tuple, cache: dict):
@@ -930,7 +1104,7 @@ def _with_header(root: str, src: str, lo: int, cache: dict) -> int:
 
 def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, code,
                 count_lines, add, text_cache: dict, doc_dir: str = "",
-                abbrev: dict | None = None) -> None:
+                abbrev: dict | None = None, other_versions=(), prev_line: str = "") -> None:
     written, n0 = mo.group(1), mo.group(2)
     for k, v in (abbrev or {}).items():
         if written.startswith(k):
@@ -977,8 +1151,11 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     before = line[max(0, mo.start() - 80):mo.start()].rstrip("`")
     if re.search(r"(?:[0-9a-f]{7,40}|[\w./~^-]*(?:main|master|HEAD|origin/[\w./-]+)[\w~^]*):$"
                  r"|\bgit show\b[^`]*$|(?:^|[\s(`])/(?:home|Users|tmp|mnt|var)/\S*$"
-                 r"|(?<![\w-])(?:[0-9a-f]{7,40}|main|master)\s+`?$", before):
+                 r"|(?<![\w-])(?:[0-9a-f]{7,40}|main|master" +
+                 "".join("|" + re.escape(v) for v in other_versions) + r")\s+`?$", before):
         return      # another version: <ref>:path, git show, an absolute path elsewhere
+    if re.match(r"`?\s*\((?:en |in |de |on |at )?(?:main|master|[0-9a-f]{7,40})\)", line[mo.end():]):
+        return      # File.java:12 (main): another branch's
     # What the mention's own part of the line names: the name glued to the path (`name
     # (File:N)`, `File:N — name`, `File:N (name)`), else the names of its parentheses, its
     # sentence, cell or item (a table cell holding only the path: the cells next to it),
@@ -989,8 +1166,11 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     if line.lstrip().startswith("|") and not any(a <= at < b for _x, at in named_here) and \
             not re.search(r"[a-z_$][\w$]*\s*\(|`[^`]+`", line[a:b].replace(mo.group(0), "")):
         extra_spans = [(x, x + len(re.split(r";\s| · ", line[x:y])[0]))
-                       for x, y in _neighbour_cells(line, mo.start())]
+                       for x, y in _neighbour_cells(line, mo.start())
+                       if re.match(r"\s*(?:`|[A-Za-z_$][\w$.#]*\()", line[x:y])]  # code, not a remark
     glued = _glued_names(line[oa:ob], mo.group(0))
+    if not any(x in m.by_member or x in m.types for x in glued):
+        glued = set()       # glued words that name nothing in the code (`onClose`, a key)
     end_n = int(mo.group(3)) if mo.group(3) else n
     in_part = [(a, b)] + extra_spans
 
@@ -1010,14 +1190,24 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         return (before[-1] if before else after[0] if after else mo.start()) == mo.start()
     others = {x for p in [*paths, *bare] if p.start() != mo.start()
               for x in _glued_names(line[oa:ob], p.group(0))} - glued
-    names: list[str] = sorted(glued)
-    if not names:
-        names = sorted({S.name_of(x) for x, at in named_here if inside(at) and ours(at)} |
-                       {g.group(1) for p, q in code if inside(p) for g in
-                        re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q])
-                        if ours(p + g.start())})
-        names = [x for x in names if x not in others]
-    names += sorted(c for c in _glued_calls(line, mo, code, oa, ob) if c not in names)
+    in_segment = sorted({S.name_of(x) for x, at in named_here if inside(at) and ours(at)} |
+                        {g.group(1) for p, q in code if inside(p) for g in
+                         re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q])
+                         if ours(p + g.start())})
+    in_segment = [x for x in in_segment if x not in others]
+    names: list[str] = sorted(glued) or in_segment
+    # When the glued names cannot be checked in the file, those of the mention's clause.
+    in_clause = {S.name_of(x) for x, at in named_here if oa <= at < ob and ours(at)} | \
+        {g.group(1) for p, q in code if oa <= p < ob for g in
+         re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q]) if ours(p + g.start())}
+    fallback = sorted(x for x in in_clause if x not in names and x not in others)
+    names += sorted(c for c in _glued_calls(line, mo, code, oa, ob)
+                    if c not in names and c not in others)
+    if not names and re.fullmatch(r"\s*[(\[]?\s*`?", line[:mo.start()]):
+        # `Type.query(…)`\n(`Type.java:719`): the paragraph goes on from the line before.
+        last = re.search(r"`[^`]*?([a-z_$][\w$]*)\s*\([^`]*`\s*$", prev_line)
+        if last:
+            names = [last.group(1)]
     names = [x for x in names if not x.startswith("new ")] + \
         [x[4:] for x in names if x.startswith("new ")]
     seg = line[oa:ob]
@@ -1038,7 +1228,7 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         return x not in m.by_member and \
             re.search(r"(?<![\w$.])" + q + r"\s*(?:\.|=[^=])", spans_text) is not None and \
             re.search(r"(?<![\w$])" + q + r"\(|[.#]" + q + r"(?![\w$])", spans_text) is None
-    names = [x for x in names if not receiver_only(x) and x not in _IMPLICIT]
+    names = [x for x in names if not receiver_only(x)]
     # More lines of the same file listed after it (:40,42-43, :12/20, :12 + 80-84, :30, :35):
     # the name may be at any of them.
     more: list[tuple[int, int]] = []
@@ -1048,16 +1238,21 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         more.append((int(g[0]), int(g[1]) if len(g) > 1 else int(g[0])))
         k = nx.end()
 
-    def verdict(n: int, end_n: int, srcs: list[str], also: list[tuple[int, int]] = ()):
+    def verdict(n: int, end_n: int, srcs: list[str], also: list[tuple[int, int]] = (),
+                strict: bool = False):
         """None when the lines n..end_n of one of srcs still mention a name the doc gives
-        (or no name can be checked there); else (name, where it is now, source)."""
+        (or no name can be checked there); else (name, where it is now, source). strict:
+        they must start at the declaration of a name the file declares, or lie in it."""
         declaring = [f for f in srcs if any(m.member_syms.get((t, x)) for t in
                                             m.types_in.get(f, []) for x in names)]
         failed = None
         for src in declaring or srcs:    # same-named files: the one with the member named
             for lo, hi in [(n, end_n), *also]:
-                bad = _verdict_in(m, root, src, lo, hi, names, as_code, text_cache)
-                if bad is None:
+                bad = _verdict_in(m, root, src, lo, hi, names, as_code, text_cache, strict)
+                if bad == "unchecked" and fallback:
+                    bad = _verdict_in(m, root, src, lo, hi, fallback, as_code, text_cache,
+                                      strict)
+                if bad is None or bad == "unchecked":
                     return None
                 failed = failed or bad + (src,)
         return failed
@@ -1071,6 +1266,29 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         return
     bad = verdict(n, end_n, fits, more)
     if bad is None:
+        # A statement the doc quotes for one line (`obj.setOwner(user)`), which the file
+        # has once, and not there: the line moved (another call of that name is there now).
+        quotes = {re.sub(r"\s+|;$", "", line[p + 1:q - 1]) for p, q in code
+                  if (inside(p) or oa <= p < ob) and ours(p) and not p <= mo.start() < q}
+        quotes = {x for x in quotes if len(x) >= 12 and re.search(r"[\w$)]\.[\w$]+\(|=", x)
+                  and "(" in x and "…" not in x and "..." not in x and not _PATH.search(x)}
+        for src in fits if quotes and n == end_n and not more else ():
+            lines = text_cache.get(src) or []
+            flat = [re.sub(r"\s+", "", x) for x in lines]
+            for x in sorted(quotes):
+                at = [k + 1 for k, y in enumerate(flat) if x in y]
+                if len(at) == 1 and abs(at[0] - n) > 2:
+                    add(mo.group(0), f"line {n} is now {at[0]} (the code quoted is there; "
+                        f"line {n} has another)", "line-shifted")
+                    return
+        # It holds through a call or a comment while the file declares the name elsewhere:
+        # git may show the doc pointed at the declaration (then the lines moved).
+        weak = verdict(n, end_n, fits, more, strict=True)
+        if weak is not None:
+            x, where, src = weak
+            add(mo.group(0), "", "weak", src=src, lines=(n, end_n), name=x,
+                names=tuple(names), hint="; ".join(where),
+                recheck=lambda n2, m2: verdict(n2, m2, [src], strict=True) is None)
         return
     x, where, src = bad
     extra = {"src": src, "lines": (n, end_n), "name": x, "hint": "; ".join(where),
@@ -1080,20 +1298,23 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         add(mo.group(0), f"line {n} no longer mentions {x} ({'; '.join(where)})",
             "line-moved", **extra)
     else:
-        add(mo.group(0), f"line {n} no longer calls {x} (nothing in this file mentions it now)",
+        add(mo.group(0), f"line {n} no longer calls {x} (no code in this file calls it now)",
             "line-moved", **extra)
 
 
 def _verdict_in(m: Model, root: str, src: str, n: int, end_n: int, names: list[str], as_code,
-                text_cache: dict):
-    """None when the lines n..end_n (±2) of src mention one of names, or fall in its lines, or
-    no name can be checked in src; else (the first name, where it is now)."""
+                text_cache: dict, strict: bool = False):
+    """None when the lines n..end_n (±2) of src mention one of names, or fall in its lines;
+    "unchecked" when no name can be checked in src; else (the first name, where it is now)."""
     members = {x: [y for t in m.types_in.get(src, [])
                    for y in m.member_syms.get((t, x), []) if y not in m.generated]
                for x in names}
-    known = [x for x in names if members[x] or x in m.by_member or x in m.types]
+    # toString, close…: a line may call them without naming them, unless this file
+    # declares them (the doc is about the declaration).
+    known = [x for x in names if (members[x] or x in m.by_member or x in m.types) and
+             (x not in _IMPLICIT or members[x])]
     if not known:
-        return None
+        return "unchecked"
     lines = text_cache.get(src) or []
     if not lines:
         _with_header(root, src, 1, text_cache)
@@ -1130,11 +1351,12 @@ def _verdict_in(m: Model, root: str, src: str, n: int, end_n: int, names: list[s
     # code: a prose word ("en main", "de sólo lectura") never does.
     known = [x for x in known if anywhere(x) or as_code(x)]
     if not known:
-        return None
+        return "unchecked"
 
     def contains(x: str) -> bool:
-        """N..M falls in X's own lines (with its javadoc and annotations)."""
-        for y in members.get(x, []):
+        """N..M falls in X's own lines (with its javadoc and annotations); a type's are its
+        whole body."""
+        for y in members.get(x, []) + [t for t in m.types_in.get(src, []) if S.name_of(t) == x]:
             w = m.where.get(y)
             if not w or w[0] != src:
                 continue
@@ -1143,7 +1365,26 @@ def _verdict_in(m: Model, root: str, src: str, n: int, end_n: int, names: list[s
             if n <= hi + 1 and end_n >= _with_header(root, src, lo, text_cache) - 2:
                 return True
         return False
-    if any(mentions(x) or contains(x) for x in known):
+    def at_declaration(x: str) -> bool:
+        """N..M start at X's declaration (its javadoc, annotations or first line), or lie
+        in it."""
+        for y in members.get(x, []):
+            w = m.where.get(y)
+            if not w or w[0] != src:
+                continue
+            lo = min((w[2] + 1) if w[2] is not None else w[1], w[1])
+            hi = (w[3] + 1) if w[3] is not None else w[1]
+            head = _with_header(root, src, lo, text_cache)
+            if head - 2 <= n <= w[1] + 2 or (head <= n and end_n <= hi + 1):
+                return True
+        return False
+    if strict:
+        known = [x for x in known if members.get(x)]
+        if not known:
+            return "unchecked"
+        if any(at_declaration(x) for x in known):
+            return None
+    elif any(mentions(x) or contains(x) for x in known):
         return None
     x = known[0]
     where = []
@@ -1204,6 +1445,8 @@ def _glued_calls(line: str, mo, code: list, a: int, b: int) -> set[str]:
         pieces.append(head + (tail[:nxt.start()] if nxt else tail))
     after = re.split(r";|\s·\s|\||\s→\s", line[mo.end():b])[0]
     after = re.split(r"(?:,|\s(?:y|and|e))\s*`?:\d", after)[0]
+    nxt = [x.start() for x in (*_PATH.finditer(after), *_BARE.finditer(after)) if x.start() > 0]
+    after = after[:min(nxt)] if nxt else after      # up to the next path or line number
     if re.match(r"`?\s*(?:—|–|-|:|\()", after):
         pieces.append(after[:160])
     before = line[a:mo.start()]
@@ -1216,7 +1459,7 @@ def _glued_calls(line: str, mo, code: list, a: int, b: int) -> set[str]:
         for k, cell in enumerate(cells):
             if pos <= mo.start() < pos + len(cell) + 1:
                 if cell.replace("`", "").strip() == mo.group(0).replace("`", "").strip() and \
-                        k + 1 < len(cells) and "`" in cells[k + 1]:
+                        k + 1 < len(cells) and re.match(r"\s*`", cells[k + 1]):
                     pieces += re.findall(r"`([^`]+)`", cells[k + 1])
                 break
             pos += len(cell) + 1
@@ -1268,14 +1511,18 @@ def _glued_names(segment: str, path_mention: str) -> set[str]:
     `File:N (name)`."""
     p = re.escape(path_mention)
     out = set()
-    for k, rx in enumerate((r"([A-Za-z_$][\w$]*)\s*(?:\(\s*\))?`?\s*\(\s*`?" + p,
+    for k, rx in enumerate((r"([`.#]?)([A-Za-z_$][\w$]*)(\s*\(\s*\))?(`?)\s*\(\s*`?" + p,
                             p + r"`?\s*(?:—|–|:|-)\s*(`?)(?:[\w$]+[#.])?([A-Za-z_$][\w$]*)"
                                 r"(\s*\()?",
                             p + r"`?\s*\(\s*`?(?:[\w$]+[#.])?([A-Za-z_$][\w$]*)")):
         for m_ in re.finditer(rx, segment):
-            name = m_.group(2) if k == 1 else m_.group(1)
-            # After a dash, prose follows unless the word looks like code.
+            name = m_.group(2) if k < 2 else m_.group(1)
+            # After a dash, prose follows unless the word looks like code; before the path's
+            # parenthesis, likewise (`foo` (File:N), foo() (File:N), not "por eval (File:N)").
             if k == 1 and not (m_.group(1) or m_.group(3) or re.search(r"[a-z][A-Z]", name)):
+                continue
+            if k == 0 and not (m_.group(1) or m_.group(3) or m_.group(4) or
+                               re.search(r"[a-z][A-Z]|[_$]", name)):
                 continue
             if name[:1].islower() or name == "constructor":
                 out.add(name)
@@ -1378,8 +1625,10 @@ def _check_member(m: Model, mention: str, written_type: str, name: str, params,
         from .refactor import _param_types
         have = [_param_types(s) for c in cands for s in (m.member(c, name)[0] or [])
                 if "(" in s]
-        if have and want not in have and not any(h[:len(want)] == want for h in have):
-            shown = "; ".join("(" + ", ".join(h) + ")" for h in have[:3])
+        # A shorter list than every overload is shorthand (put(Date): the value's type).
+        if have and want not in have and not any(h[:len(want)] == want for h in have) and \
+                not all(len(want) < len(h) for h in have):
+            shown = "; ".join(dict.fromkeys("(" + ", ".join(h) + ")" for h in have[:6]))
             add(mention, f"no {name}({', '.join(want)}) in {S.short(t)}: its overloads take "
                 f"{shown}", "params")
         # The overload written is the one meant (save(boolean)).

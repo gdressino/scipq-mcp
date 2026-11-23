@@ -114,6 +114,8 @@ class Settings:
     lifecycle_methods: set[str] = field(default_factory=set)
     concepts_exclude: list[str] = field(default_factory=list)   # path globs (vendored code)
     check_refs_exclude: list[str] = field(default_factory=list)  # docs not to check (archives)
+    # Words a doc writes before a path for another branch's version (v4 `path:N`), like main
+    check_refs_versions: list[str] = field(default_factory=list)
     tests_filter: str = ""               # template: {module} {task} {fqcn} {simple} {classes}
     tests_filter_from: str = ""          # where it came from
     files: list[str] = field(default_factory=list)   # configuration applied, lowest first
@@ -279,6 +281,9 @@ def sanitize_repo_config(data: dict) -> tuple[dict, list[str]]:
     if isinstance(cr, dict) and "exclude" in cr:
         cr["exclude"] = [g for g in _as_list(cr["exclude"], "check_refs.exclude", warnings)
                          if _relative_glob(g, "check_refs.exclude", warnings)]
+    if isinstance(cr, dict) and "other_versions" in cr:
+        cr["other_versions"] = _as_list(cr["other_versions"], "check_refs.other_versions",
+                                        warnings)
     dc = out.get("dead_code")
     if isinstance(dc, dict) and "exclude" in dc:
         dc["exclude"] = [g for g in _as_list(dc["exclude"], "dead_code.exclude", warnings)
@@ -541,6 +546,7 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
     s.concept_attributes += list(data.get("concepts", {}).get("attributes", []))
     s.concepts_exclude += strings(data.get("concepts", {}).get("exclude", []))
     s.check_refs_exclude += strings(data.get("check_refs", {}).get("exclude", []))
+    s.check_refs_versions += strings(data.get("check_refs", {}).get("other_versions", []))
     s.lifecycle_methods |= set(strings(data.get("lifecycle", {}).get("methods", [])))
     cu = data.get("cucumber", {})
     if isinstance(cu.get("run"), str) and cu["run"]:

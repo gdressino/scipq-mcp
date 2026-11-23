@@ -501,9 +501,10 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         the doc was written against: "line N is now M" when the code only moved (fix the
         number), "changed since the doc named X (date, commit)" when it was edited (re-read
         the claim); missing files say when they were deleted, or that the repository never
-        had them (planned). A folder in files means its Markdown files. Library types,
-        placeholders (Foo, getX), Object/Class/enum members and mentions the line says are
-        gone ("removed") are left alone."""
+        had them (planned). [check_refs] other_versions in .scipq.toml lists the words a doc
+        writes before a path for another branch's version (v4). A folder in files means its
+        Markdown files. Library types, placeholders (Foo, getX), Object/Class/enum members
+        and mentions the line says are gone ("removed") are left alone."""
         return service.check_refs(project_root, files, exclude, offset, limit, format)
 
     @tool

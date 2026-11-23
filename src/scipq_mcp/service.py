@@ -1285,7 +1285,8 @@ class Service:
                 st = self.settings(nav.ws.root, g)
                 problems, checked, nfiles, archived = CR.check(
                     g, nav.ws.root, globs, list(exclude or []) + list(st.check_refs_exclude),
-                    self.cache_dir, skip_archives=not files)
+                    self.cache_dir, skip_archives=not files,
+                    other_versions=st.check_refs_versions)
             return render.index_note(stats) + CR.render(problems, checked, nfiles, offset,
                                                         limit, fmt, archived), set()
         return body
