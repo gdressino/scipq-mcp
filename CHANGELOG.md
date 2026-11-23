@@ -39,7 +39,8 @@ version and date when releasing.
   index, under the packages the project uses), placeholders (`Foo`, `getX`), constants as
   receivers, members of nested builders, Object/Class/enum and JDO-enhancer members, Python
   snippets and names, examples ("por ejemplo", "e.g."), and mentions the line says are gone
-  ("removed", "borrado"). Folders of closed docs (`archive/`, `done/`, `archivo/`…) are left
+  ("removed", "borrado"); paths are also resolved from the document's folder and against
+  files that exist but are not indexed. Folders of closed docs (`archive/`, `done/`, `archivo/`…) are left
   out unless `files` names them; `[check_refs] exclude` in `.scipq.toml` adds globs; a
   folder in `files` means its Markdown files.
 - `impact` and `changed` list the entry points the change reaches, by kind (screens,
@@ -51,7 +52,11 @@ version and date when releasing.
   without a route, is not one. A rule with `reached = false` keeps code alive for
   `dead_code` without being listed: the `spring` profile's beans; its events, schedules and
   startup hooks (`@EventListener`, `@Scheduled`, `@PostConstruct`, runners) are kinds of
-  their own. An `[[entry_points]]` rule may
+  their own; a startup hook that only registers a lambda or a method reference is not one.
+  Rules may take the types an annotation names (`referenced_by`: the `vaadin` profile's
+  layouts in `@Route(layout = …)`), and profiles may list `[lifecycle] methods` the framework
+  calls on an object it was given (Vaadin's `onAttach`): `impact` goes on from them to
+  whoever creates that object, reaching the screen that adds a component. An `[[entry_points]]` rule may
   combine `supertypes` and `type_names` (a type must match both) and name classes listed in
   XML files (`[[entry_points.xml]] files, elements`); `dead_code` keeps those classes too.
   A `servlet` profile (annotations and `web.xml`), and Vaadin 7/8 UIs and views in `vaadin`.
@@ -89,9 +94,10 @@ version and date when releasing.
   `super.m()` calls in other classes as possible dispatches to an override of `m`: they are
   bound to the caller's superclass.
 - `impact` follows template methods at every level: when an override of type X is reached,
-  the base class's own calls to the method it overrides (`this.m()`) reach it too; other
-  objects' calls to the base method, and sibling classes' `super` calls into that code, are
-  left out. Abstract classes and interfaces are not entry points by supertype or name rules.
+  the base class's own calls to the method it overrides (`this.m()`) reach it too, also
+  when the override is the symbol asked about; other objects' calls to the base method, and
+  sibling classes' calls into that code on their own objects (`this.`, `super.` or no
+  receiver), are left out. Abstract classes and interfaces are not entry points by supertype or name rules.
 
 ## 0.5.0 — 2026-11-23
 

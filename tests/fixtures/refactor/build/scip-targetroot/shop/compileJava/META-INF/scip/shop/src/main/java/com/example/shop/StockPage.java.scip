@@ -1,7 +1,7 @@
-Ç
-2shop/src/main/java/com/example/shop/StockPage.java/com/example/shop/StockPage#BZ 2&com/example/shop/StockPage#`<init>`().B com/example/shop/Page#B#java/lang/Override#Bjava/lang/String#B8"com/example/shop/StockPage#body().BZ java/lang/Override#B	java/lang/String#B
+‡
+2shop/src/main/java/com/example/shop/StockPage.java/com/example/shop/StockPage#BZ 2&com/example/shop/StockPage#`<init>`().B com/example/shop/Page#B#java/lang/Override#Bjava/lang/String#B8"com/example/shop/StockPage#body().BZ java/lang/Override#B	java/lang/String#B
 :$com/example/shop/StockPage#render().B
-Z	 +!com/example/shop/StockPage#super.B)com/example/shop/Page#render().B!java/lang/Override#Bjava/lang/String#B9#com/example/shop/StockPage#frame().BZ +!com/example/shop/StockPage#super.B(com/example/shop/Page#frame().B"java/lang/String#trim().B!µ
+Z	 +!com/example/shop/StockPage#super.B)com/example/shop/Page#render().B!java/lang/String#B;%com/example/shop/StockPage#refresh().BZ -#com/example/shop/StockPage#frame().Bjava/lang/Override#Bjava/lang/String#B9#com/example/shop/StockPage#frame().BZ +!com/example/shop/StockPage#super.B(com/example/shop/Page#frame().B"java/lang/String#trim().B!µ
 com/example/shop/StockPage#@A sibling: its super calls run its own body, never SalesPage's. "
 com/example/shop/Page#(2	StockPage:+"java*#public class StockPage extends PageN
 &com/example/shop/StockPage#`<init>`().(	2<init>:"java*public StockPage()|
@@ -10,7 +10,8 @@
 protected String body()Å
 $com/example/shop/StockPage#render()."%
 com/example/shop/Page#render().(2render:("java* @Override
-public String render()}
+public String render()S
+%com/example/shop/StockPage#refresh().(2refresh:"java*public String refresh()}
 #com/example/shop/StockPage#frame()."$
 com/example/shop/Page#frame().(2frame:'"java*@Override
 public String frame()"java

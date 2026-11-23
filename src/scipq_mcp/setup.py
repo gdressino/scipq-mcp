@@ -105,8 +105,10 @@ def _settings_name(root: str) -> str:
     return os.path.basename(os.path.abspath(root))
 
 
-def _init_scripts(project: str) -> list[tuple[str, str]]:
-    """Init scripts in ~/.gradle/init.d that add scip-javac, and whether they apply here."""
+def _init_scripts(project: str, dirname: str = "") -> list[tuple[str, str]]:
+    """Init scripts in ~/.gradle/init.d that add scip-javac, and whether they apply here: a
+    PROJECTS list, or a comparison of the root project's name (rootProject.name, from the
+    settings) or of its directory's name (projectDir.name)."""
     out = []
     pattern = os.path.join(_gradle_user_home(), "init.d", "*")
     for path in sorted(glob.glob(pattern)):
@@ -120,18 +122,24 @@ def _init_scripts(project: str) -> list[tuple[str, str]]:
         if "scip-javac" not in text and "-Xplugin:scip" not in text:
             continue
         m = re.search(r"def\s+PROJECTS\s*=\s*\[([^\]]*)\]", text)
+        cmp_ = re.search(r"""((?:[\w$]+\s*\.\s*)*name)\s*([!=]=)\s*['"]([^'"]+)['"]""", text)
+        pre = re.search(r"""((?:[\w$]+\s*\.\s*)*name)\s*\.\s*startsWith\s*\(\s*['"]([^'"]+)"""
+                        r"""['"]""", text)
+
+        def subject(expr: str) -> str:
+            return (dirname or project) if "projectDir" in expr else project
         if m is not None:
             names = re.findall(r"""['"]([^'"]+)['"]""", m.group(1))
             applies = "yes (all projects)" if not names else (
                 "yes" if project in names else f"NO: PROJECTS = {names} does not include {project!r}")
-        elif re.search(r"""\.name\s*[!=]=\s*['"]([^'"]+)['"]""", text):
-            only = re.search(r"""\.name\s*[!=]=\s*['"]([^'"]+)['"]""", text).group(1)
-            applies = "yes" if only == project else f"NO: only for root project {only!r}"
-        elif re.search(r"""\.name\s*\.\s*startsWith\s*\(\s*['"]([^'"]+)['"]""", text):
-            prefix = re.search(r"""\.name\s*\.\s*startsWith\s*\(\s*['"]([^'"]+)['"]""",
-                               text).group(1)
-            applies = "yes" if project.startswith(prefix) else \
-                f"NO: only for projects named {prefix}*"
+        elif cmp_ is not None:
+            only, who = cmp_.group(3), subject(cmp_.group(1))
+            what = "directory" if "projectDir" in cmp_.group(1) else "root project"
+            applies = "yes" if only == who else f"NO: only for {what} {only!r}"
+        elif pre is not None:
+            prefix, who = pre.group(2), subject(pre.group(1))
+            what = "directories" if "projectDir" in pre.group(1) else "projects"
+            applies = "yes" if who.startswith(prefix) else f"NO: only for {what} named {prefix}*"
         else:
             applies = "unknown (custom script)"
         out.append((path, applies))
@@ -144,7 +152,7 @@ def diagnose(root: str, shards_dir: str | None = None) -> Diagnosis:
            ("settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts")):
         d = Diagnosis(root, "gradle", _settings_name(root))
         d.wrapper = "./gradlew" if os.path.exists(os.path.join(root, "gradlew")) else "gradle"
-        d.init_scripts = _init_scripts(d.project_name)
+        d.init_scripts = _init_scripts(d.project_name, os.path.basename(os.path.abspath(root)))
     elif os.path.exists(os.path.join(root, "pom.xml")):
         d = Diagnosis(root, "maven", os.path.basename(root))
         d.wrapper = "./mvnw" if os.path.exists(os.path.join(root, "mvnw")) else "mvn"

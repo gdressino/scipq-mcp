@@ -9,6 +9,16 @@ annotations = ["com.vaadin.flow.router.Route", "com.vaadin.flow.router.RouteAlia
 supertypes = ["com.vaadin.flow.server.VaadinServiceInitListener",
               "com.vaadin.flow.server.ServiceInitListener"]
 
+# The layouts routes are shown in (@Route(layout = AppLayout.class)).
+[[entry_points]]
+kind = "screen"
+referenced_by = [{ annotation = "com.vaadin.flow.router.Route", attribute = "layout" },
+                 { annotation = "com.vaadin.flow.router.ParentLayout", attribute = "value" }]
+
+# Called by Vaadin on a component once it is attached: impact goes on to whoever creates it.
+[lifecycle]
+methods = ["onAttach", "onDetach", "attach", "detach"]
+
 # Vaadin 7/8 (com.vaadin.ui): the UI classes a servlet starts, and views the navigator opens.
 [[entry_points]]
 kind = "screen"

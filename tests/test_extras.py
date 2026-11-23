@@ -394,12 +394,17 @@ def test_check_refs(sample_copy, tmp_path):
   `Entity.dnGetState()`, `java.util.Lizt`, `java/util/Lizt.java`, `X.java`.
 - Partial and wrong packages: `model.Account#uid`, `com.example.Account`, `Outer$Inner#run()`.
 - Again: `Entity.reload()`.
+- Not indexed but there: `tools/Probe.java`, `Migrate.java`.
 - Constants, nested types, examples: `Service.DEFAULT.getState()`, `Service.NOPE.get()`,
   `Account.build()`, por ejemplo `Fulano.prefix()`; `Gone.java` borrado.
 ```python
 svc = Client.__init__(url=None)  # Python: Entity.get_connection(x)
 ```
 """)
+    os.makedirs(os.path.join(sample_copy, "tools", "mig"))
+    for f in ("tools/Probe.java", "tools/mig/Migrate.java"):
+        with open(os.path.join(sample_copy, f), "w") as fh:
+            fh.write("class X {}\n")
     os.makedirs(os.path.join(sample_copy, "docs", "archive"))
     with open(os.path.join(sample_copy, "docs", "archive", "old.md"), "w") as fh:
         fh.write("`Entity#ancient`\n")
@@ -407,7 +412,7 @@ svc = Client.__init__(url=None)  # Python: Entity.get_connection(x)
     out = svc.check_refs()
     assert "9 problems: " in out and "2 members not found" in out, out
     assert "Service.NOPE.get()  — Service has no member NOPE" in out
-    for x in ("DEFAULT", "Account.build", "Fulano", "borrado", "__init__", "get_connection", "ancient"):
+    for x in ("Probe", "Migrate", "DEFAULT", "Account.build", "Fulano", "borrado", "__init__", "get_connection", "ancient"):
         assert x not in out, x
     assert "1 files under archive folders" in out
     assert "no setState(String) in Entity: its overloads take (int)" in out
@@ -424,7 +429,7 @@ svc = Client.__init__(url=None)  # Python: Entity.get_connection(x)
     md = svc.check_refs(fmt="md")
     assert "| file | line | mention | problem |" in md and "| NOTES.md | 4, 13 |" in md
     with open(os.path.join(sample_copy, "docs", "a.md"), "w") as fh:
-        fh.write("`Entity#nothing`\n")
+        fh.write("`Entity#nothing`; next to it: `../tools/Probe.java`\n")
     with open(os.path.join(sample_copy, "docs", "b.txt"), "w") as fh:
         fh.write("`Entity#nothing`\n")
     only = svc.check_refs(files=["docs"])
@@ -552,8 +557,28 @@ def test_impact_dispatches_through_template_methods(refactor_root, tmp_path):
     out = Service(refactor_root, cache_dir=str(tmp_path / "c")).impact("Pages#sales", depth=4)
     assert "d1  SalesPage#body()" in out and "d2  Page#render()" in out
     assert "d3  Pages#show()" in out and "d3  Page#frame()" in out
-    assert "StockPage" not in out                   # its super.render()/frame(): its own body
+    assert "StockPage" not in out           # its super.render()/frame(), refresh(): its own
     assert "page  d1  SalesPage" in out and "page  d2  Page " not in out    # abstract
+    # From the override itself: the base's code runs on it, the sibling's does not.
+    out = Service(refactor_root, cache_dir=str(tmp_path / "c")).impact("SalesPage#body",
+                                                                       depth=4)
+    assert "Page#render()" in out and "Pages#show()" in out and "StockPage" not in out
+
+
+def test_impact_lifecycle_creators_layouts_and_startup_lambdas(refactor_root, tmp_path):
+    import os
+    from scipq_mcp.service import Service
+    with open(os.path.join(refactor_root, ".scipq.toml"), "w") as fh:
+        fh.write('profiles = ["vaadin", "spring"]\n')
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    out = svc.impact("Pages#badge")
+    # onAttach() runs on a Badge someone created: its creators are reached.
+    assert "d1  Badge#onAttach()" in out and "d2  OrdersView#<init>()" in out
+    assert 'screen  d2  OrdersView  ' in out and '@Route("orders")' in out
+    assert "screen  d2  AppShell  " in out and "named in @Route(layout)" in out
+    out = svc.impact("Pages#lazy")
+    assert "startup  d1  Startup  " in out and "warm()" in out and "register()" not in \
+        out.split("Startup.java")[1].split("\n")[0]
 
 
 def test_init_scripts_that_filter_by_name_prefix(tmp_path, monkeypatch):
@@ -568,3 +593,10 @@ def test_init_scripts_that_filter_by_name_prefix(tmp_path, monkeypatch):
     got = dict(SETUP._init_scripts("shop-web"))
     assert got[str(init / "a.init.gradle")] == "yes"
     assert got[str(init / "b.init.gradle")].startswith("NO: only for root project 'other'")
+    # projectDir.name is the directory's name, not the settings' project name.
+    (init / "a.init.gradle").write_text(
+        'if (!root.projectDir.name.startsWith("shop")) return // scip-javac\n')
+    got = dict(SETUP._init_scripts("store-app", "shop-web"))
+    assert got[str(init / "a.init.gradle")] == "yes"
+    got = dict(SETUP._init_scripts("shop-app", "store-web"))
+    assert got[str(init / "a.init.gradle")] == "NO: only for directories named shop*"

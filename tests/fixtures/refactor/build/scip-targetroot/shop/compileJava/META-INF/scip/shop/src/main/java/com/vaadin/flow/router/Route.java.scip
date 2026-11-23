@@ -1,0 +1,7 @@
+‰
+4shop/src/main/java/com/vaadin/flow/router/Route.java1com/vaadin/flow/router/Route#BZ java/lang/String#B
+9%com/vaadin/flow/router/Route#value().BRjava/lang/Class#B	:&com/vaadin/flow/router/Route#layout().BR+java/lang/Object#B$!java/lang/Object#class.B%*o
+com/vaadin/flow/router/Route#"$
+ java/lang/annotation/Annotation#(2Route:"java*public @interface RouteX
+%com/vaadin/flow/router/Route#value().(B2value:&"java*public abstract String value()]
+&com/vaadin/flow/router/Route#layout().(B2layout:)"java*!public abstract Class<?> layout()"java

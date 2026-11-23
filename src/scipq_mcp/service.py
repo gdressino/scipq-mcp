@@ -1095,10 +1095,11 @@ class Service:
                 # Entry points are searched deeper than the rows go: a screen or a job is
                 # often four or five calls away.
                 deep = max(d, ENTRY_DEPTH)
-                every, trunc = g.impact(sym, deep, include_overridden, root=nav.ws.root)
+                st = self.settings(nav.ws.root, g)
+                every, trunc = g.impact(sym, deep, include_overridden, root=nav.ws.root,
+                                        lifecycle=st.lifecycle_methods)
                 nodes = [n for n in every if n.depth <= d]
                 trunc = trunc and max((n.depth for n in every), default=0) <= d
-                st = self.settings(nav.ws.root, g)
                 specs = [x for x in st.entry_specs if x.get("reached", True)]
                 entries = g.entry_points(every, specs, nav.ws.root)
                 defs = g.definitions(g.ids([sym]).values())
@@ -1152,10 +1153,11 @@ class Service:
                 except GraphError as e:
                     raise QueryError(str(e)) from e
                 nodes: dict[str, object] = {}
-                for sym in res["definitions"]:
-                    for n in g.impact(sym, max(1, min(depth, 8)), root=nav.ws.root)[0]:
-                        nodes.setdefault(n.symbol, n)
                 st = self.settings(nav.ws.root, g)
+                for sym in res["definitions"]:
+                    for n in g.impact(sym, max(1, min(depth, 8)), root=nav.ws.root,
+                                      lifecycle=st.lifecycle_methods)[0]:
+                        nodes.setdefault(n.symbol, n)
                 # Changed test code is itself to be run.
                 for sym, e in res["definitions"].items():
                     if e.get("test") and sym not in nodes:
@@ -1270,6 +1272,10 @@ class Service:
         def body(nav: Navigator):
             from . import checkrefs as CR
             globs = files or ["**/*.md"]
+            try:        # library class names, to tell library types from missing ones
+                self._library_index(nav.ws.root).refresh()
+            except Exception:  # noqa: BLE001 — without them, fewer types are recognized
+                pass
             with self._graph(nav) as (g, stats):
                 st = self.settings(nav.ws.root, g)
                 problems, checked, nfiles, archived = CR.check(

@@ -51,6 +51,8 @@ class Entry:
 
 
 _HTTP_VERBS = {v: v for v in ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS")}
+# Kinds that run once (startup hooks): a lambda they register runs later, not in them.
+_AT_START = {"startup"}
 # Annotations of a type that hold its routes: its methods are endpoints only with a route.
 _ROUTE_HOLDERS = {"Path", "RequestMapping", "RestController", "Controller"}
 _MAPPINGS = {"GetMapping": "GET", "PostMapping": "POST", "PutMapping": "PUT",
@@ -167,8 +169,9 @@ class Graph:
         # definition holds: a definition with all of them beats one word in a name.
         total: dict[int, float] = {}
         covered: dict[int, float] = {}
+        hit_groups: dict[int, set[int]] = {}
         try:
-            for group in groups:
+            for gi, group in enumerate(groups):
                 q = " OR ".join(f'"{v}"*' for v in group)
                 name_of: dict[int, float] = {}
                 for sid, score in scores("concept_names", "", q):
@@ -194,6 +197,7 @@ class Graph:
                     # javadoc.
                     covered[sid] = covered.get(sid, 0.0) + (
                         1.0 if sid in name_of else 0.8 if sid in said else 0.5)
+                    hit_groups.setdefault(sid, set()).add(gi)
         except sqlite3.OperationalError:
             return []
         n_terms = len(groups)
@@ -202,6 +206,7 @@ class Graph:
         names = self.names(total)
         excl = [x.replace("**", "*") for x in exclude or []]
         scored = []
+        full: set[int] = set()       # all the query's words, counting its owner's
         for sid, score in total.items():
             sym = names.get(sid)
             if sym is None:
@@ -210,22 +215,27 @@ class Graph:
             if kind and {"field": "term"}.get(kind, kind) != k:
                 continue
             owner = " ".join(words_of_symbol_owner(sym, packages=True))
-            in_owner = sum(1 for grp in groups if any(re.search(r"(?:^|\s)" + re.escape(v),
-                                                                owner) for v in grp))
+            owner_groups = {gi for gi, grp in enumerate(groups)
+                            if any(re.search(r"(?:^|\s)" + re.escape(v), owner) for v in grp)}
+            in_owner = len(owner_groups)
             score *= 1 + 0.4 * in_owner / len(groups)
+            if len(hit_groups.get(sid, set()) | owner_groups) == len(groups):
+                full.add(sid)
             score *= (1.6 if k == "type" else 1.25 if k == "method" else
                       0.7 if re.fullmatch(r"[A-Z0-9_$]+", S.name_of(sym) or "") else 1.0)
             scored.append((score, sid, sym))
         scored.sort(key=lambda x: (-x[0], x[2]))
         # Private members are implementation details: behind the types and the API that
-        # match as well (the leading ones only; the rest keep their order).
+        # match as well, unless only they hold all the words, with their type's (the
+        # leading ones only; the rest keep their order).
         head_n = max(600, 4 * limit)
         defs: dict[int, tuple] = self.definitions([sid for _s, sid, _y in scored[:head_n]])
         head = []
         for score, sid, sym in scored[:head_n]:
             sig = (defs.get(sid) or ("", 0, "", 0, ""))[4] or ""
             sig = re.sub(r"@[\w$.]+(\((?:[^()]|\([^()]*\))*\))?", " ", sig).split("(", 1)[0]
-            head.append((score * (0.6 if re.search(r"\bprivate\b", sig) else 1.0), sid, sym))
+            private = re.search(r"\bprivate\b", sig) and sid not in full
+            head.append((score * (0.6 if private else 1.0), sid, sym))
         head.sort(key=lambda x: (-x[0], x[2]))
         scored = head + scored[head_n:]
         out = []
@@ -332,6 +342,43 @@ class Graph:
             "SELECT DISTINCT target_id FROM rels WHERE symbol_id = ? AND kind = ?",
             (sid, REL_IMPLEMENTATION))]
 
+    def _referenced_types(self, refs: list[tuple[str, str]], root: str) -> dict[str, str]:
+        """{type symbol: "named in @A(attr)"} for the types written as X.class in that
+        attribute of annotation A anywhere in the project (resolved by simple name, when
+        one project type has it)."""
+        out: dict[str, str] = {}
+        sh = self.shards()
+        texts: dict[str, list[str]] = {}
+        for ann, attr in refs:
+            aid = self.ids([ann]).get(ann)
+            if aid is None:
+                continue
+            wanted: set[str] = set()
+            for shard_id, line in self.con.execute(
+                    "SELECT shard_id, line FROM annotations WHERE annotation_id = ?", (aid,)):
+                if shard_id not in sh:
+                    continue
+                src = sh[shard_id][0]
+                if src not in texts:
+                    try:
+                        with open(os.path.join(root, src), encoding="utf-8",
+                                  errors="replace") as fh:
+                            texts[src] = fh.read().split("\n")
+                    except OSError:
+                        texts[src] = []
+                args = _annotation_args(texts[src], line, S.name_of(ann))
+                rx = (r"(?:^|[(,\s])" + re.escape(attr) + r"\s*=\s*([\w$.]+)\.class") \
+                    if attr != "value" else r"(?:^|[(,\s])(?:value\s*=\s*)?([\w$.]+)\.class"
+                wanted |= {m.group(1).rsplit(".", 1)[-1] for m in re.finditer(rx, args)}
+            for name in wanted:
+                cands = [x for (x,) in self.con.execute(
+                    "SELECT s.symbol FROM symbols s WHERE (s.symbol LIKE ? OR s.symbol LIKE ?) "
+                    "AND EXISTS (SELECT 1 FROM defs d WHERE d.symbol_id = s.id)",
+                    (f"%/{name}#", f"%#{name}#"))]
+                if len(cands) == 1:
+                    out.setdefault(cands[0], f"named in @{S.name_of(ann)}({attr})")
+        return out
+
     def _project_overridden(self, ids: list[int]) -> list[tuple[int, int]]:
         """(method, project method it overrides) for these definitions."""
         out = []
@@ -359,14 +406,17 @@ class Graph:
     # impact / tests / path -------------------------------------------------------------------
 
     def impact(self, symbol: str, depth: int = 3, include_overridden: bool = True,
-               max_nodes: int = 20000, root: str = "") -> tuple[list[Node], bool]:
+               max_nodes: int = 20000, root: str = "", lifecycle: set[str] | None = None
+               ) -> tuple[list[Node], bool]:
         """Transitive callers, breadth first. With include_overridden, calls to the methods it
         overrides count too (they may dispatch here); further up, for an override of type X
         that is reached, the calls to the project methods it overrides made from X's own
         hierarchy (a base class calling this.m(): template methods). `super.m()` calls, read
         from the sources under `root`, are left out of those (bound to the caller's
         superclass), and a method reached through such a dispatch for X keeps only the super
-        calls from X's hierarchy. Returns (nodes, truncated)."""
+        calls from X's hierarchy. A reached `lifecycle` method (one the framework calls on an
+        object it was given, such as onAttach) goes on to the constructors of its type: whoever
+        creates the object. Returns (nodes, truncated)."""
         start = self.ids([symbol]).get(symbol)
         if start is None:
             return [], False
@@ -391,11 +441,35 @@ class Graph:
         names: dict[int, str] = self.names(frontier)
         truncated = False
         sh = self.shards()
+        lifecycle = lifecycle or set()
+
+        def creators(found: list[int]) -> list[int]:
+            """Constructors of the types whose lifecycle methods were reached."""
+            out_ = []
+            for sid in found:
+                sym = names.get(sid, "")
+                if S.kind_of(sym) != "method" or S.name_of(sym) not in lifecycle:
+                    continue
+                prefix = S.owner_type(sym) + "`<init>`"
+                for (cid,) in self.con.execute(
+                        "SELECT s.id FROM symbols s WHERE s.symbol >= ? AND s.symbol < ? AND "
+                        "EXISTS (SELECT 1 FROM defs d WHERE d.symbol_id = s.id)",
+                        (prefix, prefix + "\uffff")):
+                    if cid not in seen:
+                        seen.add(cid)
+                        out_.append(cid)
+            return out_
+        if lifecycle:
+            extra0 = creators([start])
+            if extra0:
+                names.update(self.names(extra0))
+                frontier += extra0
         for level in range(1, depth + 1):
             rows = self.callers_of(frontier)
-            if bound or dispatch:
+            if bound or dispatch or (level == 1 and overridden):
                 names.update(self.names({c for t, c, _s, _x in rows
-                                         if (t in bound or t in dispatch) and c not in names}))
+                                         if (t in bound or t in dispatch or t in overridden)
+                                         and c not in names}))
             nxt = []
             for target, caller, shard_id, sites in rows:
                 if caller in seen or shard_id not in sh:
@@ -410,14 +484,18 @@ class Graph:
                         continue
                 if root and target in bound and \
                         S.owner_type(names.get(caller, "")) not in family(bound[target]):
+                    # Another class's this.m(), m() or super.m() runs on its own object.
                     sites = _not_super(root, sh[shard_id][0], sites,
-                                       S.name_of(names.get(target, "")), texts)
+                                       S.name_of(names.get(target, "")), texts, own=True)
                     if not sites:
                         continue
                 seen.add(caller)
                 nxt.append(caller)
                 if target in dispatch:
                     bound[caller] = dispatch[target]
+                elif level == 1 and target in overridden and \
+                        S.owner_type(names.get(caller, "")) in family(S.owner_type(symbol)):
+                    bound[caller] = S.owner_type(symbol)    # the base's code, on this object
                 elif target in bound and \
                         S.owner_type(names.get(caller, "")) in family(bound[target]):
                     bound[caller] = bound[target]   # still the same object's code
@@ -431,13 +509,16 @@ class Graph:
                 break
             names.update(self.names(nxt))
             frontier = nxt
-            if include_overridden and level < depth:
+            if level < depth:
                 extra = []
-                for caller, target in self._project_overridden(nxt):
-                    if target not in seen:
-                        seen.add(target)
-                        dispatch[target] = S.owner_type(names.get(caller, ""))
-                        extra.append(target)
+                if include_overridden:
+                    for caller, target in self._project_overridden(nxt):
+                        if target not in seen:
+                            seen.add(target)
+                            dispatch[target] = S.owner_type(names.get(caller, ""))
+                            extra.append(target)
+                if lifecycle:
+                    extra += creators(nxt)
                 if extra:
                     names.update(self.names(extra))
                     frontier = nxt + extra
@@ -481,6 +562,9 @@ class Graph:
         for k, spec in enumerate(specs):
             if spec.get("xml"):
                 xml_types[k] = _xml_classes(root, spec["xml"])
+            if spec.get("referenced_by"):
+                xml_types.setdefault(k, {}).update(self._referenced_types(
+                    spec["referenced_by"], root))
         sh = self.shards()
         texts: dict[str, list[str]] = {}
 
@@ -561,11 +645,20 @@ class Graph:
                     declared[t] = e.group(1).rsplit(".", 1)[-1] if e else ""
             return declared[t]
 
+        def deferred(n: Node) -> bool:
+            """Every call it makes on the way is inside a lambda or a method reference: it
+            registers code that runs later, it does not run it."""
+            lines = lines_of(n.source)
+            return bool(n.sites) and all(0 < x <= len(lines) and ("->" in lines[x - 1] or
+                                                                  "::" in lines[x - 1])
+                                         for x in n.sites)
         out = []
         for n in nodes:
             sym = n.symbol
             owner = S.owner_type(sym)
             for k, spec in enumerate(specs):
+                if spec["kind"] in _AT_START and deferred(n):
+                    continue
                 detail, on_type = None, False
                 if S.kind_of(sym) == "method" and private(sym) and not any(
                         a in spec["annotations"] for a, _s, _l in anns.get(sym, [])):
@@ -1165,8 +1258,10 @@ def _annotation_text(root: str, source: str, def_line: int, before: int = 25) ->
 
 # --- helpers ----------------------------------------------------------------------------------
 
-def _not_super(root: str, source: str, sites: str, name: str, cache: dict) -> str:
-    """The sites ("line:col,…", 0-based) of a reference list that are not `super.name(…)`."""
+def _not_super(root: str, source: str, sites: str, name: str, cache: dict,
+               own: bool = False) -> str:
+    """The sites ("line:col,…", 0-based) of a reference list that are not `super.name(…)`
+    (with own, nor any call on the caller's own object: this.name(…), name(…))."""
     lines = cache.get(source)
     if lines is None:
         try:
@@ -1182,7 +1277,8 @@ def _not_super(root: str, source: str, sites: str, name: str, cache: dict) -> st
         line, _, rest = s.partition(":")
         col = int(rest.split("@", 1)[0] or -1) if rest else -1
         ln = int(line)
-        if ln < len(lines) and S.is_super_call(lines[ln], col, name):
+        if ln < len(lines) and (S.is_self_call(lines[ln], col, name) if own else
+                                S.is_super_call(lines[ln], col, name)):
             continue
         keep.append(s)
     return ",".join(keep)

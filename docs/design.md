@@ -216,8 +216,11 @@ section. Unknown keys are reported, not ignored silently.
 7. Entry points per profile on top of `impact` and `changed`, by kind, one row per type;
    rules may combine supertypes and name globs (both must hold), take classes from XML
    descriptors (`web.xml`, with URL patterns), and be `reached = false` (alive for
-   `dead_code` only: Spring beans). Endpoints show their route; a private method or a
-   controller's helper is not an entry point; `impact` searches them to depth 6.
+   `dead_code` only: Spring beans), or name the types an annotation refers to
+   (`referenced_by`: Vaadin's `@Route(layout = …)`). Endpoints show their route; a private
+   method or a controller's helper is not an entry point; `impact` searches them to depth 6,
+   follows template methods (bound to the override's type) and, through `[lifecycle]
+   methods` (`onAttach`), goes on to whoever creates the object.
 8. Persistence model per profile (`persistence`): entities ↔ tables (inheritance,
    discriminators), fields ↔ columns, relations, fetch groups; who writes a field (setter uses,
    Lombok included, plus assignments found in the line) and who names it in strings.

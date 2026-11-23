@@ -5,6 +5,14 @@ public class Pages {
         return "sales";
     }
 
+    static String badge() {
+        return "badge";
+    }
+
+    static String lazy() {
+        return "lazy";
+    }
+
     static String show(Page p) {
         return p.render();
     }

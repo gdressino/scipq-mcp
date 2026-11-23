@@ -1,0 +1,12 @@
+û
+0shop/src/main/java/com/example/shop/Startup.javajakarta/Bjakarta/annotation/B+!jakarta/annotation/PostConstruct#B'java/B
+java/util/Bjava/util/ArrayList#Bjava/B
+java/util/Bjava/util/List#Bjava/B
+java/util/Bjava/util/function/B&java/util/function/Supplier#B"-com/example/shop/Startup#BZ 0$com/example/shop/Startup#`<init>`().Bjava/util/List#B	&java/util/function/Supplier#B	java/lang/String#B	 &7#com/example/shop/Startup#factories.B	)2R	G+!java/util/ArrayList#`<init>`(+1).B	9B+!jakarta/annotation/PostConstruct#B:$com/example/shop/Startup#register().BZ -#com/example/shop/Startup#factories.Bjava/util/List#add().B!com/example/shop/Pages#B!(com/example/shop/Pages#lazy().B"&+!jakarta/annotation/PostConstruct#B6 com/example/shop/Startup#warm().BZ !com/example/shop/Pages#B(com/example/shop/Pages#lazy().B˜
+com/example/shop/Startup#Rregister() only keeps a factory that runs later; warm() runs the code at startup. (2Startup:"java*public class StartupJ
+$com/example/shop/Startup#`<init>`().(	2<init>:"java*public Startup()j
+#com/example/shop/Startup#factories.(2	factories:6"java*.private final List<Supplier<String>> factoriesa
+$com/example/shop/Startup#register().(2register:-"java*%@PostConstruct
+public void register()U
+ com/example/shop/Startup#warm().(2warm:)"java*!@PostConstruct
+public void warm()"java

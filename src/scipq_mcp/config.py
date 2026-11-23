@@ -41,9 +41,9 @@ from dataclasses import dataclass, field
 from importlib import resources
 
 KNOWN_PROFILE_KEYS = {"profile", "entry_points", "persistence", "by_name", "concepts", "tests",
-                      "cucumber"}
+                      "cucumber", "lifecycle"}
 KNOWN_PROJECT_KEYS = {"match", "profiles", "tests", "entry_points", "by_name", "concepts",
-                      "persistence", "dead_code", "cucumber", "check_refs"}
+                      "persistence", "dead_code", "cucumber", "check_refs", "lifecycle"}
 KNOWN_MATCH_KEYS = {"path", "root_project", "git_remote"}
 MATCH_ORDER = ("path", "root_project", "git_remote")
 
@@ -109,6 +109,9 @@ class Settings:
     # Background they load: its steps run where the including step does.
     cucumber_include_steps: list[str] = field(default_factory=list)
     concept_attributes: list[str] = field(default_factory=list)
+    # Methods the framework calls on an object it was given (Vaadin's onAttach): impact
+    # reaches whoever creates that object.
+    lifecycle_methods: set[str] = field(default_factory=set)
     concepts_exclude: list[str] = field(default_factory=list)   # path globs (vendored code)
     check_refs_exclude: list[str] = field(default_factory=list)  # docs not to check (archives)
     tests_filter: str = ""               # template: {module} {task} {fqcn} {simple} {classes}
@@ -494,7 +497,11 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
             "type_names": list(ep.get("type_names", [])),
             "xml": xml,
             # false: keeps code alive for dead_code, but is not an entry point to list
-            "reached": ep.get("reached", True) is not False})
+            "reached": ep.get("reached", True) is not False,
+            # types named as X.class in an annotation's attribute: @Route(layout = X.class)
+            "referenced_by": [(to_symbol(r["annotation"]), str(r.get("attribute", "value")))
+                              for r in ep.get("referenced_by", [])
+                              if isinstance(r, dict) and isinstance(r.get("annotation"), str)]})
         s.entry_annotations |= {to_symbol(a) for a in ep.get("annotations", [])}
         s.entry_packages += list(ep.get("packages", []))
         if ep.get("kind") == "test":
@@ -532,6 +539,7 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
     s.concept_attributes += list(data.get("concepts", {}).get("attributes", []))
     s.concepts_exclude += strings(data.get("concepts", {}).get("exclude", []))
     s.check_refs_exclude += strings(data.get("check_refs", {}).get("exclude", []))
+    s.lifecycle_methods |= set(strings(data.get("lifecycle", {}).get("methods", [])))
     cu = data.get("cucumber", {})
     if isinstance(cu.get("run"), str) and cu["run"]:
         s.cucumber_run = cu["run"]

@@ -1,0 +1,5 @@
+¸
+.shop/src/main/java/com/example/shop/Badge.java+com/example/shop/Badge#BZ ."com/example/shop/Badge#`<init>`().B8"com/example/shop/Badge#onAttach().BZ !com/example/shop/Pages#B)com/example/shop/Pages#badge().B~
+com/example/shop/Badge#>A component: the framework calls onAttach() once it is shown. (2Badge:"java*public class BadgeF
+"com/example/shop/Badge#`<init>`().(	2<init>:"java*public Badge()S
+"com/example/shop/Badge#onAttach().(2onAttach:!"java*protected void onAttach()"java

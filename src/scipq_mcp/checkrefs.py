@@ -262,7 +262,8 @@ def _expand_globs(root: str, globs: list[str]) -> list[str]:
     return out
 
 
-def _files(root: str, globs: list[str], exclude: list[str]) -> list[str]:
+def _listed(root: str) -> list[str]:
+    """The checkout's files: tracked and untracked but not ignored (git), else a walk."""
     git = shutil.which("git")
     listed = None
     if git:
@@ -280,6 +281,12 @@ def _files(root: str, globs: list[str], exclude: list[str]) -> list[str]:
             dirs[:] = [x for x in dirs if x not in (".git", "build", "target", "node_modules")]
             for n in names:
                 listed.append(os.path.relpath(os.path.join(d, n), root).replace(os.sep, "/"))
+    return listed
+
+
+def _files(root: str, globs: list[str], exclude: list[str],
+           listed: list[str] | None = None) -> list[str]:
+    listed = _listed(root) if listed is None else listed
 
     def match(p: str, gl: str) -> bool:
         if fnmatch.fnmatch(p, gl) or (gl.startswith("**/") and fnmatch.fnmatch(p, gl[3:])):
@@ -323,7 +330,18 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
             by_suffix.setdefault("/".join(parts[k:]), []).append(s)
     problems: list[Problem] = []
     checked = 0
-    files = _files(root, globs, exclude)
+    listed = _listed(root)
+    files = _files(root, globs, exclude, listed)
+    # Java files in the checkout the index does not have (a build without the plugin, a
+    # tool's own folder): they exist.
+    for f in listed:
+        if f.endswith(".java") and f not in sources:
+            parts = f.split("/")
+            for k in range(len(parts)):
+                by_suffix.setdefault("/".join(parts[k:]), [])
+                if f not in by_suffix["/".join(parts[k:])]:
+                    by_suffix["/".join(parts[k:])].append(f)
+    unindexed = {f for f in listed if f.endswith(".java") and f not in sources}
     archived = 0
     if skip_archives:
         kept = [f for f in files if not ARCHIVE_DIRS & {d.lower() for d in f.split("/")[:-1]}]
@@ -395,8 +413,8 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
             for mo in _PATH.finditer(line):
                 checked += 1
                 at[0] = mo.start()
-                _check_path(m, root, mo, by_suffix, sources, named_here, line, code,
-                            count_lines, add, text_cache)
+                _check_path(m, root, mo, by_suffix, sources | unindexed, named_here, line,
+                            code, count_lines, add, text_cache, os.path.dirname(path))
     return problems, checked, len(files), archived
 
 
@@ -453,11 +471,15 @@ def _with_header(root: str, src: str, lo: int, cache: dict) -> int:
 
 
 def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, code,
-                count_lines, add, text_cache: dict) -> None:
+                count_lines, add, text_cache: dict, doc_dir: str = "") -> None:
     written, n0 = mo.group(1), mo.group(2)
     hits = _find_path(written, by_suffix, sources)
-    if not hits and os.path.isfile(os.path.join(root, written)):
-        hits = [written]
+    if not hits:
+        for base_dir in ("", doc_dir):      # from the checkout, or from the document
+            p = os.path.normpath(os.path.join(base_dir, written)).replace(os.sep, "/")
+            if os.path.isfile(os.path.join(root, p)):
+                hits = [p]
+                break
     base = os.path.basename(written)
     if not hits:
         # Folders left out (core/Account.java for core/src/…/Account.java): the written ones

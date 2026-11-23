@@ -12,6 +12,10 @@ public class StockPage extends Page {
         return "[" + super.render() + "]";
     }
 
+    public String refresh() {
+        return frame();
+    }
+
     @Override
     public String frame() {
         return super.frame().trim();

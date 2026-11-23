@@ -226,6 +226,22 @@ def is_super_call(text: str, col: int, name: str) -> bool:
     return bool(calls) and all(calls)
 
 
+_RECEIVER_BEFORE = re.compile(r"[\w$)\]>]\s*\.\s*$")
+_SELF_BEFORE = re.compile(r"\b(?:this|super)\s*\.\s*$")
+
+
+def is_self_call(text: str, col: int, name: str) -> bool:
+    """Whether the call of `name` at column `col` runs on the caller's own object:
+    `this.name(…)`, `super.name(…)` or `name(…)` with no receiver."""
+    def self_at(before: str) -> bool:
+        return bool(_SELF_BEFORE.search(before)) or not _RECEIVER_BEFORE.search(before)
+    if col >= 0 and text[col:col + len(name)] == name:
+        return self_at(text[:col])
+    calls = [m.start(1) for m in re.finditer(r"(?<![\w$])(" + re.escape(name) + r")\s*\(",
+                                              text)]
+    return bool(calls) and all(self_at(text[:c]) for c in calls)
+
+
 def package_of(symbol: str) -> str:
     return ".".join(x.name for x in parse(symbol) if x.suffix == NAMESPACE)
 
