@@ -355,6 +355,10 @@ def test_doctor_files_with_nothing_to_compile_and_empty_cache_entries(sample_cop
         fh.write("/** The model. */\npackage com.example.model;\n")
     with open(os.path.join(model, "Fresh.java"), "w") as fh:
         fh.write("package com.example.model;\n\npublic class Fresh {}\n")
+    with open(os.path.join(model, "Skipped.java"), "w") as fh:
+        fh.write("package com.example.model;\n\npublic class Skipped {}\n")
+    with open(os.path.join(sample_copy, "core", "build.gradle"), "w") as fh:
+        fh.write('sourceSets { main { java { exclude("com/example/model/Skipped.java") } } }\n')
     subprocess.run(["git", "init", "-q"], cwd=sample_copy, check=True)
     subprocess.run(["git", "add", "-A"], cwd=sample_copy, check=True)
     cache = tmp_path / "c"
@@ -364,6 +368,7 @@ def test_doctor_files_with_nothing_to_compile_and_empty_cache_entries(sample_cop
     os.utime(empty, (old, old))
     out = Service(sample_copy, cache_dir=str(cache)).doctor()
     assert "2 tracked .java files declare nothing to compile" in out
+    assert "1 tracked .java files are excluded by the build" in out and "Skipped.java" in out
     assert "1 tracked .java files sit next to compiled ones but have no shard" in out
     coverage = next(x for x in out.splitlines() if "sit next to compiled ones" in x)
     assert "Fresh.java" in coverage and "Old.java" not in coverage
@@ -549,3 +554,17 @@ def test_impact_dispatches_through_template_methods(refactor_root, tmp_path):
     assert "d3  Pages#show()" in out and "d3  Page#frame()" in out
     assert "StockPage" not in out                   # its super.render()/frame(): its own body
     assert "page  d1  SalesPage" in out and "page  d2  Page " not in out    # abstract
+
+
+def test_init_scripts_that_filter_by_name_prefix(tmp_path, monkeypatch):
+    from scipq_mcp import setup as SETUP
+    init = tmp_path / "gh" / "init.d"
+    init.mkdir(parents=True)
+    (init / "a.init.gradle").write_text(
+        'allprojects { if (!rootProject.projectDir.name.startsWith("shop")) return\n'
+        '  // -Xplugin:scip\n}\n')
+    (init / "b.init.gradle").write_text('if (root.name != "other") return // scip-javac\n')
+    monkeypatch.setenv("GRADLE_USER_HOME", str(tmp_path / "gh"))
+    got = dict(SETUP._init_scripts("shop-web"))
+    assert got[str(init / "a.init.gradle")] == "yes"
+    assert got[str(init / "b.init.gradle")].startswith("NO: only for root project 'other'")

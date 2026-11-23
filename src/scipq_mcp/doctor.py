@@ -124,6 +124,34 @@ def _no_class_expected(root: str, source: str) -> bool:
     return not _declares_type(root, source)
 
 
+_EXCLUDE_CALL = re.compile(r"""\bexclude\s*\(?\s*['"]([^'"]+\.java|[^'"]*\*[^'"]*)['"]""")
+
+
+def _build_excludes(root: str) -> list[str]:
+    """Source patterns build files exclude (`exclude("a/B.java")`, `exclude '**/Gen*'`)."""
+    out = []
+    for d, dirs, names in os.walk(root):
+        dirs[:] = [x for x in dirs if not x.startswith(".") and x not in
+                   ("build", "target", "node_modules", "src", "out", "bin")]
+        if d.count(os.sep) - root.count(os.sep) > 3:
+            dirs[:] = []
+        for n in names:
+            if n in ("build.gradle", "build.gradle.kts"):
+                try:
+                    with open(os.path.join(d, n), encoding="utf-8", errors="replace") as fh:
+                        out += _EXCLUDE_CALL.findall(fh.read())
+                except OSError:
+                    pass
+    return out
+
+
+def _excluded(path: str, pattern: str) -> bool:
+    """An Ant-style pattern relative to a source folder, against a checkout path."""
+    rx = re.escape(pattern).replace(r"\*\*/", "(?:.*/)?").replace(r"\*\*", ".*") \
+        .replace(r"\*", "[^/]*").replace(r"\?", "[^/]")
+    return re.search(r"(?:^|/)" + rx + "$", path) is not None
+
+
 def _package(root: str, source: str) -> str:
     try:
         with open(os.path.join(root, source), encoding="utf-8", errors="replace") as fh:
@@ -147,14 +175,21 @@ def run(ws: Workspace, settings, cache_base: str | None, freshness) -> Report:
     d = SETUP.diagnose(root, os.path.relpath(ws.shards_dir, root))
     if d.build == "gradle":
         applying = [p for p, a in d.init_scripts if a.startswith("yes")]
+        unknown = [p for p, a in d.init_scripts if a.startswith("unknown")]
+        fresh = freshness is not None and not (freshness.stale or freshness.uncompiled)
         if applying:
             r.add("ok", "build", f"Gradle, init script for the shards (applies to "
                   f"{d.project_name!r}): {', '.join(applying[:2])}")
+        elif unknown and ws.files() and fresh:
+            r.add("ok", "build", f"Gradle, init script {unknown[0]} (a custom script: it "
+                  "probably applies, the shards are up to date)")
+            unknown = unknown[1:]
         for p, a in d.init_scripts:
-            if not a.startswith("yes"):
-                r.add("warn" if not applying else "info", "build",
-                      f"init script {p}: {a}",
-                      "" if applying else "setup shows how to include this project")
+            if a.startswith("yes") or (a.startswith("unknown") and p not in unknown):
+                continue
+            r.add("info" if applying or ws.files() else "warn", "build",
+                  f"init script {p}: {a}",
+                  "" if applying or ws.files() else "setup shows how to include this project")
         if not d.init_scripts:
             r.add("warn", "build", "Gradle without a scip init script in ~/.gradle/init.d "
                   "(the shards may come from the build itself, or be left over)",
@@ -191,6 +226,13 @@ def run(ws: Workspace, settings, cache_base: str | None, freshness) -> Report:
         # annotations (checked up to a bound: reading every file of a huge tree is slow).
         nothing = {p for p in missing[:3000] if _no_class_expected(root, p)}
         missing = [p for p in missing if p not in nothing]
+        excluded = _build_excludes(root)
+        by_build = [p for p in missing if any(_excluded(p, x) for x in excluded)]
+        missing = [p for p in missing if p not in set(by_build)]
+        if by_build:
+            r.add("info", "coverage", f"{len(by_build)} tracked .java files are excluded by the "
+                  f"build (exclude(…) in a build file): {', '.join(by_build[:3])}"
+                  + (" …" if len(by_build) > 3 else ""))
         if nothing:
             r.add("info", "coverage", f"{len(nothing)} tracked .java files declare nothing to "
                   "compile (commented out, or package-info/module-info without annotations): "
@@ -330,18 +372,19 @@ def run(ws: Workspace, settings, cache_base: str | None, freshness) -> Report:
 
     # Refactoring.
     level = jvm.language_level(root)
+    jars = [j for j in jvm.find_jars(cache_base) if jvm._trusted(j)]
+    need = _javaparser_for(level) if level else ""
+    old = bool(jars and need and jvm._version_key(jars[0].version) < jvm._version_key(need))
     for line in jvm.status(cache_base):
         bad = "not found" in line or "needs a JDK" in line
+        if old and line.startswith("JavaParser"):
+            r.add("warn", "refactor", f"{line} — it does not know "
+                  f"{level.replace('JAVA_', 'Java ')}; it needs {need}+",
+                  "scipq-mcp tools install javaparser")
+            continue
         r.add("warn" if bad else "ok", "refactor", line,
               jvm.install_hint().split("\n")[1].strip() if "JavaParser: not found" in line
               else "")
-    jars = [j for j in jvm.find_jars(cache_base) if jvm._trusted(j)]
-    if jars and level:
-        need = _javaparser_for(level)
-        if need and jvm._version_key(jars[0].version) < jvm._version_key(need):
-            r.add("warn", "refactor", f"JavaParser {jars[0].version} does not know "
-                  f"{level.replace('JAVA_', 'Java ')}; it needs {need}+",
-                  "scipq-mcp tools install javaparser")
     return r
 
 

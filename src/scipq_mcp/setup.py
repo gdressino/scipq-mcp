@@ -124,9 +124,14 @@ def _init_scripts(project: str) -> list[tuple[str, str]]:
             names = re.findall(r"""['"]([^'"]+)['"]""", m.group(1))
             applies = "yes (all projects)" if not names else (
                 "yes" if project in names else f"NO: PROJECTS = {names} does not include {project!r}")
-        elif re.search(r"""root\.name\s*!=\s*['"]([^'"]+)['"]""", text):
-            only = re.search(r"""root\.name\s*!=\s*['"]([^'"]+)['"]""", text).group(1)
+        elif re.search(r"""\.name\s*[!=]=\s*['"]([^'"]+)['"]""", text):
+            only = re.search(r"""\.name\s*[!=]=\s*['"]([^'"]+)['"]""", text).group(1)
             applies = "yes" if only == project else f"NO: only for root project {only!r}"
+        elif re.search(r"""\.name\s*\.\s*startsWith\s*\(\s*['"]([^'"]+)['"]""", text):
+            prefix = re.search(r"""\.name\s*\.\s*startsWith\s*\(\s*['"]([^'"]+)['"]""",
+                               text).group(1)
+            applies = "yes" if project.startswith(prefix) else \
+                f"NO: only for projects named {prefix}*"
         else:
             applies = "unknown (custom script)"
         out.append((path, applies))
