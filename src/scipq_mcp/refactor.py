@@ -337,15 +337,42 @@ class Planner:
         self.ops.append(op)
         return op
 
-    def by_name(self, names: list[str], label: str, extra_globs: tuple = ()) -> None:
-        """Uses by name the index does not see: strings in .java, other text files."""
+    def by_name(self, names: list[str], label: str, extra_globs: tuple = (),
+                near: set[str] | None = None, quoted: bool = False) -> None:
+        """Uses by name the index does not see: strings in .java, other text files. With
+        `near`, .java hits only count in those files (the ones using the owner type); with
+        `quoted`, a hit in prose (.feature, .md, .txt) only counts between quotes."""
         globs = list(dict.fromkeys(list(self.st.by_name_globs) + list(extra_globs)))
         if "cucumber" in getattr(self.st, "profiles", []) or \
                 getattr(self.st, "cucumber_run", ""):
             globs.append("*.feature")
-        hits = X.uses_by_name(self.root, names, globs, set(), limit=60)
+        hits = X.uses_by_name(self.root, names, globs, set(), limit=400 if near else 60)
+        kept = 0
+        prose = (".feature", ".md", ".txt", ".adoc")
+        quotes = re.compile("[\"'`](" + "|".join(re.escape(n) for n in names) + ")[\"'`]")
         for h in hits:
+            if any(part.startswith(".") for part in h.source.split("/")[:-1]):
+                continue
+            if near is not None and h.source.endswith(".java") and h.source not in near:
+                continue
+            if quoted and h.source.endswith(prose) and not quotes.search(h.text):
+                continue
             self.review.append((h.source, h.line, h.text, label))
+            kept += 1
+            if kept >= 60:
+                break
+
+    def users_of(self, type_symbol: str) -> set[str]:
+        """Files that use a type (or define it)."""
+        out = set()
+        d = self.nav.definition(type_symbol)
+        if d is not None:
+            out.add(d.location.source)
+        try:
+            out |= {r.location.source for r in self.nav.references(type_symbol)[0]}
+        except QueryError:
+            pass
+        return out
 
     # --- macros -----------------------------------------------------------------------------
 
@@ -449,7 +476,11 @@ class Planner:
         op.args["old"] = old
         self._javadoc(k, members, old, new)
         self._static_imports(k, sym, old, new)
-        self.by_name(X.property_names(sym), f"named like {old}")
+        self.by_name([old], f"named like {old}")
+        props = X.property_names(sym)[1:]
+        if props:
+            self.by_name(props, f"the property of {old}", near=self.users_of(S.parent(sym)),
+                         quoted=True)
         self.summary.append(f"step {k} rename {S.short(sym)} → {new}"
                             + (f" (and {len(members) - 1} in its override family)"
                                if len(members) > 1 else ""))
@@ -551,7 +582,8 @@ class Planner:
                                      1 if acc_name.startswith("set") else 0)
         self._javadoc(k, [sym], old, new)
         self._static_imports(k, sym, old, new)
-        self.by_name(X.property_names(sym), f"named like the field {old}")
+        self.by_name(X.property_names(sym), f"named like the field {old}",
+                     near=self.users_of(owner), quoted=True)
         upper = old.upper()
         if upper != old:
             self.by_name([upper], f"a column named after {old}?", extra_globs=("*.sql",))
