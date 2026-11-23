@@ -193,11 +193,21 @@ class Service:
             return note + text, {r.location.source for r in refs}
         return body
 
-    def _library(self, symbol: str):
+    def _library_index(self, root: str):
+        zip_path, note = L.jdk_for_project(root) if self.library_roots is None else ("", "")
+        ix = L.LibraryIndex(self.cache_dir, self.library_roots, zip_path or None)
+        ix.jdk_note = note
+        return ix
+
+    def _library(self, symbol: str, root: str = ""):
         if S.is_local(symbol):
             return None
         try:
-            return L.lookup(L.LibraryIndex(self.cache_dir, self.library_roots), symbol)
+            ix = self._library_index(root)
+            d = L.lookup(ix, symbol)
+            if d is not None and d.lib.jar.endswith("src.zip") and ix.jdk_note:
+                d.note = ix.jdk_note
+            return d
         except (CacheError, OSError, sqlite3.Error):
             return None
 
@@ -205,7 +215,7 @@ class Service:
         def body(nav: Navigator):
             sym, note, d = self._resolved(nav, symbol, nav.definition)
             if d is None:
-                lib = self._library(sym)
+                lib = self._library(sym, nav.ws.root)
                 if lib is not None:
                     return note + render.library_definition(lib), set()
             return note + render.definition(nav.ws, d, sym), {d.location.source} if d else set()
@@ -273,7 +283,7 @@ class Service:
         def body(nav: Navigator):
             sym, note, src = self._resolved(nav, symbol, lambda s: X.source(nav, s, max_lines))
             if src is None:
-                lib = self._library(sym)
+                lib = self._library(sym, nav.ws.root)
                 if lib is not None:
                     return note + render.library_source(lib, max_lines), set()
             return note + render.source(src, sym), (
@@ -283,26 +293,61 @@ class Service:
     def _b_members(self, symbol: str, inherited: bool = True, offset: int = 0,
                    limit: int = 300) -> Body:
         def body(nav: Navigator):
+            r = nav.resolve(symbol)
+            sym = r.symbol
+            if sym is not None and S.is_type(sym) and nav.definition(sym) is None:
+                return self._library_members(nav, sym, r.note, inherited, offset, limit), set()
             sym, note, (groups, external) = self._resolved(
                 nav, symbol, lambda s: X.members(nav, s, inherited))
             srcs = {g.definition.location.source for g in groups if g.definition}
             libs = []
             if external:
                 try:
-                    index = L.LibraryIndex(self.cache_dir, self.library_roots)
+                    index = self._library_index(nav.ws.root)
                 except (CacheError, OSError):
                     index = None
                 overridden = {o for g in groups for over in g.overrides.values() for o in over}
-                for ext in external:
-                    got = L.type_members(index, ext) if index is not None else None
-                    if got is None:
-                        libs.append((ext, None, []))
-                        continue
-                    lib, mems = got
-                    hidden = {S.name_of(o) for o in overridden if S.parent(o) == ext}
-                    libs.append((ext, lib, [m for m in mems if m.name not in hidden]))
+                if index is not None:
+                    order = self._nearest_first(index, nav, sym, external)
+                    hidden = {S.name_of(o) for o in overridden if S.parent(o) in external}
+                    for ext, lib, mems, nhidden in L.ordered_members(index, order, hidden):
+                        libs.append((ext, lib, mems, nhidden))
+                else:
+                    libs = [(e, None, [], 0) for e in external]
             return note + render.members(sym, groups, external, offset, limit, libs), srcs
         return body
+
+    def _nearest_first(self, index, nav: Navigator, sym: str, external: list[str]) -> list[str]:
+        """External supertypes ordered by distance through the library hierarchy."""
+        _d, supers = nav.supertypes(sym)
+        start = [s.symbol for s in supers if s.definition is None and s.direct]
+        order, seen = [], set()
+        queue = list(start)
+        while queue:
+            t = queue.pop(0)
+            if t in seen:
+                continue
+            seen.add(t)
+            order.append(t)
+            queue.extend(L.library_supertypes(index, t))
+        order += [e for e in external if e not in seen]
+        return [t for t in order if t in set(external)] + [t for t in order
+                                                           if t not in set(external)]
+
+    def _library_members(self, nav: Navigator, sym: str, note: str, inherited: bool,
+                         offset: int, limit: int) -> str:
+        try:
+            index = self._library_index(nav.ws.root)
+        except (CacheError, OSError) as e:
+            raise QueryError(f"library sources unavailable: {e}") from e
+        own = L.type_members(index, sym)
+        if own is None:
+            raise QueryError(f"{sym} is not defined in this project and its sources were not "
+                             "found in the Gradle/Maven caches")
+        types = [sym] + (L.library_ancestors(index, sym) if inherited else [])
+        groups = L.ordered_members(index, types)
+        head = f"-- {note}\n" if note and not S.looks_like_symbol(sym) else ""
+        return head + render.library_members(sym, groups, offset, limit)
 
     def _b_annotated(self, annotation: str, offset: int = 0, limit: int = DEFAULT_LIMIT,
                      scope: str = "") -> Body:
@@ -317,9 +362,17 @@ class Service:
 
     def _b_typed(self, symbol: str, categories: list[str] | None = None, offset: int = 0,
                  limit: int = DEFAULT_LIMIT, scope: str = "",
-                 modifiers: list[str] | None = None) -> Body:
+                 modifiers: list[str] | None = None, subtypes: bool = False) -> Body:
         def body(nav: Navigator):
             sym, note, uses = self._resolved(nav, symbol, lambda s: X.typed(nav, s))
+            if subtypes:
+                subs = self._subtypes(nav, sym)
+                for t in subs:
+                    uses = uses + X.typed(nav, t)
+                if subs:
+                    note += (f"-- with {len(subs)} subtypes: "
+                             + ", ".join(S.short(t) for t in subs[:12])
+                             + (" …" if len(subs) > 12 else "") + "\n")
             if scope:
                 uses = [u for u in uses if X.in_scope(u.owner, u.location.source, scope)]
             if modifiers:
@@ -331,6 +384,27 @@ class Service:
             return (note + render.typed(sym, uses, categories, offset, limit, filters),
                     {u.location.source for u in uses})
         return body
+
+    def _subtypes(self, nav: Navigator, sym: str) -> list[str]:
+        """Project subtypes (from the shards) plus library subtypes among the external types
+        the project references (from library sources; same top-level package by default)."""
+        out = [i.definition.symbol for i in nav.implementations(sym)
+               if S.is_type(i.definition.symbol)]
+        root_pkg = sym.split("/", 1)[0]
+        try:
+            index = self._library_index(nav.ws.root)
+            with self._graph(nav) as (g, _stats):
+                rows = g.con.execute(
+                    "SELECT s.symbol FROM symbols s WHERE s.symbol LIKE ? AND s.symbol LIKE '%#' "
+                    "AND NOT EXISTS (SELECT 1 FROM defs d WHERE d.symbol_id = s.id)",
+                    (root_pkg + "/%",))
+                candidates = [x for (x,) in rows if x != sym and S.is_type(x)]
+            for c in candidates:
+                if sym in L.library_ancestors(index, c):
+                    out.append(c)
+        except (CacheError, OSError, sqlite3.Error, QueryError):
+            pass
+        return sorted(set(out))
 
     def _b_family(self, symbol: str, offset: int = 0, limit: int = DEFAULT_LIMIT,
                   show_uses: bool = True) -> Body:
@@ -507,9 +581,10 @@ class Service:
                                    by_name_globs=globs, by_name_exclude=st.by_name_exclude,
                                    root=nav.ws.root)
                 suppressed = dict(g.suppressed)
+                weak = list(g.low_confidence)
             note = f"-- profiles: {', '.join(st.profiles) or 'none'} ({st.source or 'none'})\n"
             return render.index_note(stats) + note + render.dead_code(rows, offset, limit,
-                                                                      suppressed), set()
+                                                                      suppressed, weak), set()
         return body
 
     def _b_census(self, scope: str = "", limit: int = 50, category: str = "annotations",
@@ -600,9 +675,9 @@ class Service:
     def typed(self, symbol: str, project_root: str | None = None,
               categories: list[str] | None = None, offset: int = 0,
               limit: int = DEFAULT_LIMIT, scope: str = "",
-              modifiers: list[str] | None = None) -> str:
+              modifiers: list[str] | None = None, subtypes: bool = False) -> str:
         return self._run(project_root, self._b_typed(symbol, categories, offset, limit, scope,
-                                                     modifiers))
+                                                     modifiers, subtypes))
 
     def family(self, symbol: str, project_root: str | None = None, offset: int = 0,
                limit: int = DEFAULT_LIMIT, show_uses: bool = True) -> str:

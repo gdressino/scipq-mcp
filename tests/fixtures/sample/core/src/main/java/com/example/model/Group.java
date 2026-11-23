@@ -11,6 +11,10 @@ public class Group extends Entity {
         e.setState(2);
     }
 
+    public int getSize() {
+        return members.size();
+    }
+
     @Override
     public String uid() {
         return "G-" + members.size();

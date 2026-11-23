@@ -48,6 +48,127 @@ def default_roots() -> list[str]:
     return roots
 
 
+_TARGET_PATTERNS = [
+    re.compile(r"JavaLanguageVersion\.of\(\s*(\d+)\s*\)"),
+    re.compile(r"(?:source|target)Compatibility\s*=\s*(?:JavaVersion\.VERSION_(?:1_)?(\d+)|"
+               r"['\"]?(?:1\.)?(\d+)['\"]?)"),
+    re.compile(r"\brelease(?:\.set\(|\s*=\s*)\s*(\d+)"),
+    re.compile(r"<maven\.compiler\.(?:release|source)>\s*(?:1\.)?(\d+)\s*<"),
+    re.compile(r"<release>\s*(\d+)\s*</release>"),
+    re.compile(r"<java\.version>\s*(?:1\.)?(\d+)\s*<"),
+]
+
+
+def build_java_target(root: str) -> tuple[int | None, str]:
+    """(Java version the build compiles for, an explicit JDK home from gradle.properties), read
+    as text from the build files: JavaLanguageVersion.of(N), source/targetCompatibility,
+    release, maven.compiler.release, java.version."""
+    home = ""
+    try:
+        with open(os.path.join(root, "gradle.properties"), encoding="utf-8",
+                  errors="replace") as fh:
+            m = re.search(r"^\s*org\.gradle\.java\.home\s*=\s*(.+?)\s*$", fh.read(), re.M)
+            home = m.group(1) if m else ""
+    except OSError:
+        pass
+    files = ["build.gradle", "build.gradle.kts", "pom.xml"]
+    for d in ("buildSrc", "gradle", "build-logic"):
+        dd = os.path.join(root, d)
+        for sub_root, _dirs, names in os.walk(dd) if os.path.isdir(dd) else ():
+            files += [os.path.relpath(os.path.join(sub_root, n), root) for n in names
+                      if n.endswith((".gradle", ".gradle.kts"))]
+    try:
+        for entry in sorted(os.listdir(root)):
+            for n in ("build.gradle", "build.gradle.kts", "pom.xml"):
+                if os.path.isfile(os.path.join(root, entry, n)):
+                    files.append(os.path.join(entry, n))
+    except OSError:
+        pass
+    versions: dict[int, int] = {}
+    for f in files:
+        try:
+            with open(os.path.join(root, f), encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for rx in _TARGET_PATTERNS:
+            for m in rx.finditer(text):
+                v = next((g for g in m.groups() if g), None)
+                if v and 5 <= int(v) <= 40:
+                    versions[int(v)] = versions.get(int(v), 0) + 1
+    target = max(versions, key=lambda v: (versions[v], v)) if versions else None
+    return target, home
+
+
+def _jdk_homes() -> list[str]:
+    home = os.path.expanduser("~")
+    parents = [os.path.join(home, ".sdkman", "candidates", "java"),
+               os.path.join(home, ".gradle", "jdks"), "/usr/lib/jvm",
+               os.path.join(home, "Library", "Java", "JavaVirtualMachines"),
+               "/Library/Java/JavaVirtualMachines", os.path.join(home, ".jdks")]
+    out = []
+    for p in parents:
+        try:
+            names = os.listdir(p)
+        except OSError:
+            continue
+        for n in names:
+            d = os.path.join(p, n)
+            for cand in (d, os.path.join(d, "Contents", "Home")):
+                if os.path.isfile(os.path.join(cand, "release")):
+                    out.append(os.path.realpath(cand))
+    for env in (os.environ.get("JAVA_HOME", ""),):
+        if env and os.path.isfile(os.path.join(env, "release")):
+            out.append(os.path.realpath(env))
+    return sorted(set(out))
+
+
+def _jdk_version(home: str) -> tuple[int, str]:
+    try:
+        with open(os.path.join(home, "release"), encoding="utf-8") as fh:
+            m = re.search(r'JAVA_VERSION="([^"]+)"', fh.read())
+    except OSError:
+        return 0, ""
+    if not m:
+        return 0, ""
+    v = m.group(1)
+    major = v.split(".")[1] if v.startswith("1.") else v.split(".")[0]
+    return (int(major) if major.isdigit() else 0), v
+
+
+def _src_zip_of(home: str) -> str:
+    for p in (os.path.join(home, "lib", "src.zip"), os.path.join(home, "src.zip")):
+        if os.path.isfile(p):
+            return p
+    return ""
+
+
+def jdk_for_project(root: str) -> tuple[str, str]:
+    """(src.zip to use for JDK symbols, a note when it may not match the build)."""
+    target, explicit = build_java_target(root)
+    if explicit and _src_zip_of(explicit):
+        return _src_zip_of(explicit), ""
+    current = jdk_src_zip()
+    if target is None:
+        return current, ""
+    best = None
+    for home in _jdk_homes():
+        major, full = _jdk_version(home)
+        z = _src_zip_of(home)
+        if major == target and z and (best is None or _version_key(":" + full) >
+                                      _version_key(":" + best[1])):
+            best = (z, full)
+    if best:
+        return best[0], ""
+    if current:
+        cur_home = os.path.dirname(os.path.dirname(os.path.realpath(current)))
+        major, _full = _jdk_version(cur_home)
+        if major and major != target:
+            return current, (f"JDK {major} sources used; the build targets Java {target} and "
+                             f"no JDK {target} with src.zip was found")
+    return current, ""
+
+
 def jdk_src_zip() -> str:
     homes = [os.environ.get("JAVA_HOME", "")]
     javac = shutil.which("javac") or shutil.which("java")
@@ -94,10 +215,14 @@ def _version_key(coordinates: str):
 
 
 class LibraryIndex:
-    def __init__(self, cache_base: str | None = None, roots: list[str] | None = None):
+    def __init__(self, cache_base: str | None = None, roots: list[str] | None = None,
+                 jdk_zip: str | None = None):
         base = ensure_private_dir(cache_base or default_base())
         self.path = os.path.join(base, "libraries.sqlite")
-        self.roots = roots if roots is not None else default_roots()
+        self.roots = list(roots if roots is not None else default_roots())
+        if jdk_zip:  # this project's JDK instead of the one on PATH
+            self.roots = [r for r in self.roots if not r.endswith("src.zip")] + [jdk_zip]
+        self.jdk_zip = jdk_zip or next((r for r in self.roots if r.endswith("src.zip")), "")
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path, timeout=30)
@@ -144,7 +269,7 @@ class LibraryIndex:
             known = {p: jid for jid, p in con.execute("SELECT id, path FROM jars")}
             disk = self._jars_on_disk()
             for p, jid in known.items():
-                if p not in disk:
+                if p not in disk and not os.path.exists(p):
                     con.execute("DELETE FROM classes WHERE jar_id=?", (jid,))
                     con.execute("DELETE FROM jars WHERE id=?", (jid,))
             n = self._index_jars(con, disk)
@@ -235,8 +360,10 @@ class LibraryIndex:
         first; lists every cached jar only when those do not have it."""
         con = self._connect()
         try:
-            self._index_jars(con, self._likely_jars(class_path))
             rows = self._query(con, class_path)
+            if not rows:
+                self._index_jars(con, self._likely_jars(class_path))
+                rows = self._query(con, class_path)
         finally:
             con.close()
         if not rows:
@@ -246,6 +373,8 @@ class LibraryIndex:
                 rows = self._query(con, class_path)
             finally:
                 con.close()
+        # Only this project's JDK among the JDK source zips the shared map knows.
+        rows = [r for r in rows if not r[0].endswith("src.zip") or r[0] == self.jdk_zip]
         if not rows:
             return None
         rows.sort(key=lambda r: (not r[0].endswith("src.zip"), _version_key(r[2])), reverse=True)
@@ -272,6 +401,7 @@ class LibDefinition:
     source: JavaSource
     overloads: list[Member]     # same-name methods (for methods)
     body: tuple[int, int]       # lines of the member (or type)
+    note: str = ""              # e.g. the JDK used does not match the build's target
 
 
 def class_path_of(symbol: str) -> tuple[str, list[str]]:
@@ -385,3 +515,185 @@ def _javadoc_before(src: JavaSource, pos: int) -> str:
     if end < 0 or prefix[end + 2:].strip() and not prefix[end + 2:].lstrip().startswith("@"):
         return ""
     return _javadoc(prefix)
+
+
+# --- library type hierarchy -------------------------------------------------------------------
+
+JAVA_LANG_TYPES = {
+    "Object", "String", "Comparable", "Iterable", "Runnable", "AutoCloseable", "Cloneable",
+    "CharSequence", "Enum", "Record", "Number", "Integer", "Long", "Short", "Byte", "Double",
+    "Float", "Boolean", "Character", "Throwable", "Exception", "RuntimeException", "Error",
+    "Thread", "ThreadLocal", "InheritableThreadLocal", "ClassLoader", "Appendable", "Readable",
+    "Deprecated", "Override", "FunctionalInterface", "SafeVarargs", "SuppressWarnings",
+    "IllegalArgumentException", "IllegalStateException", "UnsupportedOperationException",
+    "IndexOutOfBoundsException", "NullPointerException", "ClassCastException",
+    "ArithmeticException", "InterruptedException", "CloneNotSupportedException",
+    "ReflectiveOperationException", "SecurityException", "StackOverflowError",
+    "OutOfMemoryError", "AssertionError", "LinkageError", "VirtualMachineError",
+}
+
+_IMPORT = re.compile(r"^\s*import\s+(static\s+)?([\w.]+?)(\.\*)?\s*;", re.M)
+_PACKAGE_DECL = re.compile(r"^\s*package\s+([\w.]+)\s*;", re.M)
+
+
+def _declared_names(declaration: str) -> list[str]:
+    """Type names after extends/implements in a declaration (generics stripped)."""
+    out = []
+    for kw in ("extends", "implements"):
+        m = re.search(r"\b" + kw + r"\b(.*?)(?=\b(?:extends|implements|permits)\b|$)", declaration)
+        if not m:
+            continue
+        depth, cur = 0, ""
+        for ch in m.group(1) + ",":
+            if ch == "<":
+                depth += 1
+            elif ch == ">":
+                depth -= 1
+            elif ch == "," and depth == 0:
+                name = cur.strip()
+                if name:
+                    out.append(name)
+                cur = ""
+                continue
+            if depth == 0 and ch not in "<>":
+                cur += ch
+    return out
+
+
+def library_supertypes(index: LibraryIndex, type_symbol: str) -> list[str]:
+    """Direct supertypes of a library type, as SCIP symbols, from its declaration in the sources
+    jar (simple names resolved through the file's imports, its package and java.lang)."""
+    class_path, types = class_path_of(type_symbol)
+    lib = index.find_class(class_path) if class_path else None
+    if lib is None:
+        return []
+    con = index._connect()
+    try:
+        con.execute("CREATE TABLE IF NOT EXISTS supertypes (symbol TEXT PRIMARY KEY, "
+                    "jar TEXT NOT NULL, supers TEXT NOT NULL) WITHOUT ROWID")
+        row = con.execute("SELECT jar, supers FROM supertypes WHERE symbol = ?",
+                          (type_symbol,)).fetchone()
+        if row and row[0] == lib.jar:
+            return [x for x in row[1].split(" ") if x]
+        try:
+            with zipfile.ZipFile(lib.jar) as z:
+                text = z.read(lib.entry).decode("utf-8", errors="replace")
+        except (OSError, KeyError, zipfile.BadZipFile):
+            return []
+        src = JavaSource(text)
+        decl = src.find_type(types)
+        if decl is None:
+            return []
+        header = " ".join(src.masked[decl[0]:decl[1]].split())
+        header = re.sub(r"@\s*[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?", " ", header)
+        pkg_m = _PACKAGE_DECL.search(src.masked)
+        pkg = pkg_m.group(1) if pkg_m else ""
+        single = {}
+        wildcards = []
+        for m in _IMPORT.finditer(src.masked):
+            if m.group(1):
+                continue
+            if m.group(3):
+                wildcards.append(m.group(2))
+            else:
+                single[m.group(2).rsplit(".", 1)[-1]] = m.group(2)
+        supers = []
+        for name in _declared_names(header):
+            supers.append(_resolve_type_name(index, name, pkg, single, wildcards, types))
+        supers = [x for x in supers if x]
+        con.execute("INSERT OR REPLACE INTO supertypes VALUES (?, ?, ?)",
+                    (type_symbol, lib.jar, " ".join(supers)))
+        con.commit()
+        return supers
+    finally:
+        con.close()
+
+
+def _resolve_type_name(index: LibraryIndex, name: str, pkg: str, single: dict,
+                       wildcards: list[str], enclosing: list[str]) -> str:
+    parts = name.split(".")
+    head = parts[0]
+    if head in single:  # imported (maybe a nested type: Map.Entry)
+        base = single[head]
+        return base.replace(".", "/").rsplit("/", 0)[0] + "#" + "".join(p + "#" for p in parts[1:])
+    if len(parts) > 1 and parts[0][:1].islower():  # fully qualified
+        pkg_parts = [p for p in parts if p[:1].islower()]
+        type_parts = parts[len(pkg_parts):]
+        return "/".join(pkg_parts) + "/" + "#".join(type_parts) + "#"
+
+    def exists(class_path: str) -> bool:
+        return index.find_class(class_path) is not None
+
+    candidates = []
+    if pkg:
+        candidates.append(pkg.replace(".", "/") + "/" + head)
+    candidates += [w.replace(".", "/") + "/" + head for w in wildcards]
+    candidates.append("java/lang/" + head)
+    for cp in candidates:
+        if exists(cp):
+            return cp + "#" + "".join(p + "#" for p in parts[1:])
+    # Not found in any cached jar: java.lang is implicit, else a guess in the same package.
+    if head in JAVA_LANG_TYPES:
+        return "java/lang/" + head + "#" + "".join(p + "#" for p in parts[1:])
+    if pkg:
+        return pkg.replace(".", "/") + "/" + head + "#" + "".join(p + "#" for p in parts[1:])
+    return ""
+
+
+def library_ancestors(index: LibraryIndex, type_symbol: str, limit: int = 200) -> list[str]:
+    """All library supertypes, breadth first (nearest first)."""
+    out, seen, queue = [], {type_symbol}, [type_symbol]
+    while queue and len(out) < limit:
+        cur = queue.pop(0)
+        for sup in library_supertypes(index, cur):
+            if sup not in seen:
+                seen.add(sup)
+                out.append(sup)
+                queue.append(sup)
+    return out
+
+
+def param_count(declaration: str) -> int:
+    """Number of parameters of a method/constructor declaration (0 for fields)."""
+    k = declaration.find("(")
+    if k < 0:
+        return -1
+    depth, count, seen = 0, 0, False
+    for ch in declaration[k + 1:]:
+        if ch in "(<[":
+            depth += 1
+        elif ch in ")>]":
+            if depth == 0 and ch == ")":
+                break
+            depth -= 1
+        elif ch == "," and depth == 0:
+            count += 1
+        elif not ch.isspace():
+            seen = True
+    return count + 1 if seen else 0
+
+
+def ordered_members(index: LibraryIndex, types: list[str], skip_names: set[str] = frozenset()
+                    ) -> list[tuple[str, LibClass | None, list[Member], int]]:
+    """[(type, lib, members, hidden)] for library types in order (nearest first), keeping a
+    member only in the most specific type that declares it (same name and parameter count);
+    `hidden` counts those left out because a nearer type overrides them."""
+    seen: set[tuple[str, int]] = set()
+    out = []
+    for t in types:
+        got = type_members(index, t)
+        if got is None:
+            out.append((t, None, [], 0))
+            continue
+        lib, mems = got
+        kept, hidden = [], 0
+        for m in mems:
+            key = (m.name, param_count(m.declaration))
+            if m.name in skip_names or (m.kind != "constructor" and key in seen):
+                hidden += 1
+                continue
+            if m.kind != "constructor":
+                seen.add(key)
+            kept.append(m)
+        out.append((t, lib, kept, hidden))
+    return out

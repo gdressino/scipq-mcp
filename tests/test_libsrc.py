@@ -107,3 +107,73 @@ def test_definition_source_and_members_from_library(libroot, tmp_path, sample_ro
                                   "org/acme/ui/Widget#")
     assert "hidden" not in {m.name for m in members}  # package-private
     assert "names" not in {m.name for m in members}   # private
+
+
+BASE = '''package org.acme.ui;
+
+import org.acme.core.*;
+
+public abstract class Base implements Marker {
+    /** Base version. */
+    public Column<String> addColumn(Provider<String> p) { return null; }
+    public void reset() {}
+}
+'''
+MARKER = '''package org.acme.core;
+
+public interface Marker extends java.io.Serializable {
+    default String tag() { return ""; }
+}
+'''
+
+
+@pytest.fixture
+def hierarchy_root(tmp_path):
+    jar_dir = tmp_path / "gradle" / "files-2.1" / "org.acme" / "acme-all" / "2.0.0" / "x"
+    jar_dir.mkdir(parents=True)
+    with zipfile.ZipFile(jar_dir / "acme-all-2.0.0-sources.jar", "w") as z:
+        z.writestr("org/acme/ui/Widget.java", WIDGET)
+        z.writestr("org/acme/ui/Base.java", BASE)
+        z.writestr("org/acme/core/Marker.java", MARKER)
+    return str(tmp_path / "gradle" / "files-2.1")
+
+
+def test_library_hierarchy_and_members(hierarchy_root, tmp_path, sample_root):
+    ix = L.LibraryIndex(str(tmp_path / "cache"), [hierarchy_root])
+    assert L.library_supertypes(ix, "org/acme/ui/Widget#") == [
+        "org/acme/ui/Base#", "java/lang/Comparable#"]
+    assert L.library_supertypes(ix, "org/acme/ui/Base#") == ["org/acme/core/Marker#"]
+    assert L.library_ancestors(ix, "org/acme/ui/Widget#")[:3] == [
+        "org/acme/ui/Base#", "java/lang/Comparable#", "org/acme/core/Marker#"]
+    groups = L.ordered_members(ix, ["org/acme/ui/Widget#", "org/acme/ui/Base#",
+                                    "org/acme/core/Marker#"])
+    base = [g for g in groups if g[0] == "org/acme/ui/Base#"][0]
+    assert [m.name for m in base[2]] == ["reset"] and base[3] == 1  # addColumn overridden
+    svc = Service(sample_root, cache_dir=str(tmp_path / "cache"), library_roots=[hierarchy_root])
+    out = svc.members("org/acme/ui/Widget#")
+    assert "Widget (library)" in out and "from Base (1, 1 overridden by nearer types" in out
+    assert "from Marker (1" in out and "default String tag()" in out
+
+
+def test_build_java_target(tmp_path):
+    (tmp_path / "build.gradle.kts").write_text(
+        "java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }\n")
+    assert L.build_java_target(str(tmp_path)) == (21, "")
+    (tmp_path / "build.gradle.kts").unlink()
+    (tmp_path / "pom.xml").write_text("<properties><maven.compiler.release>17"
+                                      "</maven.compiler.release></properties>")
+    assert L.build_java_target(str(tmp_path))[0] == 17
+    (tmp_path / "pom.xml").unlink()
+    sub = tmp_path / "core"
+    sub.mkdir()
+    (sub / "build.gradle").write_text("sourceCompatibility = JavaVersion.VERSION_11\n")
+    (tmp_path / "gradle.properties").write_text("org.gradle.java.home=/opt/jdk-11\n")
+    assert L.build_java_target(str(tmp_path)) == (11, "/opt/jdk-11")
+
+
+@pytest.mark.skipif(not L.jdk_src_zip(), reason="no JDK src.zip on this machine")
+def test_typed_with_library_subtypes(sample_root, tmp_path):
+    svc = Service(sample_root, cache_dir=str(tmp_path / "cache"),
+                  library_roots=[L.jdk_src_zip()])  # just the JDK: no full cache scan
+    out = svc.typed("java/util/List#", subtypes=True)
+    assert "with" in out and "ArrayList" in out   # Group: new ArrayList<>()

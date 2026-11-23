@@ -54,6 +54,74 @@ class Graph:
     def close(self) -> None:
         self.con.close()
 
+    # names in text (FTS5, incremental by mtime) ----------------------------------------------
+
+    def _text_index(self, root: str, globs: list[str]) -> None:
+        """Identifiers inside .java string literals (and, apart, those in annotation lines) and
+        every identifier of the other text files, per file, kept up to date by mtime/size."""
+        con = self.con
+        con.executescript(TEXT_SCHEMA)
+        files = candidate_files(root, globs, [])
+        known = {p: (fid, mt, size) for fid, p, mt, size in con.execute(
+            "SELECT id, path, mtime_ns, size FROM text_files")}
+        on_disk = set(files)
+        for p, (fid, _mt, _size) in known.items():
+            if p not in on_disk:
+                con.execute("DELETE FROM text_words WHERE rowid = ?", (fid,))
+                con.execute("DELETE FROM text_files WHERE id = ?", (fid,))
+        for p in files:
+            try:
+                st = os.stat(os.path.join(root, p))
+            except OSError:
+                continue
+            old = known.get(p)
+            if old is not None and old[1:] == (st.st_mtime_ns, st.st_size):
+                continue
+            if old is not None:
+                con.execute("DELETE FROM text_words WHERE rowid = ?", (old[0],))
+                con.execute("DELETE FROM text_files WHERE id = ?", (old[0],))
+            try:
+                with open(os.path.join(root, p), encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            strings, annots, other = _tokens(p, text)
+            fid = con.execute("INSERT INTO text_files (path, mtime_ns, size) VALUES (?, ?, ?)",
+                              (p, st.st_mtime_ns, st.st_size)).lastrowid
+            con.execute("INSERT INTO text_words (rowid, java_strings, java_annotations, other) "
+                        "VALUES (?, ?, ?, ?)", (fid, strings, annots, other))
+        con.commit()
+
+    def names_seen(self, root: str, names: list[str], properties: set[str], globs: list[str],
+                   exclude: list[str]) -> dict[str, str]:
+        """{name: a file it appears in} — like names_in_strings, from the text index."""
+        self._text_index(root, list(globs))
+        excl = list(exclude) + list(DEFAULT_BY_NAME_EXCLUDE)
+        found: dict[str, str] = {}
+        for name in names:
+            cols = "{java_annotations other}" if name in properties else "{java_strings other}"
+            q = f'{cols} : "{name}"'
+            try:
+                rows = self.con.execute(
+                    "SELECT f.path, w.java_strings, w.java_annotations, w.other "
+                    "FROM text_words w JOIN text_files f ON f.id = w.rowid "
+                    "WHERE text_words MATCH ?", (q,))
+            except sqlite3.OperationalError:
+                continue
+            needle = f" {name} "
+            for path, js, ja, other in rows:
+                words = (ja if name in properties else js) or other
+                if needle not in f" {words} ":  # FTS5 folds case; identifiers do not
+                    continue
+                base = path.rsplit("/", 1)[-1]
+                if not any(fnmatch.fnmatch(base, g) for g in globs):
+                    continue
+                if any(fnmatch.fnmatch(path, x.replace("**", "*")) for x in excl):
+                    continue
+                found[name] = path
+                break
+        return found
+
     # lookups ---------------------------------------------------------------------------------
 
     def shards(self) -> dict[int, tuple[str, str, int]]:
@@ -425,9 +493,11 @@ class Graph:
                 continue
             out.append((sym, kind, src, line + 1, sig or ""))
         self.suppressed = {}
+        self.low_confidence = []
         if out and root:
             aliases: dict[str, set[str]] = defaultdict(set)   # name in text -> candidate names
             properties: set[str] = set()
+            own_names = {S.name_of(y[0]) for y in out}
             for x in out:
                 n = S.name_of(x[0])
                 aliases[n].add(n)
@@ -435,22 +505,29 @@ class Graph:
                 if m:  # templates and reports use the bean property: getActividad -> actividad
                     prop = m.group(2)[0].lower() + m.group(2)[1:]
                     aliases[prop].add(n)
-                    if prop not in {S.name_of(y[0]) for y in out}:
+                    if prop not in own_names:
                         properties.add(prop)
             names = sorted(a for a in aliases if len(a) > 2)
-            seen = names_in_strings(root, names, list(by_name_globs), properties,
-                                    list(by_name_exclude))
-            used: dict[str, str] = {}
+            seen = self.names_seen(root, names, properties, list(by_name_globs),
+                                   list(by_name_exclude))
+            exact: dict[str, str] = {}
+            by_property: dict[str, str] = {}
             for w, src in seen.items():
                 for c in aliases.get(w, ()):
-                    used.setdefault(c, src)
+                    (exact if w == c else by_property).setdefault(c, (src, w))
             kept = []
             for x in out:
-                src = used.get(S.name_of(x[0]))
-                if src is None:
-                    kept.append(x)
-                else:
+                n = S.name_of(x[0])
+                if n in exact:
+                    src = exact[n][0]
                     self.suppressed[src] = self.suppressed.get(src, 0) + 1
+                elif n in by_property:
+                    # Only the bean property name (getDescription -> "description") appears:
+                    # too weak to drop the candidate silently.
+                    src, prop = by_property[n]
+                    self.low_confidence.append((*x, src, prop))
+                else:
+                    kept.append(x)
             out = kept
         out.sort(key=lambda x: (x[2], x[3]))
         return out
@@ -776,6 +853,34 @@ def git_diff_hunks(root: str, base: str, staged: bool, paths: list[str]
                 count = int(m.group(2)) if m.group(2) is not None else 1
                 out[current].append((start, count))
     return out
+
+
+TEXT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS text_files (id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL,
+    mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL);
+CREATE VIRTUAL TABLE IF NOT EXISTS text_words USING fts5(
+    java_strings, java_annotations, other, tokenize = "unicode61 tokenchars '_$'");
+"""
+
+_IDENT = re.compile(r"[A-Za-z_$][\w$]{2,}")
+_STRING = re.compile(r'"(?:[^"\\\n]|\\.)*"')
+
+
+def _tokens(path: str, text: str) -> tuple[str, str, str]:
+    """(identifiers in .java string literals, those in annotation lines, identifiers of any
+    other file) — unique, space-separated."""
+    if path.endswith(".java"):
+        strings, annots = set(), set()
+        for line in text.split("\n"):
+            lits = _STRING.findall(line)
+            if not lits:
+                continue
+            words = {w for lit in lits for w in _IDENT.findall(lit)}
+            strings |= words
+            if line.lstrip().startswith("@"):
+                annots |= words
+        return " ".join(sorted(strings)), " ".join(sorted(annots)), ""
+    return "", "", " ".join(sorted(set(_IDENT.findall(text))))
 
 
 def _innermost(defs, ln):

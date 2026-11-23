@@ -238,3 +238,23 @@ def test_dead_code_scopes(sample_root, cache):
         out = svc.dead_code(scope=scope)
         assert "Report.java" in out and "Point.java" not in out, (scope, out)
     assert "matches no definition" in svc.dead_code(scope="nope")
+
+
+def test_dead_code_names_in_other_files(sample_copy, cache):
+    svc = Service(sample_copy, cache_dir=cache)
+    out = svc.dead_code(scope="com.example.model")
+    assert "public int getSize()" in out and "low confidence" not in out
+    # A JSON file using the bean property: the getter becomes a low-confidence candidate.
+    with open(os.path.join(sample_copy, "data.json"), "w") as fh:
+        fh.write('{"size": 1}\n')
+    out = svc.dead_code(scope="com.example.model")
+    main, _, weak = out.partition("low confidence")
+    assert "public int getSize()" not in main
+    assert 'Group#getSize()  ("size" in data.json)' in weak
+    # The exact method name in a Java string literal: omitted, and the answer says where.
+    with open(os.path.join(sample_copy, "app/src/main/java/com/example/app/Reflect.java"),
+              "w") as fh:
+        fh.write('class Reflect { String m = "getSize"; }\n')
+    out = svc.dead_code(scope="com.example.model")
+    assert "getSize" not in out.replace("app/src/main/java/com/example/app/Reflect.java", "")
+    assert "app/src/main/java/com/example/app/Reflect.java 1" in out

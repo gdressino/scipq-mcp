@@ -211,7 +211,8 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
                 offset: Offset = 0, limit: Limit(300) = 300) -> str:
         """Members of a type: its own, then those inherited from each supertype (not private,
         not constructors, not overridden), marking overrides and generated (Lombok) ones;
-        library supertypes are listed from their sources jars."""
+        library supertypes are listed from their sources jars, nearest first, without what a
+        nearer type overrides. Library types themselves work too (e.g. `VerticalLayout`)."""
         return service.members(symbol, project_root, inherited, offset, limit)
 
     @tool
@@ -307,11 +308,15 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         modifiers: Annotated[list[str] | None, Field(
             description="Only uses whose declaration has all these modifiers, e.g. "
                         "['static'] with categories=['field']")] = None,
+        subtypes: Annotated[bool, Field(
+            description="Also uses of its subtypes (project and library ones, e.g. "
+                        "ConcurrentHashMap for Map)")] = False,
     ) -> str:
         """Where a type is used, by kind: fields, parameters, return types, local variables,
         try-with-resources, supertype clauses, method bodies (new, casts, static calls) and
         imports."""
-        return service.typed(symbol, project_root, categories, offset, limit, scope, modifiers)
+        return service.typed(symbol, project_root, categories, offset, limit, scope, modifiers,
+                             subtypes)
 
     @tool
     def tests(symbol: Symbol, project_root: ProjectRoot = "",

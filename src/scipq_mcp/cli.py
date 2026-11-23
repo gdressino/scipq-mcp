@@ -68,7 +68,8 @@ def _query_parser(sub) -> None:
         types={"action": "store_true"})
     add("annotated", "annotation", **paging, scope={"default": ""})
     add("typed", "symbol", **paging, only={"nargs": "*", "default": None},
-        scope={"default": ""}, modifiers={"nargs": "*", "default": None})
+        scope={"default": ""}, modifiers={"nargs": "*", "default": None},
+        subtypes={"action": "store_true"})
     add("tests", "symbol", transitive={"action": "store_true"},
         depth={"type": int, "default": 3})
     add("impact", "symbol", **paging, depth={"type": int, "default": 3},
@@ -128,7 +129,7 @@ def _run_query(a) -> str:
         return svc.annotated(a.annotation, offset=a.offset, limit=a.limit, scope=a.scope)
     if t == "typed":
         return svc.typed(a.symbol, categories=a.only, offset=a.offset, limit=a.limit,
-                         scope=a.scope, modifiers=a.modifiers)
+                         scope=a.scope, modifiers=a.modifiers, subtypes=a.subtypes)
     if t == "tests":
         return svc.tests(a.symbol, transitive=a.transitive, depth=a.depth)
     if t == "impact":

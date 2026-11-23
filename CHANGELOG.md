@@ -3,6 +3,27 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Added
+
+- `members` of library types themselves (e.g. `VerticalLayout`), and library supertypes listed
+  nearest first without the members a nearer type overrides; the library type hierarchy comes
+  from the sources jars (imports, package and `java.lang` resolve the names).
+- `typed(subtypes=true)`: uses of a type's subtypes too — project ones and library ones such as
+  `ConcurrentHashMap` for `Map`.
+- JDK sources follow the build's target: `JavaLanguageVersion.of(N)`, `sourceCompatibility`,
+  `release`, `org.gradle.java.home`, `maven.compiler.release`, `java.version` pick a matching
+  JDK (sdkman, `~/.gradle/jdks`, `/usr/lib/jvm`, macOS locations); otherwise the answer notes
+  the mismatch.
+
+### Changed
+
+- dead_code: candidates whose only trace is their bean property name (`getDescription` and
+  "description") are listed apart as low confidence instead of being dropped.
+- dead_code: names in other files come from a text index (FTS5) in the auxiliary database,
+  updated by file mtime: ~0.4 s instead of ~7 s on a whole project.
+
 ## 0.2.0 — 2026-11-22
 
 ### Added

@@ -151,8 +151,10 @@ say `next offset N` when there is more.
 `definition`, `source` and `members` also answer for symbols the project only uses — the JDK and
 its dependencies — from the `-sources.jar` files in the Gradle (`~/.gradle/caches`) and Maven
 (`~/.m2/repository`) caches and the JDK's `lib/src.zip`: declaration, javadoc, overloads, the
-body, and the members a project type inherits from library supertypes. Which version the build
-uses is not in the shards: with several cached, the highest is used and the answer says which.
+body, the members a project type inherits from library supertypes (nearest first), `members`
+of a library type itself, and `typed(subtypes=true)` through library hierarchies. Which version
+the build uses is not in the shards: with several cached, the highest is used and the answer
+says which. JDK sources follow the build's target version when a matching JDK is installed.
 A class → jar map is kept in the user cache (`libraries.sqlite`), built the first time it is
 needed (it lists every cached sources jar once, ~10–20 s) and refreshed incrementally. Gradle
 downloads sources jars when an IDE asks for them; without one, the answer says so.

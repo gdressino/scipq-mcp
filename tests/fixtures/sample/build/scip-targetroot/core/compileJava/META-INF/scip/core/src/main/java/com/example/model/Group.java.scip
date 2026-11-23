@@ -1,17 +1,18 @@
-¬
+ƒ
 /core/src/main/java/com/example/model/Group.javajava/B
 java/util/Bjava/util/ArrayList#Bjava/B
-java/util/Bjava/util/List#B,com/example/model/Group#BZ /#com/example/model/Group#`<init>`().B#com/example/model/Entity#B!java/util/List#B#com/example/model/Entity#B4 com/example/model/Group#members.B&R;+!java/util/ArrayList#`<init>`(+1).B-64com/example/model/Group#add().BZ #com/example/model/Entity#Blocal 0BR* com/example/model/Group#members.B	java/util/List#add().B	local 0B	local 0B
+java/util/Bjava/util/List#B,com/example/model/Group#BZ /#com/example/model/Group#`<init>`().B#com/example/model/Entity#B!java/util/List#B#com/example/model/Entity#B4 com/example/model/Group#members.B&R;+!java/util/ArrayList#`<init>`(+1).B-64com/example/model/Group#add().BZ #com/example/model/Entity#Blocal 0BR* com/example/model/Group#members.B	java/util/List#add().B	local 0B	local 0B
 	.$com/example/model/Entity#setState().B
 
-java/lang/Override#Bjava/lang/String#B4com/example/model/Group#uid().BZ * com/example/model/Group#members.B java/util/List#size().B"’
+8"com/example/model/Group#getSize().BZ * com/example/model/Group#members.B java/util/List#size().Bjava/lang/Override#Bjava/lang/String#B4com/example/model/Group#uid().BZ * com/example/model/Group#members.B java/util/List#size().B"’
 com/example/model/Group#"
 com/example/model/Entity#"#
 com/example/model/Identifiable#(2Group:)"java*!public class Group extends EntityG
 #com/example/model/Group#`<init>`().(	2<init>:"java*public Group()Y
  com/example/model/Group#members.(2members:*"java*"private final List<Entity> membersJ
 com/example/model/Group#add().(2add:!"java*public void add(Entity e)>
-local 02e:"java*Entity eBcom/example/model/Group#add().¢
+local 02e:"java*Entity eBcom/example/model/Group#add().M
+"com/example/model/Group#getSize().(2getSize:"java*public int getSize()¢
 com/example/model/Group#uid()."+
 %com/example/model/Identifiable#uid()."%
 com/example/model/Entity#uid().(2uid:%"java*@Override

@@ -373,12 +373,14 @@ def members(type_symbol: str, groups, external: list[str], offset: int, limit: i
             rows.append(f"  {m.location.line:>5}  {m.kind}: {sig}{tail}")
     total = sum(len(g.members) for g in groups)
     no_sources = []
-    for ext, lib, mems in libs or []:
+    for ext, lib, mems, nhidden in libs or []:
         if lib is None:
             no_sources.append(ext)
             continue
         total += len(mems)
-        rows.append(f"from {S.short(ext)} ({len(mems)}, library sources: {lib.coordinates}):")
+        hidden = f", {nhidden} overridden by nearer types" if nhidden else ""
+        rows.append(f"from {S.short(ext)} ({len(mems)}{hidden}, library sources: "
+                    f"{lib.coordinates}):")
         for m in mems:
             rows.append(f"  {m.start_line:>5}  {m.kind}: {_decl(m.declaration)}")
     if libs is None:
@@ -405,6 +407,8 @@ def library_definition(lib) -> str:
                                          if lib.lib.others else "")
     lines = [f"{lib.symbol}", f"external — {where}",
              f"source: {lib.lib.jar}!/{lib.lib.entry}:{lib.body[0]} (read it with `source`)"]
+    if getattr(lib, "note", ""):
+        lines.append(f"note: {lib.note}")
     if m is None:
         lines.append(_decl(lib.type_declaration))
         doc = lib.type_javadoc
@@ -769,7 +773,8 @@ def uses_between(scope: str, target: str, rows, total: int) -> str:
     return "\n".join(lines)
 
 
-def dead_code(rows, offset: int, limit: int, suppressed: dict | None = None) -> str:
+def dead_code(rows, offset: int, limit: int, suppressed: dict | None = None,
+              weak=None) -> str:
     omitted = ""
     if suppressed:
         top = sorted(suppressed.items(), key=lambda kv: -kv[1])[:5]
@@ -777,8 +782,17 @@ def dead_code(rows, offset: int, limit: int, suppressed: dict | None = None) -> 
                    f"{sum(suppressed.values())} — " + ", ".join(f"{p} {n}" for p, n in top)
                    + (" … (exclude generated files with [project.by_name] exclude)"
                       if len(suppressed) > 5 else ""))
+    weak_lines = []
+    if weak:
+        weak_lines.append(f"{len(weak)} more candidates whose bean property name appears "
+                          "elsewhere (low confidence: e.g. getDescription and \"description\"):")
+        for sym, kind, src, line, sig, where, prop in weak[:30]:
+            weak_lines.append(f"  {src}:{line}  {S.short(sym)}  (\"{prop}\" in {where})")
+        if len(weak) > 30:
+            weak_lines.append(f"  … and {len(weak) - 30} more")
     if not rows:
-        return "no dead-code candidates in scope" + (f"\n{omitted}" if omitted else "")
+        return "\n".join(["no dead-code candidates in scope"] + ([omitted] if omitted else [])
+                         + weak_lines)
     shown, suffix = page(rows, offset, limit)
     lines = [f"{len(rows)} dead-code candidates (no references; framework entry points, "
              f"overrides and names used in strings left out — check before deleting){suffix}"]
@@ -790,7 +804,7 @@ def dead_code(rows, offset: int, limit: int, suppressed: dict | None = None) -> 
             current = src
             lines.append(src)
         lines.append(f"  {line}  {kind}: {signature_text(sig) or S.short(sym)}")
-    return "\n".join(lines)
+    return "\n".join(lines + weak_lines)
 
 
 def signature_text(sig: str) -> str:
@@ -852,3 +866,21 @@ def javadoc_mentions(hits, symbol: str) -> str:
     lines = [f"javadoc mentions ({{@link}}, @see), not in the index: {len(hits)}"]
     lines += [f"  {h.source}:{h.line}: {h.text}" for h in hits]
     return "\n".join(lines)
+
+
+def library_members(type_symbol: str, groups, offset: int, limit: int) -> str:
+    rows = []
+    total = 0
+    for t, lib, mems, hidden in groups:
+        if lib is None:
+            rows.append(f"from {S.short(t)}: no sources")
+            continue
+        total += len(mems)
+        extra = f", {hidden} overridden by nearer types" if hidden else ""
+        label = "own" if t == type_symbol else f"from {S.short(t)}"
+        rows.append(f"{label} ({len(mems)}{extra}, {lib.coordinates}):")
+        for m in mems:
+            rows.append(f"  {m.start_line:>5}  {m.kind}: {_decl(m.declaration)}")
+    shown, suffix = page(rows, offset, limit)
+    return "\n".join([f"{S.short(type_symbol)} (library) — {total} members{suffix}"]
+                     + list(shown))
