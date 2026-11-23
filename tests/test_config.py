@@ -53,6 +53,11 @@ bogus = 1
     assert st.profiles == ["jpa", "nope"] and any("unknown profile 'nope'" in w
                                                   for w in st.warnings)
     assert "jakarta/persistence/Entity#" in st.entity_annotations
+    (home / "config.toml").write_text('[check_refs]\nother_versions = ["v4"]\n')
+    st = CFG.settings_for(str(root), home=str(home))
+    assert st.check_refs_versions == [] and any(
+        "unknown keys ['check_refs'] (project settings go inside [[project]]" in w
+        for w in st.warnings)
 
 
 def test_user_profile_overrides_builtin(tmp_path):

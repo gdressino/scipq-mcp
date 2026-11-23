@@ -700,7 +700,7 @@ def test_check_refs_follows_lines_through_git_history(sample_copy, tmp_path):
     with open(os.path.join(sample_copy, "NOTES.md"), "a") as fh:
         fh.write(f"- Not committed: `getState` ({e}:12).\n")
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
-    assert f"{e}:15  — line 15 is now 18 (moved since 2026-01-02)" in out, out
+    assert f"{e}:15  — line 15 is now 18 (moved since the doc's version of 2026-01-02)" in out, out
     assert f"{e}:25  — line 25 changed since the doc named setState (2026-01-02, " in out
     assert "Legacy.java  — no such file (deleted 2026-01-05, " in out
     assert "Planned.java  — no such file, nor deleted since the doc was written" in out
@@ -734,7 +734,11 @@ def test_check_refs_reads_line_lists_getters_and_neighbouring_numbers(sample_cop
                  f"| a remark | `{e}:22` | the same as `setState(int)` |\n"
                  f"- v4 `{e}:3` — `setState(int)` there; `Entity.nothing` and `Entity.state`.\n"
                  f"- Calls `Entity.getState()`\n(`{e}:4`).\n"
-                 f"- `setState(1)` runs and `add` ({e}:23) adds.\n")
+                 f"- `setState(1)` runs and `add` ({e}:23) adds.\n"
+                 f"- Elsewhere: (v4 `Entity.rewind()`, main `Entity#wind`).\n"
+                 f"- En main el alta (`{e}:3` `setState(int)`) era otra.\n"
+                 f"- `setState(int)` and `getState()` ({e}:3/:18).\n"
+                 f"- `{e}:3` returns, `getState()` vacío (`:19`).\n")
     with open(os.path.join(sample_copy, ".scipq.toml"), "w") as fh:
         fh.write('[check_refs]\nother_versions = ["v4"]\n')
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
@@ -770,7 +774,8 @@ def test_check_refs_history_follows_doc_renames_and_the_parent_version(sample_co
     os.makedirs(os.path.join(sample_copy, "notes"))
     with open(os.path.join(sample_copy, "notes", "N.md"), "w") as fh:
         fh.write(f"- `getState()` ({e}:15) reads it.\n"
-                 f"- `uid()` ({e}:10) was never there.\n")
+                 f"- `uid()` ({e}:10) was never there.\n"
+                 f"- The javadoc is at {e}:4, and further on the class has `uid()`.\n")
     _git(sample_copy, "add", "-A")
     _git(sample_copy, "commit", "-qm", "b", date="2026-01-03T10:00:00Z")
     os.makedirs(os.path.join(sample_copy, "docs"))
@@ -779,9 +784,10 @@ def test_check_refs_history_follows_doc_renames_and_the_parent_version(sample_co
     with open(os.path.join(sample_copy, "docs", "N.md"), "a") as fh:
         fh.write(f"| `{s}:20` | `e.setState(4)` |\n")
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
-    assert f"{e}:15  — line 15 is now 18 (moved since 2025-11-02)" in out, out
+    assert f"{e}:15  — line 15 is now 18 (moved since the doc's version of 2025-11-02)" in out, out
     assert "line 10 no longer mentions uid" in out and "so in the doc's version too: " \
         "2026-01-03" in out
+    assert f"{e}:4 " not in out         # a name further away: no claim that the doc was wrong
     assert f"{s}:20  — line 20 is now 33 (the code quoted is there; line 20 has another)" in out
 
 

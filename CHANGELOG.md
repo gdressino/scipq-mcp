@@ -12,12 +12,14 @@ One section per version published on PyPI. `scripts/release.sh` turns `## Unrele
   included) that does. From it to the checkout: a block whose text stands unchanged gives
   its new number ("line 120 is now 134", a repeated line placed by its surroundings); lines
   edited since, inside the range too, say so with the date (in the commit's own time zone),
-  the commit and where the name is now; lines that did not hold the name in the doc's own
-  version say that (and where that line went). A line that holds the name now only through
-  a call or a comment is reported when the doc's version had the declaration there. A name
-  the file never had is not reported; a missing file is told deleted (when, which commit)
-  or never there since the doc was written (planned, or another repository's file); a
-  missing member, gone from its type's file since a date and commit, or not there when the
+  the commit and where the name is now (within the named member's lines); lines that did not
+  hold the name in the doc's own version say that (and where that line went), but only when
+  the name is written right at the mention (its code span, `name (File:N)`, `File:N —
+  name`): a name from further away says nothing. Lists are checked over all their lines. A
+  line that holds the name now only through a call or a comment is reported when the doc's
+  version had the declaration there. A name the file never had is not reported; a missing file is told deleted (when, which commit)
+  or never there since the doc was written (planned, or another repository's file), in this
+  checkout's history; a missing member, gone from its type's file since a date and commit, or not there when the
   doc was written either (planned, when no close name or other type explains it). A
   statement the doc quotes for a line (`obj.setOwner(user)`) that the file has once,
   elsewhere, gives the line's new number.
@@ -29,8 +31,9 @@ One section per version published on PyPI. `scripts/release.sh` turns `## Unrele
   clause's are; a mention that opens its line takes the call that ended the line before;
   `getX` holds where the field `x` is declared; implicit members (`toString`, `close`…) are
   required at a line only when the file declares them; a type's name holds anywhere in its
-  body; `main <sha> path`, `<sha> path`, `path (main)` and the labels of
-  `[check_refs] other_versions` (`v4 path`) are another version; name templates
+  body; `main <sha> path`, `<sha> path`, `path (main)`, "en main …" earlier in the clause
+  and the labels of `[check_refs] other_versions` (`v4 path`, `v4 Type.member`) are another
+  version (a user configuration with project keys outside `[[project]]` now warns); name templates
   (`com.example.Run<N>Test`, `com.example.Run*`) are not type names; a table cell next to the
   path counts only when it starts with code, up to its first clause; a shorter parameter
   list than every overload is shorthand (`put(Date)`). `Type.member` alone in a code span is

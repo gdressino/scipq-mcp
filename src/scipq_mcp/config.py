@@ -427,6 +427,10 @@ def settings_for(root: str, config_file: str | None = None, home: str | None = N
         conf, warnings = {}, warnings + [str(e)]
     best = None
     lazy: dict = {}
+    top = set(conf) - {"project"}
+    if top:     # [check_refs] at the top of the user's file applies to no project
+        warnings.append(f"{path}: unknown keys {sorted(top)} (project settings go inside "
+                        "[[project]] entries, or in the checkout's .scipq.toml)")
     for k, entry in enumerate(conf.get("project", [])):
         unknown = set(entry) - KNOWN_PROJECT_KEYS
         if unknown:

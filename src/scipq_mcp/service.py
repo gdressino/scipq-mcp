@@ -1287,8 +1287,10 @@ class Service:
                     g, nav.ws.root, globs, list(exclude or []) + list(st.check_refs_exclude),
                     self.cache_dir, skip_archives=not files,
                     other_versions=st.check_refs_versions)
-            return render.index_note(stats) + CR.render(problems, checked, nfiles, offset,
-                                                        limit, fmt, archived), set()
+            out = render.index_note(stats) + CR.render(problems, checked, nfiles, offset,
+                                                       limit, fmt, archived)
+            out += "".join(f"\nconfig warning: {w}" for w in st.warnings[:5])
+            return out, set()
         return body
 
     def _b_doctor(self) -> Body:
