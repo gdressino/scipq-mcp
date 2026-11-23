@@ -118,7 +118,9 @@ Macros (one per step, as {"<macro>": {...}}):
 Primitive step: {"select": {...}, "do": {"<action>": ...}, "imports": [...]?}
 select by symbol: {"symbol": "Type#member" | "symbols": [...], "overloads": bool,
   "role": "all|definition|references", "family": bool (methods; with a library method it
-  adds the project's overrides), "accessors": bool (fields), "files": "glob" | [...],
+  adds the project's overrides, not the library's subtypes: list those in symbols, e.g.
+  ["java.util.List#size", "java.util.Set#size", "java.util.Collection#size"]; a listed
+  symbol nobody uses is skipped), "accessors": bool (fields), "files": "glob" | [...],
   "in": "Type or Type#method" (only sites inside it), "node": ..., "where": ...}
 select by kind: {"in": "Type#method" | "files": "glob", "kind": "<JavaParser class>",
   "where": ...}: every node of that kind (CatchClause, IfStmt, MethodCallExpr, BinaryExpr,
@@ -299,11 +301,14 @@ class FileState:
 
 
 class Planner:
-    def __init__(self, nav: Navigator, settings, members_named: Callable | None = None):
+    def __init__(self, nav: Navigator, settings, members_named: Callable | None = None,
+                 types_named: Callable | None = None):
         self.nav = nav
         self.root = nav.ws.root
         self.st = settings
-        self.members_named = members_named or (lambda _t: {})
+        self._members_fn = members_named or (lambda _t, subtypes=False: {})
+        self._members_cache: dict = {}
+        self.types_named = types_named or (lambda _n: [])
         self.ops: list[Op] = []
         self.errors: list[str] = []
         self.warnings: list[str] = []
@@ -359,6 +364,12 @@ class Planner:
                                 "reference", optional=optional_refs, why=why))
         return out
 
+    def members_named(self, type_symbol: str, subtypes: bool = False) -> dict:
+        key = (type_symbol, subtypes)
+        if key not in self._members_cache:
+            self._members_cache[key] = self._members_fn(type_symbol, subtypes=subtypes)
+        return self._members_cache[key]
+
     def symbol_at(self, source: str, line: int, col: int) -> str:
         for v in self.nav._views(self.nav.ws.shard_for_source(source)):
             for o in v.doc.occurrences:
@@ -385,11 +396,21 @@ class Planner:
         texts = sel.get("symbols") or [sel.get("symbol")]
         if isinstance(texts, str):
             texts = [texts]
+        listed = len(texts) > 1
         out: list[str] = []
         for text in texts:
             if not isinstance(text, str) or not text.strip():
                 raise PlanError(f"{what}: a name or SCIP symbol is required")
             r = self.nav.resolve(text)
+            if r.symbol is None and not r.candidates and not r.externals:
+                ext = self.nav.find_external(text)   # library overloads, constructors
+                if len(ext) == 1:
+                    r.symbol = ext[0]
+                elif ext:
+                    r.externals = ext
+                elif listed:   # one of a list with no uses here: skip it
+                    self.notes.append(f"{text}: no symbol in this project matches it; skipped")
+                    continue
             if r.symbol is not None and not (sel.get("overloads") and S.is_method(r.symbol)):
                 out.append(r.symbol)
                 continue
@@ -413,6 +434,8 @@ class Planner:
                 out += cands
                 continue
             raise AmbiguousName(r)
+        if not out:
+            raise QueryError(f"none of {', '.join(texts)} is used in this project")
         return list(dict.fromkeys(out))
 
     def generated_path(self, path: str) -> bool:
@@ -431,7 +454,8 @@ class Planner:
         return op
 
     def by_name(self, names: list[str], label: str, extra_globs: tuple = (),
-                near: set[str] | None = None, quoted: bool = False) -> None:
+                near: set[str] | None = None, quoted: bool = False,
+                java_only: bool = False) -> None:
         """Uses by name the index does not see: strings in .java, other text files. With
         `near`, .java hits only count in those files (the ones using the owner type); with
         `quoted`, a hit in prose (.feature, .md, .txt) only counts between quotes."""
@@ -439,6 +463,8 @@ class Planner:
         if "cucumber" in getattr(self.st, "profiles", []) or \
                 getattr(self.st, "cucumber_run", ""):
             globs.append("*.feature")
+        if java_only:
+            globs = ["*.java"]
         hits = X.uses_by_name(self.root, names, globs, set(), limit=600)
         kept = 0
         prose = (".feature", ".md", ".txt", ".adoc")
@@ -546,11 +572,7 @@ class Planner:
 
     def _check_member_clash(self, k: int, owner: str, new: str, kind: str, arity: int) -> None:
         """A member named `new` in the type, its supertypes (library ones too) or subtypes."""
-        found = dict(self.members_named(owner))
-        for impl in self.nav.implementations(owner):
-            for m in X._own_members(self.nav, impl.definition.symbol, impl.definition):
-                found.setdefault(S.name_of(m.symbol), []).append(
-                    ("method" if S.is_method(m.symbol) else "field", _arity_of(m)))
+        found = self.members_named(owner, subtypes=True)
         key = (k, new, kind)
         if key in self._clashes:
             return
@@ -579,11 +601,20 @@ class Planner:
         old = S.name_of(sym)
         sites: list[Site] = []
         for m in fam or []:
+            why = "" if m.symbol == sym else "family"
             if S.is_local(m.symbol):   # an override in an anonymous class: one file only
                 if m.definition is not None:
                     sites += self.local_sites(m.symbol, m.definition.location.source, old)
-            else:
-                sites += self.sites_of(m.symbol, why="" if m.symbol == sym else "family")
+                continue
+            # family() already found each member's definition and uses: no grep again.
+            if m.definition is not None and not m.definition.generated:
+                r = m.definition.location.range
+                sites.append(Site(m.definition.location.source, r.start_line, r.start_char,
+                                  old, m.symbol, "definition", why=why))
+            for ref in m.uses:
+                r = ref.location.range
+                sites.append(Site(ref.location.source, r.start_line, r.start_char, old,
+                                  m.symbol, "reference", why=why))
         if not fam:
             sites = self.sites_of(sym)
         arity = _arity_of(d) if d else -1
@@ -607,9 +638,18 @@ class Planner:
 
     def _javadoc(self, k: int, members: list[str], old: str, new: str) -> None:
         files = set()
-        for m in members:
-            for h in X.javadoc_mentions(self.root, m):
-                files.add(h.source)
+        if len(members) > 1:   # a family: one search for the name, then the owners
+            owners = {S.name_of(S.parent(m)) for m in members} | {""}
+            for source, _line, text in X._grep_words(self.root, [old], ["*.java"]):
+                for m in X._JAVADOC_TAG.finditer(text):
+                    target, _, mem = m.group(2).partition("#")
+                    if mem.split("(")[0] == old and target.rsplit(".", 1)[-1] in owners:
+                        files.add(source)
+                        break
+        else:
+            for m in members:
+                for h in X.javadoc_mentions(self.root, m):
+                    files.add(h.source)
         if not files:
             return
         args = {"old": old, "new": new, "members": members, "params": [], "kept": False,
@@ -729,8 +769,8 @@ class Planner:
             upper = old.upper()
             if upper != old and not a.get("keep_column"):
                 self.by_name([upper], f"a column named after {old}?", extra_globs=("*.sql",))
-        elif private:
-            self.by_name(X.property_names(sym), label, quoted=True,
+        elif private:   # only its own class can name it: its file, no prose
+            self.by_name(X.property_names(sym), label, quoted=True, java_only=True,
                          near={d.location.source} if d is not None else set())
         else:
             self.by_name(X.property_names(sym), label, near=self.users_of(owner), quoted=True)
@@ -874,13 +914,15 @@ class Planner:
         given = _imports(a)
         decl_imports, call_imports = list(given), list(given)
         if not given:   # import what the new parameters and defaults name, when it is clear
+            decl_files = sorted({s_.source for s_ in decls})
+            call_files = sorted({s_.source for s_ in calls})
             for p_ in params:
                 if "add" in p_:
                     decl_imports += self._import_for(k, p_["add"].split()[0] if
-                                                     p_["add"].split() else "")
+                                                     p_["add"].split() else "", decl_files)
                     m_ = re.match(r"([A-Z][\w$]*)\s*\.", p_.get("default", ""))
                     if m_:
-                        call_imports += self._import_for(k, m_.group(1))
+                        call_imports += self._import_for(k, m_.group(1), call_files)
         self.add(Op(k, f"change signature of {S.short(sym)} (declarations)", "signature_decl",
                     args, decls, node="declaration", imports=decl_imports))
         call_op = self.add(Op(k, f"change signature of {S.short(sym)} (calls)", "signature_call",
@@ -910,21 +952,26 @@ class Planner:
                     return "..." in masked[i:k]
         return False
 
-    def _import_for(self, k: int, type_text: str) -> list[str]:
+    def _import_for(self, k: int, type_text: str, files: list[str]) -> list[str]:
         """The import a simple type name in a template needs: [] when it needs none (a
-        primitive, java.lang, qualified) or cannot be told (then a warning)."""
+        primitive, java.lang, qualified) or cannot be told (then a warning). What the
+        touched files already import says it first; else the index."""
         base = re.sub(r"<.*", "", type_text).replace("...", "").replace("[]", "").strip()
         if not base or "." in base or base in ("int", "long", "short", "byte", "char",
                                                "boolean", "float", "double", "void", "var"):
             return []
-        try:
-            r = self.nav.resolve(base)
-        except QueryError:
-            return []
-        syms = [r.symbol] if r.symbol else sorted({d.symbol for d in r.candidates
-                                                  if S.is_type(d.symbol)}
-                                                 | {x for x in r.externals if S.is_type(x)})
-        syms = [x for x in syms if x and S.is_type(x) and S.name_of(x) == base]
+        rx = re.compile(r"^\s*import\s+([\w$.]+\." + re.escape(base) + r")\s*;", re.M)
+        for f in files[:50]:
+            try:
+                m = rx.search(self.file(f).text.text)
+            except OSError:
+                continue
+            if m:
+                return [m.group(1)]
+        syms = [x for x in self.types_named(base) if "#" not in S.parent(x)]
+        if len(syms) > 1:   # prefer the project's own types and java.lang
+            own = [x for x in syms if self.nav.definition(x) is not None]
+            syms = own if len(own) == 1 else syms
         if len(syms) == 1:
             fq = _qualified(syms[0])
             return [] if fq.startswith("java.lang.") and fq.count(".") == 2 else [fq]
@@ -1086,7 +1133,10 @@ def _imports(holder: dict) -> list[str]:
 
 
 def _arity_of(d) -> int:
-    sig = (d.info.signature if d is not None and d.info else "") or ""
+    return _sig_arity((d.info.signature if d is not None and d.info else "") or "")
+
+
+def _sig_arity(sig: str) -> int:
     m = re.search(r"\((.*)\)", sig, re.S)
     if not m:
         return -1
@@ -1504,6 +1554,9 @@ def _package_private(p: Planner, op: Op, move_to: dict[str, str],
     type itself) used from its old package (any module), and package-private members of the
     old package that a moved type uses. They will not compile."""
     found: list[str] = []
+    # Members another step makes public or protected do not break.
+    opened = {s_.symbol for o in p.ops if o.action == "set_modifiers"
+              and {"public", "protected"} & set(o.args.get("add") or []) for s_ in o.sites}
 
     def pkg_of(path: str) -> tuple[str, str]:
         before = _package_of_file(p, path)
@@ -1515,7 +1568,7 @@ def _package_private(p: Planner, op: Op, move_to: dict[str, str],
         old = S.package_of(t)
         members = [(t, d)] + [(m.symbol, m) for m in X._own_members(p.nav, t, d)]
         for sym, md in members:
-            if _visibility(md) != "package" or S.is_local(sym):
+            if _visibility(md) != "package" or S.is_local(sym) or sym in opened:
                 continue
             try:
                 refs = p.nav.references(sym)[0]
@@ -1546,7 +1599,7 @@ def _package_private(p: Planner, op: Op, move_to: dict[str, str],
                 if S.owner_type(sym).startswith(t[:-1]):
                     continue
                 md = p.nav.definition(sym)
-                if md is not None and _visibility(md) == "package":
+                if md is not None and _visibility(md) == "package" and sym not in opened:
                     found.append(f"{S.short(t)} uses {S.short(sym)}, package-private in {old} "
                                  f"({d.location.source}:{o.range.start_line + 1})")
     for f in found[:30]:
@@ -1753,7 +1806,11 @@ class Builder:
     def template(self, fs: FileState, loc: Located, tpl: str, base: str) -> list:
         body = E.reindent(tpl.replace("\r\n", "\n"), base, self.unit(fs))
         body = body.replace("\n", fs.text.eol)
-        return E.template_parts(body, self.slots(fs, loc))
+        parts = E.template_parts(body, self.slots(fs, loc))
+        for x in parts:
+            if isinstance(x, E.Piece):
+                x.track = True
+        return parts
 
     def build(self, op: Op, loc: Located) -> None:
         p = self.p
@@ -2299,9 +2356,9 @@ def _imports_of_steps(p: Planner) -> None:
 
 def run(nav: Navigator, settings, plan, worker_factory: Callable, cache_base: str | None,
         dry_run: bool = False, members_named: Callable | None = None,
-        level: str = "") -> Result:
+        level: str = "", types_named: Callable | None = None) -> Result:
     plan = load_plan(plan)
-    p = Planner(nav, settings, members_named)
+    p = Planner(nav, settings, members_named, types_named)
     p.expand(plan)
     total = sum(len(op.sites) for op in p.ops)
     if total > MAX_SITES:
@@ -2384,6 +2441,7 @@ def _templates_parse(p: Planner, w) -> None:
 class Outcome:
     files: dict = field(default_factory=dict)     # path -> (FileState, Rendered)
     expect: list = field(default_factory=list)
+    templates: list = field(default_factory=list)   # where template text landed
     removed_comments: list = field(default_factory=list)
 
 
@@ -2409,7 +2467,7 @@ def _compose(p: Planner, w) -> Outcome:
             nt = E.Text(rendered.text)
             regions = []
             for k, pl in enumerate(rendered.placed):
-                if pl.end <= pl.start:
+                if pl.end <= pl.start or pl.kind == "Template":
                     continue
                 bl, bc = nt.position(pl.start)
                 el, ec = nt.end_position(pl.end)
@@ -2455,6 +2513,11 @@ def _compose(p: Planner, w) -> Outcome:
                 line, col = nt.position(pl.start)
                 out.expect.append({"source": new_path, "line": line - 1, "col": col - 1,
                                    "name": rendered.text[pl.start:pl.end]})
+            elif pl.kind == "Template":
+                bl, bc = nt.position(pl.start)
+                el, ec = nt.position(pl.end)
+                out.templates.append({"source": new_path, "start": [bl - 1, bc - 1],
+                                      "end": [el - 1, ec - 1]})
         for s, e in rendered.removed:
             for c in fs.unit.get("comments", []):
                 cs, ce = fs.text.span(c["range"])
@@ -2515,12 +2578,20 @@ def _store(p: Planner, plan: dict, outcome: Outcome, cache_base: str | None, w) 
     patch_path = os.path.join(d, "patch.diff")
     with open(patch_path, "wb") as fh:
         fh.write(patch)
+    if p.review:
+        with open(os.path.join(d, "review.txt"), "w", encoding="utf-8") as fh:
+            for a, b, c, d_ in _ranked(p.review):
+                fh.write(f"{a}:{b}  {c}  ({d_})\n")
     meta = {"plan": plan, "root": os.path.realpath(root), "created": time.time(),
-            "files": meta_files, "expect": outcome.expect, "level": p.unit_level,
+            "files": meta_files, "expect": outcome.expect, "templates": outcome.templates,
+            "level": p.unit_level, "review": [list(r) for r in _ranked(p.review)],
             "javaparser": w.version, "summary": p.summary,
             # Tests and features that name the old names in text: after the change they may
             # fail, or pass without checking anything.
-            "review_tests": sorted({f"{a}:{b}" for a, b, _c, _d in p.review if _is_test(a)}),
+            "review_tests": [f"{a}:{b}" for a, b, c, _d in sorted(
+                {r for r in p.review if _is_test(r[0])},
+                key=lambda r: (not re.search(r"Pattern\.compile|\\\\[.s(]|\.matches\(", r[2]),
+                               r[0], r[1]))],
             # What a rename or a move removes (a replace leaves its symbol in place, and a
             # library symbol never had a definition here).
             "symbols": sorted({s.symbol for op in p.ops if op.action in ("rename", "move")
@@ -2586,14 +2657,22 @@ def _report(p: Planner, outcome: Outcome | None, dry_run: bool, plan_id: str = "
     if outcome:
         for path, (fs, _r, edits) in outcome.files.items():
             edited |= {(path, fs.text.line_of(e.start) + 1) for e in edits}
-    review = [r for r in dict.fromkeys(p.review) if (r[0], r[1]) not in edited]
+    review = [r for r in _ranked(p.review) if (r[0], r[1]) not in edited]
     if review:
-        uniq = [f"{a}:{b}  {c}  ({d})" for a, b, c, d in review]
-        lines.append(f"review by hand ({len(uniq)}: uses by name the index does not see, not "
-                     "changed):")
-        lines += [f"  {x}" for x in uniq[:40]]
-        if len(uniq) > 40:
-            lines.append(f"  … and {len(uniq) - 40} more")
+        keys = [r for r in review if _rank(r) == 3]
+        rows = [f"{a}:{b}  {c}  ({d})" for a, b, c, d in review if _rank((a, b, c, d)) < 3]
+        lines.append(f"review by hand ({len(review)}: uses by name the index does not see, not "
+                     "changed; most likely to matter first):")
+        lines += [f"  {x}" for x in rows[:40]]
+        if len(rows) > 40:
+            lines.append(f"  … and {len(rows) - 40} more" + (
+                f" (all in {os.path.join(os.path.dirname(patch_path), 'review.txt')})"
+                if patch_path else ""))
+        if keys:
+            files = sorted({r[0] for r in keys})
+            lines.append(f"  {len(keys)} map or parameter keys (put/get(\"…\")) in "
+                         f"{len(files)} files, e.g. " + ", ".join(f"{a}:{b}" for a, b, _c, _d
+                                                                in keys[:4]))
     if outcome:
         from .graph import _GENERATED_HEADER, _file_header
         generated = [path for path, (fs, _r, _e) in outcome.files.items()
@@ -2636,6 +2715,26 @@ def _is_test(path: str) -> bool:
         re.search(r"(Test|Tests|IT)\.java$", path) is not None
 
 
+def _rank(r) -> int:
+    """How likely a use by name is to break: 0 a path or a comparison in a query, 1 a
+    feature/fixture, 2 a name in a string, 3 a map or parameter key."""
+    path, _line, text, _label = r
+    if path.endswith(".java"):
+        if re.search(r"\b(put|get|getOrDefault|containsKey|remove|setParameter|addParameter)"
+                     r"\s*\(\s*\"", text):
+            return 3
+        if re.search(r'"[^"]*\w\.[a-z]\w*|"[^"]*\b\w+\s*(==|!=|<|>)', text):
+            return 0
+        return 2
+    if path.endswith(".feature"):
+        return 1
+    return 2
+
+
+def _ranked(review: list) -> list:
+    return sorted(dict.fromkeys(review), key=lambda r: (_rank(r), r[0], r[1]))
+
+
 def _has_formatter(root: str) -> bool:
     for name in ("build.gradle", "build.gradle.kts", "pom.xml"):
         try:
@@ -2660,7 +2759,7 @@ def load_meta(root: str, plan_id: str, cache_base: str | None) -> tuple[dict, st
         raise PlanError(f"no plan {plan_id} for this checkout (plans live in its cache)") from e
 
 
-def _class_files(nav: Navigator, sources: list[str]) -> list[str]:
+def _class_files(nav: Navigator, sources: list[str], since: float | None = None) -> list[str]:
     """A build that failed may still write shards (the plugin runs before javac stops): a
     class file missing, or older than its source, in the usual Gradle/Maven output folder
     tells. Unknown layouts are not judged."""
@@ -2690,7 +2789,8 @@ def _class_files(nav: Navigator, sources: list[str]) -> list[str]:
                     continue
                 cls = os.path.join(d, rel)
                 try:
-                    if os.stat(cls).st_mtime + 1 < mtime:
+                    cm = os.stat(cls).st_mtime
+                    if cm + 1 < mtime and not (since and cm > since):
                         out.append(f"{src}: its class file is older than the source (did "
                                    f"{task} fail?)")
                 except OSError:
@@ -2728,13 +2828,31 @@ def verify(nav: Navigator, meta: dict) -> list[str]:
                      f"({', '.join(changed_since[:5])}): checked anyway")
     targets = [f["new"] for f in meta["files"]]
     fresh = nav.ws.freshness_of(targets)
+    # A file written again with the content it was compiled from (a checkout and the same
+    # patch again): Gradle finds the build up to date by content and its shard stays older
+    # than the file. With the patched content and a shard written after the plan, it counts.
+    patched = {f["new"] for f in meta["files"]} - set(not_applied) - set(changed_since)
+    created = meta.get("created", 0)
+
+    def shard_after_plan(src: str) -> bool:
+        try:
+            return any(os.stat(sh.path).st_mtime > created
+                       for sh in nav.ws.shard_for_source(src))
+        except OSError:
+            return False
+    same = [t for t in fresh.stale if t in patched and shard_after_plan(t)]
+    if same:
+        lines.append(f"note: {len(same)} patched files are newer than their shards but hold "
+                     "the patched content, compiled after the plan (an up-to-date build): "
+                     "counted as compiled")
+        fresh.stale = [t for t in fresh.stale if t not in same]
     missing = [t for t in targets if not nav.ws.shard_for_source(t)]
     if fresh.stale or missing:
         problems.append("not compiled since the patch: " + ", ".join((fresh.stale + missing)[:8])
                         + (f" — compile ({', '.join(sorted(fresh.tasks))}) and verify again"
                            if fresh.tasks else " — compile and verify again"))
         return problems + lines
-    problems += _class_files(nav, targets)
+    problems += _class_files(nav, targets, created if same else None)
     # Each renamed identifier must now be an occurrence of a symbol with that name, not a
     # local (a local capturing a renamed field shows up here).
     wrong = []
@@ -2771,6 +2889,21 @@ def verify(nav: Navigator, meta: dict) -> list[str]:
                 gone.append(f"{S.short(sym)} no longer exists but {len(refs)} references remain"
                             f" ({refs[0].location.source}:{refs[0].location.line})")
     problems += gone
+    resolved: dict[str, int] = {}
+    for x in meta.get("templates", []):
+        for v in nav._views(nav.ws.shard_for_source(x["source"])):
+            for o in v.doc.occurrences:
+                r = o.range
+                if o.is_definition or S.is_local(o.symbol):
+                    continue
+                if tuple(x["start"]) <= (r.start_line, r.start_char) and \
+                        (r.end_line, r.end_char) <= tuple(x["end"]):
+                    resolved[o.symbol] = resolved.get(o.symbol, 0) + 1
+    if resolved:
+        top = sorted(resolved.items(), key=lambda kv: (-kv[1], kv[0]))
+        lines.append("the code the templates added resolves to (check the unexpected ones): "
+                     + ", ".join(f"{S.short(k)} ×{n}" for k, n in top[:15])
+                     + (" …" if len(top) > 15 else ""))
     checked = len(meta.get("expect", []))
     if meta.get("review_tests"):
         rt = meta["review_tests"]

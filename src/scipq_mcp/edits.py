@@ -172,6 +172,7 @@ class Slot:
 class Piece:
     text: str
     kind: str = ""        # check: a node of this JavaParser kind covers exactly this piece
+    track: bool = False   # new code from a template: verify reports what it resolves to
 
 
 @dataclass
@@ -294,6 +295,8 @@ def render(original: str, edits: list[Edit]) -> Rendered:
                 emit(p.text)
                 if p.kind:
                     res.placed.append(Placed(e, b, length[0], p.kind))
+                if p.track and p.text.strip():
+                    res.placed.append(Placed(e, b, length[0], "Template"))
         if e.paren:
             emit(")")
         if e.kind:

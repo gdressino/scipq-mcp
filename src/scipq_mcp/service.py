@@ -675,41 +675,75 @@ class Service:
                                  "the format")
             with self._graph(nav) as (g, _stats):
                 st = self.settings(root, g)
-            try:
-                res = R.run(nav, st, plan, lambda lvl: JVM.Worker(lvl, self.cache_dir),
-                            self.cache_dir, dry_run, lambda t: self._members_named(nav, t),
-                            JVM.language_level(root))
-            except JVM.ToolError as e:
-                raise QueryError(str(e)) from e
+                lib_cache: dict = {}
+                try:
+                    res = R.run(nav, st, plan, lambda lvl: JVM.Worker(lvl, self.cache_dir),
+                                self.cache_dir, dry_run,
+                                lambda t, subtypes=False: self._members_named(
+                                    nav, g, t, subtypes, lib_cache),
+                                JVM.language_level(root),
+                                types_named=lambda name: self._types_named(g, name))
+                except JVM.ToolError as e:
+                    raise QueryError(str(e)) from e
             return res.text, set()
         return body
 
-    def _members_named(self, nav: Navigator, sym: str) -> dict[str, list]:
-        """{name: [(kind, arity)]} of a type's members, inherited ones (libraries too)."""
+    @staticmethod
+    def _types_named(g, name: str) -> list[str]:
+        """Type symbols (project and library) with this simple name, from the index."""
+        if not re.fullmatch(r"[\w$]+", name or ""):
+            return []
+        return sorted({x for (x,) in g.con.execute(
+            "SELECT symbol FROM symbols WHERE symbol LIKE ?", (f"%/{name}#",))
+            if S.is_type(x) and S.name_of(x) == name})
+
+    def _members_named(self, nav: Navigator, g, sym: str, subtypes: bool = False,
+                       lib_cache: dict | None = None) -> dict[str, list]:
+        """{name: [(kind, arity)]} of a type's members, its supertypes' (libraries too) and,
+        with subtypes, its subtypes': from the index, one query per type."""
         out: dict[str, list] = {}
-        external = [sym]
-        if nav.definition(sym) is not None:
-            try:
-                groups, external = X.members(nav, sym, True)
-            except QueryError:
-                groups, external = [], []
-            for grp in groups:
-                for m in grp.members:
-                    out.setdefault(S.name_of(m.symbol), []).append(
-                        ("method" if S.is_method(m.symbol) else "field", R._arity_of(m)))
-        if external:
-            try:
-                index = self._library_index(nav.ws.root)
-                order = self._nearest_first(index, nav, sym, external) \
-                    if nav.definition(sym) is not None else [sym]
-                for _ext, _lib, mems, _h in L.ordered_members(index, order, set()):
-                    for m in mems:
-                        if m.kind in ("method", "field"):
-                            types = L.param_types(m.declaration) if m.kind == "method" else ()
-                            out.setdefault(m.name, []).append(
-                                (m.kind, len(types) if types is not None else -1))
-            except (CacheError, OSError, L.LibraryBusy, sqlite3.Error):
-                pass
+        sid = g.ids([sym]).get(sym)
+        supers: set[str] = set()
+        subs: set[str] = set()
+        if sid is not None:
+            supers = {t for t in g.names(g.ancestors(sid)).values() if S.is_type(t)}
+            if subtypes:
+                subs = {t for t in g._subtypes_of({sym}) if S.is_type(t)}
+        types = {sym} | supers | subs
+        library = []
+        for t in sorted(types):
+            hi = t[:-1] + chr(ord(t[-1]) + 1)
+            rows = list(g.con.execute(
+                "SELECT s.symbol, d.signature FROM symbols s JOIN defs d ON d.symbol_id = s.id "
+                "WHERE s.symbol >= ? AND s.symbol < ?", (t, hi)))
+            if not rows:
+                library.append(t)
+                continue
+            for member, sig in rows:
+                if S.parent(member) != t or S.is_local_like(member) or \
+                        S.kind_of(member) not in ("method", "term"):
+                    continue
+                if t in supers and re.search(r"\bprivate\b", (sig or "").split("(")[0]):
+                    continue   # not inherited
+                out.setdefault(S.name_of(member), []).append(
+                    ("method" if S.is_method(member) else "field", R._sig_arity(sig or "")))
+        cache = lib_cache if lib_cache is not None else {}
+        for t in library:   # one library type at a time, each read once per call
+            if t not in cache:
+                cache[t] = []
+                try:
+                    index = self._library_index(nav.ws.root)
+                    for _ext, _lib, mems, _h in L.ordered_members(index, [t], set()):
+                        for m in mems:
+                            if m.kind in ("method", "field"):
+                                types_ = L.param_types(m.declaration) \
+                                    if m.kind == "method" else ()
+                                cache[t].append((m.name, m.kind, len(types_)
+                                                 if types_ is not None else -1))
+                except (CacheError, OSError, L.LibraryBusy, sqlite3.Error):
+                    pass
+            for name, kind, arity in cache[t]:
+                out.setdefault(name, []).append((kind, arity))
         return out
 
     # --- context ----------------------------------------------------------------------------

@@ -283,3 +283,31 @@ def test_dry_run_runs_the_checks_and_verify_sees_failed_builds(refactor_root, sa
     assert _class_files(nav, [src]) == []
     os.utime(os.path.join(classes, "Entity.class"), (1_000_000_000, 1_000_000_000))
     assert "older than the source" in _class_files(nav, [src])[0]
+
+
+def test_library_overloads_symbol_lists_and_stored_results(sample_copy, javaparser_cache):
+    from scipq_mcp import refactor as R
+    svc = Service(sample_copy, cache_dir=javaparser_cache)
+    out = plan(svc, [{"replace_calls": {"symbol": "java.util.ArrayList#<init>", "overloads": True,
+                                        "template": "new java.util.ArrayList<>($args)"}},
+                     {"select": {"symbols": ["java.util.List#size", "java.util.Nope#size"],
+                                 "node": "call", "role": "references"},
+                      "do": {"replace": "$recv.toArray().length"}}])
+    assert "REFUSED" not in out, out
+    assert "java.util.Nope#size: no symbol in this project matches it; skipped" in out
+    meta, patch_path = R.load_meta(sample_copy, re.search(r"plan ([0-9a-f]{12}):", out).group(1),
+                                   javaparser_cache)
+    assert meta["templates"]       # verify reports what this new code resolves to
+
+
+def test_an_earlier_step_can_open_access_for_a_move(refactor_root, javaparser_cache):
+    svc = Service(refactor_root, cache_dir=javaparser_cache)
+    out = plan(svc, [{"select": {"symbol": "com.example.shop.util.Writer#header",
+                                 "role": "definition", "node": "declaration"},
+                      "do": {"set_modifiers": {"add": ["public"]}}},
+                     {"move": {"symbol": "com.example.shop.util.Reader",
+                               "to": "com.example.shop.util.io"}},
+                     {"move": {"symbol": "com.example.shop.util.Writer",
+                               "to": "com.example.shop.util.io"}}])
+    assert "WILL NOT COMPILE" not in out and "+    public static String header() {" in \
+        patch_of(out)
