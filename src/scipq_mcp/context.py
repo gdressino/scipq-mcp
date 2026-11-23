@@ -307,6 +307,14 @@ def is_write_at(line: str, start: int, end: int, next_line: str = "") -> bool:
         _INCREMENT_BEFORE.search(line[:start]) is not None
 
 
+def _collapse(rows: list[str]) -> list[str]:
+    """Identical rows (two uses on one line) once, with "(×n)"."""
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r] = counts.get(r, 0) + 1
+    return [r + (f"  (×{n})" if n > 1 else "") for r, n in counts.items()]
+
+
 def accessor_symbols(field_symbol: str) -> list[str]:
     """Bean accessors (Lombok's too), a `boolean isX` field's `isX()`/`setX()`, and a record
     component's or fluent accessor `name()`."""
@@ -355,11 +363,13 @@ def field_sections(nav: Navigator, d: Definition, short: str
                f"{r.location.source}:{r.location.line}: {_clip(text, 110)}"
                + (f"  ({S.name_of(r.symbol)})" if accessor else ""))
         (writes if write else reads).append(row)
+    n_writes, n_reads = len(writes), len(reads)  # uses (rows collapse two on one line)
+    writes, reads = _collapse(writes), _collapse(reads)
     if writes:
-        sections.append(Section("writes", f"writes ({len(writes)}; told apart by the line's "
+        sections.append(Section("writes", f"writes ({n_writes}; told apart by the line's "
                                           "text, a heuristic — the index has no read/write "
                                           "roles):", writes, f"references({short})"))
     if reads:
-        sections.append(Section("reads", f"reads ({len(reads)}):", reads,
+        sections.append(Section("reads", f"reads ({n_reads}):", reads,
                                 f"references({short})"))
     return sections, refs, sorted(accessors)

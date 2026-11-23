@@ -578,6 +578,15 @@ def lookup(index: LibraryIndex, symbol: str) -> LibDefinition | None:
         if last.disambiguator.startswith("+") and last.disambiguator[1:].isdigit():
             k = int(last.disambiguator[1:])
         member = same[k] if k < len(same) else (same[0] if same else None)
+        if member is None and want_kind == "method":
+            # A record component's implicit accessor: synthesized from the header.
+            for typ, comp, pos in src.record_components(start, body_open, types[-1]):
+                if comp == name:
+                    line = src.line_of(pos)
+                    member = Member("method", name, f"public {typ} {name}()", line, line,
+                                    "(implicit accessor of the record component)",
+                                    ("public",), line)
+                    same = [member]
         if member is None:
             return None
         return LibDefinition(symbol, lib, member, type_decl, type_doc, src, same,
@@ -621,10 +630,20 @@ def _type_members(index: LibraryIndex, type_symbol: str
     start, body_open, body_close = decl
     head = src.text[start:body_open]
     is_interface = re.search(r"\binterface\b", head) is not None
-    out = []
+    is_enum = re.search(r"\benum\b", src.masked[start:body_open]) is not None
+    out: list[Member] = src.enum_constants(body_open, body_close) if is_enum else []
     count: dict[str, int] = {}
-    for m in src.members(body_open, body_close, is_enum=re.search(r"\benum\b", head) is not None,
-                         type_name=types[-1]):
+    members = src.members(body_open, body_close, is_enum=is_enum, type_name=types[-1])
+    # A record's components and their implicit public accessors (unless declared).
+    for typ, name, pos in src.record_components(start, body_open, types[-1]):
+        line = src.line_of(pos)
+        out.append(Member("record component", name, f"{typ} {name}", line, line, "",
+                          ("private", "final"), line))
+        if not any(m.kind == "method" and m.name == name and param_types(m.declaration) == ()
+                   for m in members):
+            out.append(Member("method", name, f"public {typ} {name}()", line, line,
+                              "(implicit accessor of the record component)", ("public",), line))
+    for m in members:
         if m.kind in ("method", "constructor"):  # SCIP's +N counts private ones too
             key = S.CONSTRUCTOR if m.kind == "constructor" else m.name
             m.overload = count.get(key, 0)
@@ -663,7 +682,7 @@ def _type_variables(header: str, name: str) -> set[str]:
     cur = cur.strip()
     if cur:
         out.add(cur.split(None, 1)[0])
-    return {t for t in out if re.fullmatch(r"[A-Za-z_$][\w$]*", t)}
+    return {t for t in out if re.fullmatch(r"(?:[^\W\d]|\$)[\w$]*", t)}
 
 
 def _javadoc_before(src: JavaSource, pos: int) -> str:

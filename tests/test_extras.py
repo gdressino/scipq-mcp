@@ -314,3 +314,12 @@ def test_is_annotation_use():
     assert not X.is_annotation_use(' * {@link Inject}', 10)
     assert not X.is_annotation_use('String s = "@Inject";', 13)
     assert X.is_annotation_use("@Inject", 1)
+
+
+def test_typed_annotations_and_throws(nav):
+    uses = [u for u in X.typed(nav, "com/example/model/Label#")
+            if u.location.source.endswith("Invoice.java")]
+    assert [(u.category, u.location.line) for u in uses] == [("annotation", 7)]
+    assert X._THROWS_BEFORE.search("public void load(String p) throws IOException, ")
+    assert X._THROWS_BEFORE.search("        throws ")              # on the next line
+    assert not X._THROWS_BEFORE.search("throw new ")

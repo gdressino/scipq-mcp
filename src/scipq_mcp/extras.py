@@ -228,7 +228,7 @@ def annotated(nav: Navigator, annotation: str) -> list[Annotated]:
     return out
 
 
-_ANNOTATION_BEFORE = re.compile(r"@\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*$")
+_ANNOTATION_BEFORE = re.compile(r"@\s*(?:(?:[^\W\d]|\$)[\w$]*\s*\.\s*)*$")
 
 
 def is_annotation_use(line: str, col: int) -> bool:
@@ -267,11 +267,18 @@ def _raw_lines(root: str, source: str, lines) -> dict[int, str]:
 
 # --- typed ------------------------------------------------------------------------------------
 
-TYPED_ORDER = ("field", "parameter", "return type", "local variable", "resource", "supertype",
-               "method body", "initializer", "qualifier", "import", "other")
+TYPED_ORDER = ("field", "parameter", "return type", "throws", "local variable", "resource",
+               "supertype", "annotation", "method body", "initializer", "qualifier", "import",
+               "other")
+_THROWS_BEFORE = re.compile(r"\)\s*throws\b[^(){};=]*$|^\s*throws\b[^(){};=]*$")
 
 # `Map.Entry`: the type only qualifies a nested type's name (not `Map.of(` nor `Integer.MAX`).
 _QUALIFIER = re.compile(r"\s*\.\s*([A-Z][\w$]*)(?!\s*\()")
+
+
+def _mask_line(text: str) -> str:
+    from .javasrc import mask
+    return mask(text)
 
 
 def _is_qualifier(line: str, end_char: int) -> bool:
@@ -307,8 +314,19 @@ def typed(nav: Navigator, type_symbol: str) -> list[TypedUse]:
             line = texts.get(o.range.start_line, "")
             loc = Location(v.source, o.range)
             inner = v.innermost(o.range)
+            raw_line = raw.get(o.range.start_line, "")
+            if is_annotation_use(raw_line, o.range.start_char):
+                owner = inner[1] if inner is not None and not inner[2] else \
+                    (v.container_of(o.range)[0] if inner is not None else "")
+                out.append(TypedUse("annotation", owner, loc, line))
+                continue
+            if _THROWS_BEFORE.search(_mask_line(raw_line[:o.range.start_char])):
+                owner = inner[1] if inner is not None and not inner[2] else \
+                    (v.container_of(o.range)[0] if inner is not None else "")
+                out.append(TypedUse("throws", owner, loc, line))
+                continue
             if o.range.start_line == o.range.end_line and \
-                    _is_qualifier(raw.get(o.range.start_line, ""), o.range.end_char):
+                    _is_qualifier(raw_line, o.range.end_char):
                 owner = inner[1] if inner is not None and not inner[2] else \
                     (v.container_of(o.range)[0] if inner is not None else "")
                 out.append(TypedUse("qualifier", owner, loc, line))

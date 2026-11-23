@@ -89,7 +89,7 @@ _GENERATED = ("@Generated", "@lombok.Generated", "@javax.annotation.Generated",
               "@javax.annotation.processing.Generated")
 _TEST_TASK = re.compile(r"test", re.IGNORECASE)
 _TEST_PATH = re.compile(r"(^|/)src/[A-Za-z]*[tT]est[A-Za-z]*/")
-_ANNOTATION_BEFORE = re.compile(r"@\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*$")
+_ANNOTATION_BEFORE = re.compile(r"@\s*(?:(?:[^\W\d]|\$)[\w$]*\s*\.\s*)*$")
 
 
 class IndexError_(Exception):  # noqa: N801 - "IndexError" is a builtin

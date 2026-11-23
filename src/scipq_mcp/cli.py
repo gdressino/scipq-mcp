@@ -177,11 +177,13 @@ def _init_config(root: str | None) -> str:
     from .graph import generated_dirs
 
     generated = generated_dirs(root)
+    generated_java = generated_dirs(root, java_only=True)
     try:
         ws = Workspace(root)
         ws.files()
     except WorkspaceError:
-        return CFG.repo_template([], detected=False, generated=generated)
+        return CFG.repo_template([], detected=False, generated=generated,
+                                 generated_java=generated_java)
     profiles, _warnings = CFG.load_profiles()
     found = []
     for name, data in profiles.items():
@@ -189,7 +191,8 @@ def _init_config(root: str | None) -> str:
                 for x in ep.get("annotations", [])}
         if anns and ws.grep(x.encode() for x in anns):
             found.append(name)
-    return CFG.repo_template(found, detected=True, generated=generated)
+    return CFG.repo_template(found, detected=True, generated=generated,
+                             generated_java=generated_java)
 
 
 def _cache(a) -> str:

@@ -11,10 +11,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-_TYPE_DECL = re.compile(r"\b(class|interface|enum|record|@\s*interface)\s+([A-Za-z_$][\w$]*)")
+# Identifiers: Unicode letters, and any non-ASCII character inside one (Java accepts combining
+# marks there: `اذاً`, `અને`); in masked Java code nothing else is non-ASCII.
+_TYPE_DECL = re.compile(r"\b(class|interface|enum|record|@\s*interface)\s+((?:[^\W\d]|[$\u0080-\U0010FFFF])[\w$\u0080-\U0010FFFF]*)")
 # An annotation use (`@interface` declares an annotation type: not one).
 _ANNOTATION = re.compile(r"@\s*(?!interface\b)[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?")
-_IDENT_BEFORE_PAREN = re.compile(r"([A-Za-z_$][\w$]*)\s*\(")
+_IDENT_BEFORE_PAREN = re.compile(r"((?:[^\W\d]|[$\u0080-\U0010FFFF])[\w$\u0080-\U0010FFFF]*)\s*\(")
 _CONTROL = {"if", "for", "while", "switch", "catch", "synchronized", "return", "new", "else",
             "do", "try", "throw"}
 
@@ -220,6 +222,79 @@ class JavaSource:
             i += 1
         return out
 
+    def enum_constants(self, body_open: int, body_close: int) -> list[Member]:
+        """Each constant of an enum body (kind "enum constant"), with its javadoc and line."""
+        m, t = self.masked, self.text
+        i = k = body_open + 1
+        depth = 0
+        pieces, start = [], i
+        while k < body_close:
+            ch = m[k]
+            if ch in "({":
+                depth += 1
+            elif ch in ")}":
+                depth -= 1
+            elif ch == ";" and depth == 0:
+                break
+            elif ch == "," and depth == 0:
+                pieces.append((start, k))
+                start = k + 1
+            k += 1
+        pieces.append((start, k))
+        out = []
+        for a, b in pieces:
+            bare = _ANNOTATION.sub(lambda x: re.sub(r"[^\n]", " ", x.group()), m[a:b])
+            ident = _IDENT.search(bare)
+            if not ident:
+                continue
+            pos = a + ident.start()
+            decl = " ".join(t[pos:b].split())
+            decl = decl.split("{", 1)[0].strip()[:200]
+            line = self.line_of(pos)
+            out.append(Member("enum constant", ident.group(), decl, line, self.line_of(b),
+                              _javadoc(t[a:pos]), ("public", "static", "final"), line))
+        return out
+
+    def record_components(self, start: int, body_open: int, name: str
+                          ) -> list[tuple[str, str, int]]:
+        """[(type, name, offset)] of a record header `record Name<T>(int lo, T hi)`."""
+        m, t = self.masked, self.text
+        rec = re.search(r"\brecord\s+" + re.escape(name) + r"\b", m[start:body_open])
+        if not rec:
+            return []
+        k = start + rec.end()
+        open_paren = m.find("(", k, body_open)
+        if open_paren < 0:
+            return []
+        depth, close = 0, -1
+        for j in range(open_paren, body_open):
+            if m[j] == "(":
+                depth += 1
+            elif m[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    close = j
+                    break
+        if close < 0:
+            return []
+        out = []
+        seg, depth = open_paren + 1, 0
+        for j in range(open_paren + 1, close + 1):
+            ch = m[j]
+            if ch in "(<[":
+                depth += 1
+            elif ch in ")>]" and j < close:
+                depth -= 1
+            if (ch == "," and depth == 0) or j == close:
+                bare = _ANNOTATION.sub(lambda x: re.sub(r"[^\n]", " ", x.group()), m[seg:j])
+                ids = list(_IDENT.finditer(bare))
+                if ids:
+                    last = ids[-1]
+                    typ = " ".join(_ANNOTATION.sub(" ", t[seg:seg + last.start()]).split())
+                    out.append((typ.replace("...", "[]"), last.group(), seg + last.start()))
+                seg = j + 1
+        return out
+
     def _member(self, seg: int, header_end: int, end: int, type_name: str) -> list[Member]:
         m, t = self.masked, self.text
         start = _skip_space(m, seg)
@@ -247,7 +322,10 @@ class JavaSource:
             name = names[-1].group(1) if names else ""
             if not name or name in _CONTROL:
                 return []
-            kind = "constructor" if name == type_name else "method"
+            # A constructor is named like its type and has no return type before the name
+            # (`public Varargs loadlib(…)` in class loadlib is a method).
+            kind = "constructor" if name == type_name and not _return_type_before(
+                bare[:names[-1].start(1)]) else "method"
             return [Member(kind, name, declaration, self.line_of(start), self.line_of(end),
                            javadoc, mods, self.line_of(start + names[-1].start(1)))]
         if end > header_end and type_name and words[-1] == type_name:
@@ -267,7 +345,45 @@ _MODIFIERS = {"public", "protected", "private", "static", "final", "abstract", "
               "non-sealed"}
 
 
-_IDENT = re.compile(r"[A-Za-z_$][\w$]*")
+_IDENT = re.compile(r"(?:[^\W\d]|[$\u0080-\U0010FFFF])[\w$\u0080-\U0010FFFF]*")
+
+
+def _return_type_before(head: str) -> bool:
+    """Whether a method header (annotations blanked) has a type before the name."""
+    head = re.sub(r"<[^<>]*(?:<[^<>]*>[^<>]*)*>", " ", head)  # method type parameters
+    return any(w not in _MODIFIERS for w in head.split())
+
+
+_TYPE_ARGS_TEXT = re.compile(r"[\w$.,\s\[\]?&<>@]*")
+
+
+def _type_arguments_at(text: str, k: int) -> bool:
+    """Whether the `<` at k (in an expression) opens type arguments, as in `new Map<K, V>()`,
+    `new HashMap<java.lang.String, X>()`, `new Accessor<boolean[], Boolean>()` or
+    `Entry.<A, B>of()`, rather than a comparison like `a < b`."""
+    prev = text[:k].rstrip()[-1:]
+    if not (prev.isalnum() or prev in "_$."):
+        return False
+    depth, end = 0, -1
+    for j in range(k, min(len(text), k + 400)):
+        c = text[j]
+        if c == "<":
+            depth += 1
+        elif c == ">" and text[j - 1:j] != "-":
+            depth -= 1
+            if depth == 0:
+                end = j
+                break
+        elif c in "(){};=!|+*/%^":
+            return False
+    if end < 0:
+        return False
+    inner = text[k + 1:end]
+    if not _TYPE_ARGS_TEXT.fullmatch(inner):
+        return False
+    first = inner.lstrip()[:1]
+    return prev == "." or first.isupper() or first in ("?", "@", "") or "." in inner or \
+        "[]" in inner.replace(" ", "")
 
 
 def _declarators(bare: str) -> list[tuple[str, int]]:
@@ -287,12 +403,8 @@ def _declarators(bare: str) -> list[tuple[str, int]]:
         elif ch == "<":
             if not init:
                 depth += 1
-            else:
-                prev = bare[:k].rstrip()[-1:]
-                nxt = bare[k + 1:].lstrip()[:1]
-                if (prev.isalnum() or prev in "_$.") and (nxt[:1].isupper() or nxt in ("?", ">",
-                                                                                   "@")):
-                    gdepth += 1
+            elif _type_arguments_at(bare, k):
+                gdepth += 1
         elif ch == ">":
             if not init:
                 depth -= 1
@@ -337,7 +449,7 @@ def _top_level_equals(header: str) -> bool:
 def enum_constant(text: str, name: str) -> tuple[str, str, int] | None:
     """(declaration, javadoc, offset within text) of one constant in an enum constant list."""
     masked = mask(text)
-    m = re.search(r"(?<![\w$])" + re.escape(name) + r"(?![\w$])", masked)
+    m = re.search(r"(?<![\w$\u0080-\U0010FFFF])" + re.escape(name) + r"(?![\w$\u0080-\U0010FFFF])", masked)
     if not m:
         return None
     depth, k = 0, m.start()

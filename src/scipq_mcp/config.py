@@ -303,11 +303,14 @@ def _relative_glob(g, where: str, warnings: list[str]) -> bool:
     return True
 
 
-def repo_template(profiles: list[str], detected: bool, generated: list[str] = ()) -> str:
+def repo_template(profiles: list[str], detected: bool, generated: list[str] = (),
+                  generated_java: list[str] | None = None) -> str:
     """A `.scipq.toml` to start from (printed by `scipq-mcp init-config`)."""
     names = ", ".join(f'"{p}"' for p in profiles)
     if generated:
         dirs = "[" + ", ".join(f'"{d}/*"' for d in generated) + "]"
+        java_dirs = "[" + ", ".join(f'"{d}/*"' for d in (
+            generated if generated_java is None else generated_java)) + "]"
         by_name = ("# Directories that look generated (by name, or because nearly all their "
                    "files start\n# with a \"generated\" header). Check the list: drop any that "
                    "holds your own code.\n"
@@ -315,8 +318,9 @@ def repo_template(profiles: list[str], detected: bool, generated: list[str] = ()
                    f"exclude = {dirs}\n"
                    "# globs = [\"*.xml\", \"*.jrxml\"]      # files where names are used as "
                    "text\n\n"
-                   "[dead_code]   # and their own unused members are not candidates\n"
-                   f"exclude = {dirs}")
+                   + ("[dead_code]   # and their own unused members are not candidates\n"
+                      f"exclude = {java_dirs}" if java_dirs != "[]" else
+                      "# [dead_code]\n# exclude = []   # none of them holds Java sources"))
     else:
         by_name = ("# [by_name]\n# globs = [\"*.xml\", \"*.jrxml\"]      # files where names are "
                    "used as text (reflection, reports)\n# exclude = [\"generated/*\"]\n\n"

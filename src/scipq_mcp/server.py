@@ -66,9 +66,9 @@ READ_ONLY = ToolAnnotations.model_validate(
     {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True,
      "openWorldHint": False})
 
-TYPED_CATEGORIES = Literal["field", "parameter", "return type", "local variable", "resource",
-                           "supertype", "method body", "initializer", "qualifier", "import",
-                           "other"]
+TYPED_CATEGORIES = Literal["field", "parameter", "return type", "throws", "local variable",
+                           "resource", "supertype", "annotation", "method body", "initializer",
+                           "qualifier", "import", "other"]
 
 
 INACTIVE_INSTRUCTIONS = ("scipq (Java code navigation) is idle: this is not a Java project, so it "
@@ -337,9 +337,10 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         symbol: Annotated[str, Field(description="A type, e.g. `EntityManager`, `Account`")],
         project_root: ProjectRoot = "",
         categories: Annotated[list[TYPED_CATEGORIES] | None, Field(
-            description="Only these kinds of use: field, parameter, return type, local "
-                        "variable, resource (try-with-resources), supertype, method body, "
-                        "initializer, qualifier (`Map` in `Map.Entry`), import, other")]
+            description="Only these kinds of use: field, parameter, return type, throws, "
+                        "local variable, resource (try-with-resources), supertype, annotation "
+                        "(`@Label`), method body, initializer, qualifier (`Map` in "
+                        "`Map.Entry`), import, other")]
         = None,
         offset: Offset = 0,
         limit: Limit(100) = 100,

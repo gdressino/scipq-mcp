@@ -371,3 +371,75 @@ def test_parser_tricky_members():
     lines = {m.name: m.line for m in src.members(*src.find_type(["Outer"])[1:],
                                                  type_name="Outer")}
     assert lines["right"] == 4 and lines["names"] == 6
+
+
+def test_parser_unicode_names_method_named_like_its_class_and_type_arguments():
+    src = JavaSource('''package a;
+public class Ապա {
+    int año = 1, ñandú;
+    public static class loadlib {
+        public loadlib() {}
+        public Object loadlib(Object args) { return args; }
+        public <T> loadlib(T t) {}
+    }
+    private java.util.Map<String, Long> m = new java.util.HashMap<java.lang.String, Long>(),
+        n = Entry.<java.lang.String, Long>of(1, 2);
+    private Object acc = new Accessor<boolean[], Boolean>() { }, other;
+    boolean cmp = a < b, c = d > e;
+}
+''')
+    _s, lo, hi = src.find_type(["Ապա"])
+    assert [n for k, n in [(m.kind, m.name) for m in src.members(lo, hi, type_name="Ապա")]
+            if k == "field"] == ["año", "ñandú", "m", "n", "acc", "other", "cmp", "c"]
+    _s, lo, hi = src.find_type(["Ապա", "loadlib"])
+    assert [m.kind for m in src.members(lo, hi, type_name="loadlib")] == [
+        "constructor", "method", "constructor"]
+
+
+SHAPES = '''package org.acme.shapes;
+
+public class Shapes {
+    /** How to align. */
+    public enum Align {
+        /** At the start. */
+        START,
+        CENTER("c") {
+            @Override public String toString() { return "center"; }
+        },
+        @Deprecated END;
+
+        Align() {}
+        Align(String s) {}
+        public boolean isEdge() { return this != CENTER; }
+    }
+
+    public record Box<T>(@Deprecated int width, java.util.List<T> items, String... tags) {
+        public int width() { return width; }
+    }
+}
+'''
+
+
+def test_library_enum_constants_and_record_components(tmp_path, sample_root):
+    jar_dir = tmp_path / "gradle" / "files-2.1" / "org.acme" / "shapes" / "1.0" / "h"
+    jar_dir.mkdir(parents=True)
+    with zipfile.ZipFile(jar_dir / "shapes-1.0-sources.jar", "w") as z:
+        z.writestr("org/acme/shapes/Shapes.java", SHAPES)
+    root = str(tmp_path / "gradle" / "files-2.1")
+    ix = L.LibraryIndex(str(tmp_path / "cache"), [root])
+    _lib, align = L.type_members(ix, "org/acme/shapes/Shapes#Align#")
+    assert [(m.kind, m.name) for m in align if m.kind == "enum constant"] == [
+        ("enum constant", "START"), ("enum constant", "CENTER"), ("enum constant", "END")]
+    assert align[0].javadoc == "At the start." and ("method", "isEdge") in [
+        (m.kind, m.name) for m in align]
+    _lib, box = L.type_members(ix, "org/acme/shapes/Shapes#Box#")
+    got = [(m.kind, m.declaration) for m in box]
+    assert ("record component", "int width") in got
+    assert ("record component", "java.util.List<T> items") in got
+    assert ("method", "public java.util.List<T> items()") in got     # implicit accessor
+    assert ("method", "public String[] tags()") in got
+    assert sum(1 for k, d in got if k == "method" and "width()" in d) == 1  # declared one
+    d = L.lookup(ix, "org/acme/shapes/Shapes#Box#items().")
+    assert d is not None and "implicit accessor" in d.member.javadoc
+    svc = Service(sample_root, cache_dir=str(tmp_path / "cache"), library_roots=[root])
+    assert "enum constant: START" in svc.members("org/acme/shapes/Shapes#Align#")
