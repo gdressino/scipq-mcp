@@ -332,3 +332,18 @@ def test_dead_code_pages_low_confidence_too():
     assert "next offset" not in rest
     later = render.dead_code(rows, 0, 2, weak=weak)
     assert "follow at offset 3" in later
+
+
+def test_recent_shards_with_and_without_a_build_running():
+    from scipq_mcp import render
+    from scipq_mcp.workspace import Freshness, _is_build_command
+    assert _is_build_command(b"/usr/bin/java\0-cp\0w.jar\0org.gradle.wrapper.GradleWrapperMain\0"
+                             b"build\0")
+    assert _is_build_command(b"/opt/maven/bin/mvnd\0compile\0")
+    assert not _is_build_command(b"bash\0-c\0grep org.gradle.wrapper.GradleWrapperMain x\0")
+    done = render.freshness(Freshness(recent=3, newest_age=12, build_running=False))
+    assert done.startswith("note: 3 shards") and "probably just finished" in done
+    running = render.freshness(Freshness(recent=3, build_running=True))
+    assert running.startswith("WARNING: a gradle/mvn command is running")
+    unknown = render.freshness(Freshness(recent=1, build_running=None))
+    assert unknown.startswith("WARNING: 1 shard written") and "if a compilation" in unknown

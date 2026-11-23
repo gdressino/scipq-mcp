@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -55,9 +56,56 @@ class Freshness:
     uncompiled: list[str] = field(default_factory=list)  # .java with no shard, newer than its module's shards
     tasks: set[str] = field(default_factory=set)         # compile tasks that would refresh them
     recent: int = 0                                      # shards written in the last RECENT_SECONDS
+    newest_age: float = 0.0                              # seconds since the newest shard was written
+    build_running: bool | None = None                    # a gradle/mvn command in this checkout
 
     def __bool__(self) -> bool:
         return bool(self.stale or self.uncompiled or self.recent)
+
+
+# Command-line launchers of Gradle and Maven builds (the processes whose working directory is
+# the checkout; a Gradle daemon is shared and runs elsewhere).
+_BUILD_MAINS = {b"org.gradle.wrapper.GradleWrapperMain", b"org.gradle.launcher.GradleMain",
+                b"org.codehaus.plexus.classworlds.launcher.Launcher"}
+_BUILD_EXECUTABLES = {b"mvnd", b"mvnd.sh"}
+
+
+def _is_build_command(cmdline: bytes) -> bool:
+    """A JVM whose main class is a Gradle/Maven launcher (an exact argument, so a shell whose
+    command text merely mentions one does not count), or the Maven daemon client."""
+    args = cmdline.split(b"\0")
+    return bool(_BUILD_MAINS.intersection(args)) or \
+        os.path.basename(args[0]) in _BUILD_EXECUTABLES
+
+
+def build_running(root: str) -> bool | None:
+    """Whether a Gradle or Maven command runs in this checkout, from /proc (Linux); None when
+    it cannot be told (other systems, or a build process whose directory cannot be read).
+    Builds started from an IDE (through a Gradle daemon) are not seen."""
+    if not sys.platform.startswith("linux") or not os.path.isdir("/proc/self"):
+        return None
+    real = os.path.realpath(root)
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return None
+    unknown = False
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                cmd = fh.read(16384)
+        except OSError:
+            continue
+        if not _is_build_command(cmd):
+            continue
+        try:
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            unknown = True
+            continue
+        if cwd == real or cwd.startswith(real + os.sep):
+            return True
+    return None if unknown else False
 
 
 def find_project_root(start: str) -> str:
@@ -283,8 +331,7 @@ class Workspace:
         shard_of: dict[str, float] = {}
         task_of_source: dict[str, int] = {}
         task_of_dir: dict[str, int] = {}
-        since = time.time() - RECENT_SECONDS
-        result.recent = sum(1 for mt in shard_mtimes.values() if mt > since)
+        self._note_recent(result, shard_mtimes.values())
         for rel, mt in shard_mtimes.items():
             split = split_shard_path(rel)
             if split is None:
@@ -319,21 +366,30 @@ class Workspace:
         want = set(sources)
         if not want:
             return result
-        since = time.time() - RECENT_SECONDS
+        mtimes = []
         for k, rel in self.files():
             source = rel[:-len(SUFFIX)]
             if source not in want:
                 continue
             try:
                 sm = os.stat(os.path.join(self.scip_roots()[k][0], rel)).st_mtime
-                result.recent += sm > since
+                mtimes.append(sm)
                 if os.stat(os.path.join(self.root, source)).st_mtime > sm:
                     result.stale.append(source)
                     result.tasks.add(build_task(self.scip_roots()[k][1]))
             except OSError:
                 pass
         result.stale = sorted(set(result.stale))
+        self._note_recent(result, mtimes)
         return result
+
+    def _note_recent(self, result: Freshness, mtimes) -> None:
+        now = time.time()
+        mtimes = list(mtimes)
+        result.recent = sum(1 for mt in mtimes if mt > now - RECENT_SECONDS)
+        if result.recent:
+            result.newest_age = max(0.0, now - max(mtimes))
+            result.build_running = build_running(self.root)
 
     def _source_dirs(self) -> list[str]:
         return sorted({rel[:-len(SUFFIX)].rpartition("/")[0] for _k, rel in self.files()})

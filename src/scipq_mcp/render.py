@@ -309,10 +309,22 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None) -> st
     lines = []
     if f.recent:
         from .workspace import RECENT_SECONDS
-        lines.append(f"WARNING: {f.recent} shard{'s' if f.recent != 1 else ''} written in the "
-                     f"last {RECENT_SECONDS} s: if a compilation is running in this checkout, "
-                     "results may be incomplete (shards being written lose references and "
-                     "subtypes without an error); retry when it finishes")
+        n = f"{f.recent} shard{'s' if f.recent != 1 else ''}"
+        if f.build_running is False:
+            lines.append(f"note: {n} written in the last {RECENT_SECONDS} s (the newest "
+                         f"{f.newest_age:.0f} s ago) and no gradle/mvn command runs in this "
+                         "checkout: a compilation probably just finished (builds started from "
+                         "an IDE are not seen)")
+        elif f.build_running:
+            lines.append(f"WARNING: a gradle/mvn command is running in this checkout and {n} "
+                         f"were written in the last {RECENT_SECONDS} s: results may be "
+                         "incomplete (shards being written lose references and subtypes "
+                         "without an error); retry when it finishes")
+        else:
+            lines.append(f"WARNING: {n} written in the last {RECENT_SECONDS} s: if a "
+                         "compilation is running in this checkout, results may be incomplete "
+                         "(shards being written lose references and subtypes without an "
+                         "error); retry when it finishes")
     if f.stale:
         hit = sorted(set(f.stale) & result_sources) if result_sources else []
         lines.append(f"WARNING: {len(f.stale)} source{'s' if len(f.stale) != 1 else ''} changed "

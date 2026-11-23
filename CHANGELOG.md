@@ -31,6 +31,10 @@ version and date when releasing.
 - `index_status` shows the profiles chosen from the project's annotations when the auxiliary
   index exists (it said "none" before they were chosen).
 - README: one server process per agent session, and `uv cache clean` waits for them.
+- Shards written in the last minute: on Linux, the answer tells a build still running in this
+  checkout (a `gradle`/`mvn` command whose directory is inside it: a warning) from one that
+  just finished (a note). Builds started from an IDE are not seen; elsewhere the conditional
+  warning stays.
 
 ## 0.2.1 — 2026-11-22
 
