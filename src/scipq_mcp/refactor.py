@@ -2680,9 +2680,9 @@ def _report(p: Planner, outcome: Outcome | None, dry_run: bool, plan_id: str = "
                          f"{len(files)} files, e.g. " + ", ".join(f"{a}:{b}" for a, b, _c, _d
                                                                 in keys[:4]))
     if outcome:
-        from .graph import _GENERATED_HEADER, _file_header
+        from .graph import generated_header
         generated = [path for path, (fs, _r, _e) in outcome.files.items()
-                     if _GENERATED_HEADER.search(_file_header(fs.source.data[:1500]))]
+                     if generated_header(fs.source.data[:4000])]
         if generated:
             p.notes.append(f"{len(generated)} edited files say they are generated (their "
                            f"header): regenerating them undoes these edits ("

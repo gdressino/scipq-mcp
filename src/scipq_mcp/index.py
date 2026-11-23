@@ -29,7 +29,7 @@ from .cachedir import default_base, entry_dir
 from .scip import DEFINITION, KIND_NAMES, read_documents
 from .workspace import SUFFIX, Workspace
 
-SCHEMA_VERSION = "10"
+SCHEMA_VERSION = "11"
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
@@ -523,10 +523,10 @@ def _extract_job(args):
 
 
 def _generated_file(root: str, source: str) -> bool:
-    from .graph import _GENERATED_HEADER, _file_header
+    from .graph import generated_header
     try:
         with open(os.path.join(root, source), "rb") as fh:
-            return _GENERATED_HEADER.search(_file_header(fh.read(1500))) is not None
+            return generated_header(fh.read(4000))
     except OSError:
         return False
 
