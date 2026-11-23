@@ -15,14 +15,17 @@ One section per version published on PyPI. `scripts/release.sh` turns `## Unrele
   the commit and where the name is now (within the named member's lines); lines that did not
   hold the name in the doc's own version say that (and where that line went), but only when
   the name is written right at the mention (its code span, `name (File:N)`, `File:N —
-  name`): a name from further away says nothing. Lists are checked over all their lines. A
+  name`, a neighbouring table cell that starts with code and is not a call chain): a name
+  from further away claims nothing, though lines that stand intact elsewhere still give
+  their new number. Lists are checked over all their lines. A
   line that holds the name now only through a call or a comment is reported when the doc's
   version had the declaration there. A name the file never had is not reported; a missing file is told deleted (when, which commit)
   or never there since the doc was written (planned, or another repository's file), in this
   checkout's history; a missing member, gone from its type's file since a date and commit, or not there when the
   doc was written either (planned, when no close name or other type explains it). A
-  statement the doc quotes for a line (`obj.setOwner(user)`) that the file has once,
-  elsewhere, gives the line's new number.
+  statement the doc quotes right after a line number (`obj.setOwner(user)`), which the
+  doc's version had at that line and the file now has once, elsewhere, gives the line's new
+  number.
 - `check_refs` reads more of how docs write line numbers: lists (`:40,42-43`, `:12/20`,
   `:12 + 80-84`, `:30→:35`, `` `:40` y `:45` ``, `:12 y 18`) hold the name at any of their
   lines; a name written after another path or after a bare `:N` belongs to that one; the
@@ -32,8 +35,8 @@ One section per version published on PyPI. `scripts/release.sh` turns `## Unrele
   `getX` holds where the field `x` is declared; implicit members (`toString`, `close`…) are
   required at a line only when the file declares them; a type's name holds anywhere in its
   body; `main <sha> path`, `<sha> path`, `path (main)`, "en main …" earlier in the clause
-  and the labels of `[check_refs] other_versions` (`v4 path`, `v4 Type.member`) are another
-  version (a user configuration with project keys outside `[[project]]` now warns); name templates
+  and the labels of `[check_refs] other_versions` (`v4 path`, `v4 Type.member`, over the
+  rest of their sentence or list, up to another version word) are another version (a user configuration with project keys outside `[[project]]` now warns); name templates
   (`com.example.Run<N>Test`, `com.example.Run*`) are not type names; a table cell next to the
   path counts only when it starts with code, up to its first clause; a shorter parameter
   list than every overload is shorthand (`put(Date)`). `Type.member` alone in a code span is

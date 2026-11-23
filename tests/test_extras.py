@@ -687,7 +687,9 @@ def test_check_refs_follows_lines_through_git_history(sample_copy, tmp_path):
                  f"model/Legacy.java; a planned core/src/main/java/com/example/model/Planned.java\n"
                  f"- `Entity#reset()` was there; `Entity#rewind()` is planned.\n"
                  f"- `findById` ({e}:19-25) and, further, `Entity.reset`.\n"
-                 f"- `getState` ({e}:15-17) returns it.\n")
+                 f"- `getState` ({e}:15-17) returns it.\n"
+                 f"- The class starts at {e}:4, and somewhere below it the `findById(1)` helper.\n"
+                 f"| `{e}:12` | `this.state = state` |\n")
     _git(sample_copy, "init", "-q")
     _git(sample_copy, "add", "-A")
     _git(sample_copy, "commit", "-qm", "a", date="2026-01-02T10:00:00Z")
@@ -712,7 +714,10 @@ def test_check_refs_follows_lines_through_git_history(sample_copy, tmp_path):
     assert "Entity.reset  — Entity has no member reset" in out          # without parentheses
     assert "line 12 no longer mentions getState" in out          # an uncommitted doc line
     assert "lines 15-17 changed since the doc named getState (2026-01-02, " in out
-    assert "1 line numbers that only moved" in out and "3 lines changed since" in out
+    assert f"{e}:4  — line 4 is now 7 (moved since the doc's version of 2026-01-02)" in out
+    assert f"{e}:12  — line 12 is now 15 (the code quoted; moved since the doc's version of " \
+        "2026-01-02)" in out
+    assert "3 line numbers that only moved" in out and "3 lines changed since" in out
 
 
 def test_check_refs_reads_line_lists_getters_and_neighbouring_numbers(sample_copy, tmp_path):
@@ -738,11 +743,16 @@ def test_check_refs_reads_line_lists_getters_and_neighbouring_numbers(sample_cop
                  f"- Elsewhere: (v4 `Entity.rewind()`, main `Entity#wind`).\n"
                  f"- En main el alta (`{e}:3` `setState(int)`) era otra.\n"
                  f"- `setState(int)` and `getState()` ({e}:3/:18).\n"
-                 f"- `{e}:3` returns, `getState()` vacío (`:19`).\n")
+                 f"- `{e}:3` returns, `getState()` vacío (`:19`).\n"
+                 f"- Files: v4 `{e}:3` (setState), `{e}:4` — `setState(int)`; v5 `{e}:24` — "
+                 f"`setState(int)`.\n"
+                 f"- En v4 el alta\n  usa `{e}:25` — `setState(int)`.\n")
     with open(os.path.join(sample_copy, ".scipq.toml"), "w") as fh:
         fh.write('[check_refs]\nother_versions = ["v4"]\n')
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
-    assert "3 problems: 3 lines no longer in the symbol named" in out, out
+    assert "4 problems: 4 lines no longer in the symbol named" in out, out
+    assert "line 24 no longer mentions setState" in out and "line 4 no longer mentions setState" \
+        not in out
     assert "line 6  " in out and "line 3 no longer mentions setState" in out
     assert "line 4 no longer mentions getState" in out                 # the line before
     assert "line 23 no longer mentions setState" in out                # `add` names nothing here
@@ -782,13 +792,13 @@ def test_check_refs_history_follows_doc_renames_and_the_parent_version(sample_co
     _git(sample_copy, "mv", "notes/N.md", "docs/N.md")
     _git(sample_copy, "commit", "-qm", "c", date="2026-03-01T10:00:00Z")
     with open(os.path.join(sample_copy, "docs", "N.md"), "a") as fh:
-        fh.write(f"| `{s}:20` | `e.setState(4)` |\n")
+        fh.write(f"| `{s}:20` | `e.setState(4)` |\n")        # not committed: no claim
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
     assert f"{e}:15  — line 15 is now 18 (moved since the doc's version of 2025-11-02)" in out, out
     assert "line 10 no longer mentions uid" in out and "so in the doc's version too: " \
         "2026-01-03" in out
     assert f"{e}:4 " not in out         # a name further away: no claim that the doc was wrong
-    assert f"{s}:20  — line 20 is now 33 (the code quoted is there; line 20 has another)" in out
+    assert f"{s}:20" not in out
 
 
 def test_declarations_and_blocks_in_older_text():
