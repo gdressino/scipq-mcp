@@ -404,9 +404,12 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         """Transitive callers of a symbol, by depth, grouped by module or package, marking
         tests: what a change can affect, and the entry points it reaches (screens, endpoints
         with their routes, jobs…, one row per type, searched to depth 6 even when the rows
-        stop sooner). Not seen: calls through reflection, calls a library makes (listeners
-        and other callbacks it invokes), and code compiled without the plugin, so few or no
-        callers is not proof that nothing calls it. Uses the auxiliary index (built once per
+        stop sooner). Where the chain stops at an override of a library method (a listener,
+        run(), a servlet's service()) it lists it with where its object is created: the
+        library calls it, so those are its real callers; and callers whose calls are all
+        inside an anonymous class or a lambda (they run when whoever receives it calls it).
+        Not seen: calls through reflection and code compiled without the plugin, so few or
+        no callers is not proof that nothing calls it. Uses the auxiliary index (built once per
         checkout, then updated incrementally)."""
         return service.impact(symbol, project_root, depth, include_overridden, group_by,
                               offset, limit)

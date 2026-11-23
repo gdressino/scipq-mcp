@@ -737,6 +737,31 @@ def entry_points(entries, per_kind: int = 12, depth: int = 0, searched: int = 0)
     return lines
 
 
+def library_callbacks(callbacks, deferred=()) -> str:
+    """Methods a library calls (overrides of its methods): who creates their objects; and
+    callers whose calls are all inside an anonymous class or a lambda."""
+    lines = []
+    if deferred:
+        lines.append("\ncalled from inside an anonymous class or a lambda (it runs when "
+                     "whoever receives that object calls it, often a library):")
+        lines += [f"  {S.short(n.symbol)}  {n.source}:{', '.join(map(str, n.sites[:3]))}"
+                  for n in deferred]
+    if not callbacks:
+        return "\n".join(lines)
+    lines += ["\nlibrary callbacks (the library calls these; their callers are whoever creates "
+              "the object and hands it over):"]
+    for sym, lib, places, count, sub in callbacks:
+        owner = S.short(S.owner_type(sym))
+        where = ", ".join(f"{src}:{ln}" for src, ln in places) + (" …" if count > len(places)
+                                                                  else "")
+        made = (f"{owner}{' ' + sub if sub else ''} created at {count} "
+                f"place{'s' if count != 1 else ''}: {where}"
+                if count else f"no constructor of {owner} is called in the project (built by "
+                "the framework, or through a no-arg constructor)")
+        lines.append(f"  {S.short(sym)} overrides {S.short(lib)}: {made}")
+    return "\n".join(lines)
+
+
 def impact(symbol: str, nodes, truncated: bool, depth: int, group_by: str, offset: int,
            limit: int, entries=None, itself=None, searched: int = 0) -> str:
     """`entries` may come from deeper than `depth`; `itself`: the symbol's own entry points."""

@@ -847,3 +847,16 @@ def test_path_goes_through_dispatch(refactor_root, tmp_path):
     out = Service(refactor_root, cache_dir=str(tmp_path / "c")).path("Gallery#show",
                                                                      "Pages#sales")
     assert "Gallery#show()" in out and "SalesPage#body()" in out and "Page#body()" in out
+
+
+def test_impact_names_library_callbacks_and_deferred_calls(refactor_root, tmp_path):
+    # Ticker#run() overrides Runnable#run(): the JDK calls it, so its callers are whoever
+    # creates a Ticker; Panel calls refresh() from an anonymous Runnable.
+    from scipq_mcp.service import Service
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    out = svc.impact("Ticker#tick")
+    assert "Ticker#run() overrides Runnable#run(): Ticker created at 1 place: " \
+        "shop/src/main/java/com/example/shop/Clock.java:5" in out, out
+    out = svc.impact("Panel#refresh")
+    assert "called from inside an anonymous class or a lambda" in out and \
+        "Panel#setup()  shop/src/main/java/com/example/shop/Panel.java:15" in out, out

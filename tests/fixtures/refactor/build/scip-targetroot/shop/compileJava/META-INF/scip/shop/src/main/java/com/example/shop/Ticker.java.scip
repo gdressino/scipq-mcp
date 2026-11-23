@@ -1,0 +1,11 @@
+‚
+/shop/src/main/java/com/example/shop/Ticker.java,com/example/shop/Ticker#BZ java/lang/Runnable#B'9#com/example/shop/Ticker#`<init>`().B
+Z java/lang/Override#B4com/example/shop/Ticker#run().BZ
+ )com/example/shop/Ticker#tick().B	5com/example/shop/Ticker#tick().B	Z —
+com/example/shop/Ticker#'Runs on a thread: the JDK calls run(). "
+java/lang/Runnable#(2Ticker:/"java*'public class Ticker implements RunnableA
+#com/example/shop/Ticker#`<init>`().(	2<init>:"java*Ticker()m
+com/example/shop/Ticker#run()."
+java/lang/Runnable#run().(2run:#"java*@Override
+public void run()>
+com/example/shop/Ticker#tick().(2tick:"java*void tick()"java

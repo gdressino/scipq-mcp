@@ -1108,8 +1108,19 @@ class Service:
                     [G.Node(sym, 0, "", dd[0] if dd else "", dd[1] if dd else 0)],
                     specs, nav.ws.root) if e.kind != "test"]
                 left_out = g.left_out
+                # Where the chain stops at an override of a library method, the library calls
+                # it: its callers are whoever creates the object.
+                vias = {n.via for n in every}
+                tops = [sym] + [n.symbol for n in every if n.symbol not in vias and not n.test
+                                and S.is_method(n.symbol)][:300]
+                callbacks = g.library_callbacks(tops, root=nav.ws.root)
+                # Calls made only from inside an anonymous class or a lambda: they run when
+                # whoever receives that object calls it (a library, often).
+                deferred = list({n.symbol: n for n in every if n.inner and
+                                 n.symbol not in vias and not n.test}.values())[:5]
             text = render.impact(sym, nodes, trunc, d, group_by, offset, limit, entries,
                                  itself, deep)
+            text += render.library_callbacks(callbacks, deferred)
             if left_out:
                 text += (f"\nnote: {left_out} callers of methods these override were left out: "
                          "their files name another subtype, or a library type's own objects "

@@ -5,6 +5,14 @@ version and date when releasing.
 
 ## Unreleased
 
+### Added
+
+- `impact` says where the call chain is handed to a library: overrides of library methods
+  it reaches (listeners, `run()`, a servlet's `service()`, Vaadin's `onAttach`…), with where
+  their objects are created (`new X(…)`; for a base class, its subclasses; or that the
+  framework builds them), since those are their real callers; and the callers whose calls
+  are all inside an anonymous class or a lambda.
+
 ### Changed
 
 - `check_refs` binds names to line numbers more finely. A name after an arrow, a

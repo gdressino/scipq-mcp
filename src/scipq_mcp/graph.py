@@ -394,6 +394,77 @@ class Graph:
                 (REL_IMPLEMENTATION, *chunk)))
         return [(c, t) for c, t in out]
 
+    def library_callbacks(self, symbols: list[str], limit: int = 5, root: str = ""
+                          ) -> list[tuple[str, str, list[tuple[str, int]], int]]:
+        """(method, the library method it overrides, where its type is created, how many
+        places) for the methods among `symbols` that override a library type's method
+        (Object's left out): the library calls them, so their callers in the project are
+        whoever creates the object and hands it over (for a base class, its subclasses)."""
+        symbols = list(dict.fromkeys(symbols))
+        ids = self.ids(symbols)
+        if not ids:
+            return []
+        rows = []
+        for i in range(0, len(ids), 500):
+            chunk = list(ids.values())[i:i + 500]
+            q = ",".join("?" * len(chunk))
+            rows.extend(self.con.execute(
+                f"SELECT r.symbol_id, s.symbol FROM rels r JOIN symbols s ON s.id = r.target_id "
+                f"WHERE r.kind = ? AND r.symbol_id IN ({q}) AND r.target_id != r.symbol_id AND "
+                f"NOT EXISTS (SELECT 1 FROM defs d WHERE d.symbol_id = r.target_id)",
+                (REL_IMPLEMENTATION, *chunk)))
+        by_id = {v: k for k, v in ids.items()}
+        lib: dict[str, str] = {}
+        for sid, target in rows:
+            if target.startswith("java/lang/Object#") or by_id.get(sid) in lib:
+                continue
+            lib[by_id[sid]] = target
+        out = []
+        for sym in symbols:
+            if sym not in lib or len(out) >= limit:
+                continue
+            owner = S.owner_type(sym)
+            places = self._created(owner, root)
+            sub = ""
+            if not places:          # a base class: its subclasses are what gets created
+                tid = self.ids([owner]).get(owner)
+                subs = [x for (x,) in self.con.execute(
+                    "SELECT s.symbol FROM rels r JOIN symbols s ON s.id = r.symbol_id "
+                    "WHERE r.target_id = ? AND r.kind = ? AND r.symbol_id != r.target_id",
+                    (tid, REL_IMPLEMENTATION))] if tid is not None else []
+                for t in subs[:200]:
+                    places += self._created(t, root)
+                sub = "subclasses" if places else ""
+            out.append((sym, lib[sym], sorted(set(places))[:3], len(set(places)), sub))
+        return out
+
+    def _created(self, owner: str, root: str) -> list[tuple[str, int]]:
+        """(source, line) of each `new X(…)` of a type with constructors of its own (calls
+        to them, minus a subclass constructor's super(…) and this(…))."""
+        sh = self.shards()
+        prefix = owner + "`<init>`"
+        ctors = [cid for (cid,) in self.con.execute(
+            "SELECT s.id FROM symbols s WHERE s.symbol >= ? AND s.symbol < ? AND "
+            "EXISTS (SELECT 1 FROM defs d WHERE d.symbol_id = s.id)", (prefix, prefix + "\uffff"))]
+        texts: dict[str, list[str]] = {}
+        places: list[tuple[str, int]] = []
+        for _t, _c, shard_id, sites in self.callers_of(ctors):
+            if shard_id not in sh:
+                continue
+            src = sh[shard_id][0]
+            if root and src not in texts:
+                try:
+                    with open(os.path.join(root, src), encoding="utf-8", errors="replace") as fh:
+                        texts[src] = fh.read().split("\n")
+                except OSError:
+                    texts[src] = []
+            lines = texts.get(src) or []
+            # a subclass's constructor calling super(…) does not create one here
+            places += [(src, ln) for ln in _lines(sites)
+                       if not (ln <= len(lines) and re.match(r"\s*(?:super|this)\s*\(",
+                                                             lines[ln - 1]))]
+        return places
+
     def callers_of(self, targets: list[int]) -> list[tuple[int, int, int, str]]:
         """(target id, caller id, shard id, sites) of every non-empty caller."""
         out = []

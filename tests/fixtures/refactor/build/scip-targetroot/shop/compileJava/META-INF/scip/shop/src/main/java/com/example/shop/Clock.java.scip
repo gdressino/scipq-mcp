@@ -1,0 +1,6 @@
+Œ
+.shop/src/main/java/com/example/shop/Clock.java+com/example/shop/Clock#BZ ."com/example/shop/Clock#`<init>`().Bjava/lang/Thread#B
+5com/example/shop/Clock#start().BZ (java/lang/Thread#`<init>`(+3).B-#com/example/shop/Ticker#`<init>`().B$>
+com/example/shop/Clock#(2Clock:"java*public class ClockF
+"com/example/shop/Clock#`<init>`().(	2<init>:"java*public Clock()B
+com/example/shop/Clock#start().(2start:"java*Thread start()"java
