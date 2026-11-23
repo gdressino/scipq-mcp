@@ -30,11 +30,32 @@ version and date when releasing.
   overload in the project.
 - `index_status` shows the profiles chosen from the project's annotations when the auxiliary
   index exists (it said "none" before they were chosen).
-- README: one server process per agent session, and `uv cache clean` waits for them.
+- README: one server process per agent session, `uv cache clean` waits for them, and pin the
+  version when several worktrees share a machine.
+- The auxiliary index is built from scratch into a temporary file, without journal or fsync
+  (it is a disposable cache), and moved into place when complete: half the writes of WAL.
+  Three checkouts building at once on a 10,000-file project: ~50 s instead of ~120 s.
+- dead_code and by-name searches skip documentation (`docs/`, `doc/`, `*.md`, `*.adoc`):
+  notes and data dumps there mention names without using them.
+- dead_code says how its list splits (`N candidates + M low confidence = T`); `impact` and
+  `callers` say which line they show (where each caller is defined, or the call).
 - Shards written in the last minute: on Linux, the answer tells a build still running in this
   checkout (a `gradle`/`mvn` command whose directory is inside it: a warning) from one that
   just finished (a note). Builds started from an IDE are not seen; elsewhere the conditional
   warning stays.
+
+### Fixed
+
+- Library sources: a class missing from every jar is looked for again as soon as a jar that may
+  hold it appears (a download), and a cache removed while the server runs is recreated.
+- `overloads` of a library method while another session builds the library map answers with
+  an error line instead of failing; `context` on a library symbol then still lists its uses.
+- `context` and `index_status` never open an auxiliary index of another schema or mode (that
+  would discard it); `context` says it needs one instead.
+- `context` on a field: the accessors of a `boolean isX` field (`isX()`, `setX()`) and of a
+  record component (`x()`); callers counted once each, and marked when truncated.
+- Build detection: Maven Wrapper, `-p`/`--project-dir`/`-f`/`--file`, and builds run from a
+  parent directory count as a build running in the checkout.
 
 ## 0.2.1 — 2026-11-22
 

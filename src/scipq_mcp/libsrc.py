@@ -284,6 +284,11 @@ class LibraryIndex:
             self._parsed.clear()
 
     def _connect(self) -> sqlite3.Connection:
+        if getattr(self, "_schema_ready", False) and not os.path.exists(self.path):
+            # The cache was removed while the server runs: recreate it (and the schema).
+            ensure_private_dir(os.path.dirname(self.path))
+            self._schema_ready = False
+            self._absent.clear()
         con = sqlite3.connect(self.path, timeout=30)
         con.execute("PRAGMA busy_timeout=30000")
         if getattr(self, "_schema_ready", False):
@@ -438,6 +443,21 @@ class LibraryIndex:
                             out[p] = (st.st_mtime_ns, st.st_size)
         return out
 
+    def _likely_jars_known(self, class_path: str) -> bool:
+        """Every jar that probably holds the class is already in the map, unchanged."""
+        likely = self._likely_jars(class_path)
+        if not likely:
+            return True
+        con = self._connect()
+        try:
+            known = {p: (mt, size) for p, mt, size in con.execute(
+                "SELECT path, mtime_ns, size FROM jars")} if len(likely) > 20 else {
+                p: (mt, size) for p in likely for mt, size in con.execute(
+                    "SELECT mtime_ns, size FROM jars WHERE path = ?", (p,))}
+        finally:
+            con.close()
+        return all(known.get(p) == st for p, st in likely.items())
+
     def _query(self, con: sqlite3.Connection, class_path: str):
         """Rows for the class; among the JDK source zips the shared map knows, only this
         project's (another JDK's zip, e.g. one indexed by an older version or another
@@ -456,8 +476,11 @@ class LibraryIndex:
         finally:
             con.close()
         missed = self._absent.get(class_path)
-        if not rows and missed is not None and time.time() - missed < REFRESH_SECONDS:
-            return None  # already looked everywhere (resolving names tries many candidates)
+        if not rows and missed is not None and time.time() - missed < REFRESH_SECONDS \
+                and self._likely_jars_known(class_path):
+            # Looked everywhere recently (resolving names tries many candidates), and no jar
+            # that may hold it appeared since: skip the lock and the full listing.
+            return None
         if not rows:
             # Build or extend the map under the lock; whoever was already doing it may have
             # added the class meanwhile, so look again first.

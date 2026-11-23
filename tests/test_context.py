@@ -59,3 +59,28 @@ def test_is_write():
     assert C.is_write("total += count; count -= 1", "count")
     assert not C.is_write("if (count == 0) return;", "count")
     assert not C.is_write("x = count;", "count")
+
+
+def test_accessor_symbols():
+    got = C.accessor_symbols("a/B#isActive.")
+    assert "a/B#isActive()." in got and "a/B#setActive()." in got   # Lombok on boolean isX
+    assert "a/B#name()." in C.accessor_symbols("a/B#name.")         # record component
+
+
+def test_context_never_touches_an_index_of_another_schema(sample_copy, tmp_path):
+    import sqlite3
+    from scipq_mcp.index import Index
+    from scipq_mcp.workspace import Workspace
+    svc = Service(sample_copy, cache_dir=str(tmp_path / "cache"))
+    svc.impact("Entity#setState")
+    ix = Index(Workspace(sample_copy), str(tmp_path / "cache"))
+    con = sqlite3.connect(ix.path)
+    con.execute("UPDATE meta SET value = 'old' WHERE key = 'schema_version'")
+    con.commit()
+    con.close()
+    out = svc.context("Entity#setState")
+    assert "impact needs the auxiliary index" in out
+    con = sqlite3.connect(ix.path)  # still there, untouched
+    assert con.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0] == "old"
+    assert con.execute("SELECT count(*) FROM shards").fetchone()[0] > 0
+    con.close()

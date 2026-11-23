@@ -4,6 +4,7 @@ and the line of code where it helps. Written for agents: few tokens, no decorati
 from __future__ import annotations
 
 import re
+import time
 from collections import OrderedDict
 from typing import Sequence, TypeVar
 
@@ -262,7 +263,8 @@ def callers(root: CallNode, depth: int, offset: int, limit: int) -> str:
     shown, suffix = page(root.children, offset, limit)
     nodes = f" ({total_nodes} tree nodes)" if total_nodes != len(distinct) else ""
     lines = [f"callers of {S.short(root.symbol)} (depth {depth}): {len(distinct)} distinct "
-             f"callers{nodes}, {total_sites} call sites; {len(root.children)} direct{suffix}"]
+             f"callers{nodes}, {total_sites} call sites; {len(root.children)} direct{suffix}"
+             " — lines are the calls"]
 
     def row(c: CallNode, indent: int):
         sites = c.sites
@@ -310,8 +312,9 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None) -> st
     if f.recent:
         from .workspace import RECENT_SECONDS
         n = f"{f.recent} shard{'s' if f.recent != 1 else ''}"
+        at = time.strftime("%H:%M:%S", time.localtime(time.time() - f.newest_age))
         if f.build_running is False:
-            lines.append(f"note: {n} written in the last {RECENT_SECONDS} s (the newest "
+            lines.append(f"note: {n} written in the last {RECENT_SECONDS} s (the newest at {at}, "
                          f"{f.newest_age:.0f} s ago) and no gradle/mvn command runs in this "
                          "checkout: a compilation probably just finished (builds started from "
                          "an IDE are not seen)")
@@ -321,8 +324,8 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None) -> st
                          "incomplete (shards being written lose references and subtypes "
                          "without an error); retry when it finishes")
         else:
-            lines.append(f"WARNING: {n} written in the last {RECENT_SECONDS} s: if a "
-                         "compilation is running in this checkout, results may be incomplete "
+            lines.append(f"WARNING: {n} written in the last {RECENT_SECONDS} s (the newest at "
+                         f"{at}): if a compilation is running in this checkout, results may be incomplete "
                          "(shards being written lose references and subtypes without an "
                          "error); retry when it finishes")
     if f.stale:
@@ -670,7 +673,8 @@ def impact(symbol: str, nodes, truncated: bool, depth: int, group_by: str, offse
     lines = [f"impact of {S.short(symbol)} (callers up to depth {depth}): {len(nodes)} "
              f"definitions, {tests} in tests; by depth "
              + ", ".join(f"{d}: {c}" for d, c in by_depth.items())
-             + ("; TRUNCATED" if truncated else "")]
+             + ("; TRUNCATED" if truncated else "")
+             + " — lines are where each caller is defined (callers shows the calls)"]
     lines.append(f"by {group_by}: " + ", ".join(
         f"{g} {len(ns)}" for g, ns in sorted(groups.items(), key=lambda kv: -len(kv[1]))[:12]))
     rows = []
@@ -821,8 +825,9 @@ def dead_code(rows, offset: int, limit: int, suppressed: dict | None = None,
         suffix = ""
     elif end == offset:
         suffix = f" (offset {offset} is past the end of {total})"
-    else:
-        suffix = (f" (showing {offset + 1}–{end} of {total}, low confidence included"
+    else:  # one list: the candidates, then the low-confidence ones
+        suffix = (f" (showing {offset + 1}–{end} of {total}"
+                  + (f" = {len(rows)} + {len(weak)} low confidence" if weak else "")
                   + (f"; next offset {end})" if end < total else ")"))
     weak_lines = []
     if weak_shown:
@@ -837,7 +842,8 @@ def dead_code(rows, offset: int, limit: int, suppressed: dict | None = None,
     if not rows:
         head = "no dead-code candidates in scope" + ("" if weak_shown else suffix)
         return "\n".join([head] + ([omitted] if omitted else []) + weak_lines)
-    lines = [f"{len(rows)} dead-code candidates (no references; framework entry points, "
+    also = f" + {len(weak)} low confidence (bean property names) = {total}" if weak else ""
+    lines = [f"{len(rows)} dead-code candidates{also} (no references; framework entry points, "
              f"overrides and names used in strings left out — check before deleting){suffix}"]
     if omitted:
         lines.append(omitted)

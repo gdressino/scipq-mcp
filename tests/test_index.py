@@ -1,3 +1,4 @@
+import sqlite3
 import os
 import shutil
 import subprocess
@@ -347,3 +348,42 @@ def test_recent_shards_with_and_without_a_build_running():
     assert running.startswith("WARNING: a gradle/mvn command is running")
     unknown = render.freshness(Freshness(recent=1, build_running=None))
     assert unknown.startswith("WARNING: 1 shard written") and "if a compilation" in unknown
+
+
+def test_scratch_build_goes_through_a_temporary_file(sample_copy, cache):
+    ix = Index(Workspace(sample_copy), cache)
+    assert ix.update().built_from_scratch
+    assert os.path.exists(ix.path) and not os.path.exists(ix.path + ".building")
+    con = ix.connect()
+    try:
+        assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert con.execute("SELECT count(*) FROM shards").fetchone()[0] > 0
+    finally:
+        con.close()
+    assert not ix.update().built_from_scratch
+    con = sqlite3.connect(ix.path)  # another schema: rebuilt from scratch, in place
+    con.execute("UPDATE meta SET value = 'old' WHERE key = 'schema_version'")
+    con.commit()
+    con.close()
+    assert Index(Workspace(sample_copy), cache).update().built_from_scratch
+
+
+def test_dead_code_ignores_names_in_documentation(sample_copy, cache):
+    os.makedirs(os.path.join(sample_copy, "docs", "notes"))
+    with open(os.path.join(sample_copy, "docs", "notes", "dump.json"), "w") as fh:
+        fh.write('{"size": 1, "getSize": 2}\n')
+    out = Service(sample_copy, cache_dir=cache).dead_code(scope="com.example.model")
+    assert "public int getSize()" in out.partition("low confidence")[0]
+
+
+def test_build_directories_from_the_command_line(tmp_path):
+    from scipq_mcp.workspace import _build_dirs, _is_build_command, _overlaps
+    root = str(tmp_path / "repo")
+    os.makedirs(os.path.join(root, "sub"))
+    assert _is_build_command(b"java\0-cp\0m.jar\0org.apache.maven.wrapper.MavenWrapperMain\0"
+                             b"compile\0")
+    dirs = _build_dirs(b"java\0org.gradle.wrapper.GradleWrapperMain\0-p\0repo/sub\0build\0",
+                       str(tmp_path))
+    assert any(_overlaps(d, root) for d in dirs)
+    assert _overlaps(str(tmp_path), root)          # a build in a parent directory
+    assert not _overlaps(str(tmp_path / "other"), root)

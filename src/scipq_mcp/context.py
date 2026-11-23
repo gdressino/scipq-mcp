@@ -206,8 +206,11 @@ def callers_section(nav: Navigator, symbol: str, short: str
     if not root.children:
         return Section("callers", "callers: none in this project"), set(), []
     lines, files, tests = _call_lines(nav, root.children)
-    title = (f"callers ({len(root.children)} in {files} files"
-             + (f", {tests} in tests" if tests else "") + "):")
+    # A caller may appear twice: calling this method and, `via`, one it overrides.
+    distinct = len({n.symbol for n in root.children})
+    title = (f"callers ({distinct} in {files} files"
+             + (f", {tests} in tests" if tests else "")
+             + ("; truncated" if root.truncated else "") + "):")
     srcs = {n.sites[0].location.source for n in root.children if n.sites}
     refs = [r for n in root.children if not n.via for r in n.sites]
     return Section("callers", title, lines, f"callers({short})"), srcs, refs
@@ -299,9 +302,15 @@ def is_write(text: str, name: str) -> bool:
 
 
 def accessor_symbols(field_symbol: str) -> list[str]:
+    """Bean accessors (Lombok's too), a `boolean isX` field's `isX()`/`setX()`, and a record
+    component's or fluent accessor `name()`."""
     owner, name = S.parent(field_symbol), S.name_of(field_symbol)
     cap = name[:1].upper() + name[1:]
-    return [f"{owner}get{cap}().", f"{owner}is{cap}().", f"{owner}set{cap}()."]
+    out = [f"{owner}get{cap}().", f"{owner}is{cap}().", f"{owner}set{cap}().",
+           f"{owner}{name}()."]
+    if re.match(r"is[A-Z]", name):
+        out.append(f"{owner}set{name[2:]}().")
+    return out
 
 
 def field_sections(nav: Navigator, d: Definition, short: str

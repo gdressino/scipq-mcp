@@ -66,7 +66,9 @@ class Freshness:
 # Command-line launchers of Gradle and Maven builds (the processes whose working directory is
 # the checkout; a Gradle daemon is shared and runs elsewhere).
 _BUILD_MAINS = {b"org.gradle.wrapper.GradleWrapperMain", b"org.gradle.launcher.GradleMain",
-                b"org.codehaus.plexus.classworlds.launcher.Launcher"}
+                b"org.codehaus.plexus.classworlds.launcher.Launcher",
+                b"org.apache.maven.wrapper.MavenWrapperMain"}
+_DIR_FLAGS = {b"-p", b"--project-dir", b"-f", b"--file"}
 _BUILD_EXECUTABLES = {b"mvnd", b"mvnd.sh"}
 
 
@@ -103,9 +105,30 @@ def build_running(root: str) -> bool | None:
         except OSError:
             unknown = True
             continue
-        if cwd == real or cwd.startswith(real + os.sep):
+        if any(_overlaps(d, real) for d in _build_dirs(cmd, cwd)):
             return True
     return None if unknown else False
+
+
+def _build_dirs(cmdline: bytes, cwd: str) -> list[str]:
+    """The directory a build runs in, and those named by -p/--project-dir/-f/--file."""
+    out = [cwd]
+    args = cmdline.split(b"\0")
+    for k, a in enumerate(args):
+        value = None
+        if a in _DIR_FLAGS and k + 1 < len(args):
+            value = args[k + 1]
+        elif b"=" in a and a.split(b"=", 1)[0] in _DIR_FLAGS:
+            value = a.split(b"=", 1)[1]
+        if value:
+            p = os.path.normpath(os.path.join(cwd, os.fsdecode(value)))
+            out.append(p if os.path.isdir(p) else os.path.dirname(p))
+    return out
+
+
+def _overlaps(d: str, root: str) -> bool:
+    """The build's directory is the checkout, inside it, or contains it (a parent build)."""
+    return d == root or d.startswith(root + os.sep) or root.startswith(d.rstrip(os.sep) + os.sep)
 
 
 def find_project_root(start: str) -> str:

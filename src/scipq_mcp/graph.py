@@ -930,8 +930,11 @@ def git_untracked_java(root: str, paths: list[str]) -> list[str]:
 
 
 MAX_TEXT_BYTES = 2_000_000  # bigger files are generated (graphs, dumps, minified bundles)
+# Never searched by name: editor settings, dependencies, and documentation (notes and data
+# dumps there mention every name without using it).
 DEFAULT_BY_NAME_EXCLUDE = (".idea/*", "*/.idea/*", ".vscode/*", "*/.vscode/*",
-                           "*/node_modules/*", "node_modules/*", "*.min.js")
+                           "*/node_modules/*", "node_modules/*", "*.min.js",
+                           "docs/*", "*/docs/*", "doc/*", "*/doc/*", "*.md", "*.adoc")
 
 
 def candidate_files(root: str, globs: list[str], exclude: list[str] = (),

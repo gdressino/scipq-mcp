@@ -14,6 +14,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from collections import OrderedDict
 from typing import Any, Callable, TypeVar
 
@@ -33,6 +34,7 @@ from .workspace import Freshness, Workspace, WorkspaceError, find_project_root
 
 DEFAULT_LIMIT = 100
 FRESHNESS_MODES = ("full", "results", "off")
+JDK_CHOICE_SECONDS = 60  # how long the JDK picked for a checkout (from its build files) is kept
 T = TypeVar("T")
 Body = Callable[[Navigator], "tuple[str, set[str]]"]
 
@@ -59,6 +61,7 @@ class Service:
         self.library_roots = library_roots
         self.build_workers = build_workers
         self._lib_indexes: dict[tuple, L.LibraryIndex] = {}
+        self._jdk_choices: dict[str, tuple[float, str, str]] = {}
         self._lib_lock = threading.Lock()
 
     def settings(self, root: str, graph=None) -> CFG.Settings:
@@ -202,17 +205,32 @@ class Service:
             return note + text, {r.location.source for r in refs}
         return body
 
+    def _jdk_choice(self, root: str) -> tuple[str, str]:
+        """(JDK src.zip for this checkout, note when it may not match the build), rechecked
+        every JDK_CHOICE_SECONDS."""
+        if self.library_roots is not None:
+            return "", ""
+        now = time.monotonic()
+        with self._lib_lock:
+            hit = self._jdk_choices.get(root)
+        if hit is not None and now - hit[0] < JDK_CHOICE_SECONDS:
+            return hit[1], hit[2]
+        zip_path, note = L.jdk_for_project(root)
+        with self._lib_lock:
+            self._jdk_choices[root] = (now, zip_path, note)
+        return zip_path, note
+
     def _library_index(self, root: str):
-        """One per project JDK, kept for the life of the service: it holds open jars and
-        parsed sources (reopening the JDK's src.zip costs ~50 ms)."""
-        zip_path, note = L.jdk_for_project(root) if self.library_roots is None else ("", "")
-        key = (root, zip_path, tuple(self.library_roots or ()))
+        """One per JDK, shared by the checkouts that use it and kept for the life of the
+        service: it holds open jars and parsed sources (reopening the JDK's src.zip costs
+        ~50 ms)."""
+        zip_path, _note = self._jdk_choice(root)
+        key = (zip_path, tuple(self.library_roots or ()))
         with self._lib_lock:
             ix = self._lib_indexes.get(key)
             if ix is None:
                 ix = L.LibraryIndex(self.cache_dir, self.library_roots, zip_path or None)
                 self._lib_indexes[key] = ix
-        ix.jdk_note = note
         return ix
 
     def _library(self, symbol: str, root: str = ""):
@@ -221,8 +239,9 @@ class Service:
         try:
             ix = self._library_index(root)
             d = L.lookup(ix, symbol)
-            if d is not None and d.lib.jar.endswith("src.zip") and ix.jdk_note:
-                d.note = ix.jdk_note
+            note = self._jdk_choice(root)[1]
+            if d is not None and d.lib.jar.endswith("src.zip") and note:
+                d.note = note
             return d
         except L.LibraryBusy as e:
             raise QueryError(str(e)) from e
@@ -446,11 +465,13 @@ class Service:
                                 and S.name_of(x) == S.name_of(syms[0]) for x in syms):
                     sym, note = syms[0], f"-- {symbol} → {len(syms)} overloads\n"
                     items = X.overloads(nav, sym) or self._library_overloads(nav, sym)
-                    return note + render.overloads(sym, items, nav.ws, offset, limit), set()
+                    return note + render.overloads(sym, items, nav.ws, offset, limit), \
+                        {u.location.source for m in items for u in m.uses}
             elif S.is_method(r.symbol) and nav.definition(r.symbol) is None:
                 note = "" if S.looks_like_symbol(symbol) else f"-- {r.note}\n"
                 items = self._library_overloads(nav, r.symbol)
-                return note + render.overloads(r.symbol, items, nav.ws, offset, limit), set()
+                return note + render.overloads(r.symbol, items, nav.ws, offset, limit), \
+                    {u.location.source for m in items for u in m.uses}
             sym, note, items = self._resolved(nav, symbol, lambda s: X.overloads(nav, s))
             srcs = {r.location.source for m in items for r in m.uses}
             return note + render.overloads(sym, items, nav.ws, offset, limit), srcs
@@ -459,11 +480,7 @@ class Service:
     def _library_overloads(self, nav: Navigator, sym: str) -> list:
         """Overloads of a library method (from its sources jar, numbered as SCIP does), each
         with its uses in this project."""
-        try:
-            index = self._library_index(nav.ws.root)
-        except (CacheError, OSError) as e:
-            raise QueryError(f"library sources unavailable: {e}") from e
-        lib = L.lookup(index, sym)
+        lib = self._library(sym, nav.ws.root)  # LibraryBusy becomes a QueryError
         if lib is None or lib.member is None or not lib.overloads:
             return []
         owner, name = S.parent(sym), S.name_of(sym)
@@ -513,6 +530,7 @@ class Service:
                 if users is not None:
                     ctx.sections.append(users)
                 ctx.sections.append(self._tests_section(nav, sym, refs))
+                ctx.sources |= {r.location.source for r in refs}
             elif S.kind_of(sym) == "term":
                 ctx = C.Context("field", C.head_of(nav, d))
                 secs, refs, accessors = C.field_sections(nav, d, short)
@@ -546,10 +564,15 @@ class Service:
         return body
 
     def _external_context(self, nav: Navigator, sym: str, short: str) -> C.Context:
-        lib = self._library(sym, nav.ws.root)
         ctx = C.Context("external", [sym])
+        try:
+            lib = self._library(sym, nav.ws.root)
+        except QueryError as e:  # e.g. the library map is being built: uses still matter
+            lib = None
+            ctx.head.append(f"external (JDK or a dependency): sources unavailable now ({e})")
         if lib is None:
-            ctx.head.append("external (JDK or a dependency): no sources jar found for it")
+            if len(ctx.head) == 1:
+                ctx.head.append("external (JDK or a dependency): no sources jar found for it")
         else:
             m = lib.member
             line = m.line if m else lib.body[0]
@@ -579,6 +602,7 @@ class Service:
         if S.is_type(sym):
             refs = _drop_imports(nav, nav.references(sym)[0])
             users = C.users_section(refs, short)
+            ctx.sources |= {r.location.source for r in refs}
             if users is not None:
                 ctx.sections.append(users)
                 users.name = "callers"  # its share of the budget
@@ -622,7 +646,7 @@ class Service:
         never builds it."""
         try:
             ix = Index(nav.ws, self.cache_dir, self.index_external, self.build_workers)
-            if not os.path.exists(ix.path):
+            if ix._needs_scratch():  # missing, or for another schema/mode: never touched here
                 return (f"impact needs the auxiliary index (built on first use, ~20 s on a "
                         f"large project) → impact({short})")
             behind = ix.pending()
@@ -824,7 +848,7 @@ class Service:
         index already exists (a status never builds or updates it)."""
         try:
             ix = Index(nav.ws, self.cache_dir, self.index_external, self.build_workers)
-            if os.path.exists(ix.path):
+            if not ix._needs_scratch():  # opening one for another schema would discard it
                 g = Graph(ix)
                 try:
                     return self.settings(nav.ws.root, g)

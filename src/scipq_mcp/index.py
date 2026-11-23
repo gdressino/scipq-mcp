@@ -82,6 +82,7 @@ REL_TYPE_DEFINITION = 3
 
 EXTERNAL_MODES = ("all", "methods", "none")
 PARALLEL_FROM = 200  # shards to reprocess before using worker processes
+BULK_CACHE_KIB = 65536  # SQLite page cache for a build from scratch
 
 _DECL = re.compile(r"\b(record|class|interface|enum)\s+")
 _GENERATED = ("@Generated", "@lombok.Generated", "@javax.annotation.Generated",
@@ -331,10 +332,18 @@ class Index:
 
     # connection ------------------------------------------------------------------------------
 
-    def connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self.path, timeout=30)
-        con.execute("PRAGMA journal_mode=WAL")
-        con.execute("PRAGMA synchronous=NORMAL")
+    def connect(self, path: str | None = None, bulk: bool = False) -> sqlite3.Connection:
+        """A connection to the index; `bulk` for a build from scratch into a file nobody else
+        reads yet: no journal and no fsync (it is a disposable cache; a crash leaves only the
+        temporary file, removed by the next build)."""
+        con = sqlite3.connect(path or self.path, timeout=30)
+        if bulk:
+            con.execute("PRAGMA journal_mode=OFF")
+            con.execute("PRAGMA synchronous=OFF")
+            con.execute(f"PRAGMA cache_size=-{BULK_CACHE_KIB}")
+        else:
+            con.execute("PRAGMA journal_mode=WAL")
+            con.execute("PRAGMA synchronous=NORMAL")
         con.execute("PRAGMA busy_timeout=30000")
         con.execute("PRAGMA temp_store=MEMORY")
         con.executescript(TABLES)
@@ -345,7 +354,7 @@ class Index:
                      or meta.get("external", "all") != self.external):
             con.close()
             self._discard()
-            return self.connect()
+            return self.connect(path, bulk)
         if not meta:
             con.executemany("INSERT OR REPLACE INTO meta VALUES (?, ?)", [
                 ("schema_version", SCHEMA_VERSION), ("root_realpath", real),
@@ -356,12 +365,29 @@ class Index:
             con.executescript(INDEXES)
         return con
 
-    def _discard(self) -> None:
-        for suffix in ("", "-wal", "-shm"):
+    def _discard(self, path: str | None = None) -> None:
+        for suffix in ("", "-wal", "-shm", "-journal"):
             try:
-                os.unlink(self.path + suffix)
+                os.unlink((path or self.path) + suffix)
             except FileNotFoundError:
                 pass
+
+    def _needs_scratch(self) -> bool:
+        """No usable index yet (missing, unreadable, or for another schema, checkout or
+        external mode): the update builds a new one from scratch."""
+        if not os.path.exists(self.path):
+            return True
+        try:
+            con = sqlite3.connect(self.path, timeout=30)
+            try:
+                meta = dict(con.execute("SELECT key, value FROM meta"))
+            finally:
+                con.close()
+        except sqlite3.DatabaseError:
+            return True
+        return (meta.get("schema_version") != SCHEMA_VERSION
+                or meta.get("root_realpath") != os.path.realpath(self.ws.root)
+                or meta.get("external", "all") != self.external)
 
     @contextmanager
     def _lock(self):
@@ -430,7 +456,13 @@ class Index:
         t0 = time.perf_counter()
         stats = UpdateStats()
         with self._lock():
-            con = self.connect()
+            # From scratch: build into a temporary file with bulk settings and move it into
+            # place when complete (half the writes of WAL, no fsync, readers never see it half
+            # done).
+            building = self.path + ".building" if self._needs_scratch() else None
+            if building:
+                self._discard(building)
+            con = self.connect(building, bulk=building is not None)
             try:
                 self._update(con, stats, progress)
                 con.execute("INSERT OR REPLACE INTO meta VALUES ('last_used_at', ?)",
@@ -438,6 +470,9 @@ class Index:
                 con.commit()
             finally:
                 con.close()
+            if building:
+                self._discard()
+                os.replace(building, self.path)
         stats.seconds = time.perf_counter() - t0
         return stats
 

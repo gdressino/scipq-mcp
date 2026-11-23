@@ -285,3 +285,23 @@ def test_library_index_reuses_open_jars(libroot, tmp_path):
     assert a is b and len(ix._zips) == 1
     assert ix.find_class("org/acme/ui/Nope") is None and "org/acme/ui/Nope" in ix._absent
     ix.close()
+
+
+def test_a_jar_that_appears_after_a_miss_is_found(libroot, tmp_path):
+    ix = L.LibraryIndex(str(tmp_path / "cache"), [libroot])
+    assert ix.find_class("org/acme/ui/Gadget") is None
+    jar_dir = os.path.join(libroot, "org.acme", "acme-extra", "1.0.0", "h")
+    os.makedirs(jar_dir)
+    with zipfile.ZipFile(os.path.join(jar_dir, "acme-extra-1.0.0-sources.jar"), "w") as z:
+        z.writestr("org/acme/ui/Gadget.java", "package org.acme.ui;\npublic class Gadget {}\n")
+    found = ix.find_class("org/acme/ui/Gadget")   # downloaded since: no 10-minute wait
+    assert found is not None and found.coordinates == "org.acme:acme-extra:1.0.0"
+
+
+def test_library_cache_removed_while_running(libroot, tmp_path):
+    import shutil
+    cache = tmp_path / "cache"
+    ix = L.LibraryIndex(str(cache), [libroot])
+    assert ix.find_class("org/acme/ui/Widget") is not None
+    shutil.rmtree(cache)
+    assert ix.find_class("org/acme/ui/Widget") is not None

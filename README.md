@@ -124,7 +124,9 @@ Server options: `--root DIR` (default project), `--shards-dir` (default
 Each agent session starts its own server process (~70 MB at rest). The whole process runs at
 low CPU and I/O priority (nice 10, best-effort I/O 7 on Linux), so it yields to builds and
 tests. With `uvx`, every running server holds uv's cache: `uv cache clean` waits until those
-sessions are closed.
+sessions are closed. With several worktrees, pin the version (`uvx scipq-mcp@0.2.2`): a new
+version with another index schema rebuilds each checkout's index on its first whole-project
+query, and pinned sessions upgrade when you choose, not all at once mid-day.
 
 ## Tools
 
