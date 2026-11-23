@@ -94,6 +94,36 @@ def _newest_class(d: str, cap: int = 200000) -> float:
     return newest
 
 
+_TYPE_DECL = re.compile(r"\b(class|interface|enum|record)\s+[A-Za-z_$]")
+_COMMENTS = re.compile(r"/\*.*?\*/|//[^\n]*|\"(?:[^\"\\\n]|\\.)*\"", re.S)
+
+
+def _declares_type(root: str, source: str) -> bool:
+    """Whether a source declares a type outside comments (a file commented out entirely
+    compiles to nothing)."""
+    try:
+        with open(os.path.join(root, source), encoding="utf-8", errors="replace") as fh:
+            text = fh.read(400000)
+    except OSError:
+        return True
+    return bool(_TYPE_DECL.search(_COMMENTS.sub(" ", text)))
+
+
+def _no_class_expected(root: str, source: str) -> bool:
+    """package-info and module-info (a class only with annotations), or no type at all."""
+    name = os.path.basename(source)
+    if name == "module-info.java":
+        return True
+    if name == "package-info.java":
+        try:
+            with open(os.path.join(root, source), encoding="utf-8", errors="replace") as fh:
+                head = _COMMENTS.sub(" ", fh.read(20000)).split("package", 1)[0]
+        except OSError:
+            return True
+        return "@" not in head
+    return not _declares_type(root, source)
+
+
 def _package(root: str, source: str) -> str:
     try:
         with open(os.path.join(root, source), encoding="utf-8", errors="replace") as fh:
@@ -116,10 +146,16 @@ def run(ws: Workspace, settings, cache_base: str | None, freshness) -> Report:
     # How the shards are produced.
     d = SETUP.diagnose(root, os.path.relpath(ws.shards_dir, root))
     if d.build == "gradle":
-        if d.init_scripts:
-            r.add("ok", "build", f"Gradle, init script for the shards: "
-                  f"{', '.join(p for p, _ in d.init_scripts[:2])}")
-        else:
+        applying = [p for p, a in d.init_scripts if a.startswith("yes")]
+        if applying:
+            r.add("ok", "build", f"Gradle, init script for the shards (applies to "
+                  f"{d.project_name!r}): {', '.join(applying[:2])}")
+        for p, a in d.init_scripts:
+            if not a.startswith("yes"):
+                r.add("warn" if not applying else "info", "build",
+                      f"init script {p}: {a}",
+                      "" if applying else "setup shows how to include this project")
+        if not d.init_scripts:
             r.add("warn", "build", "Gradle without a scip init script in ~/.gradle/init.d "
                   "(the shards may come from the build itself, or be left over)",
                   "setup shows the init script")
@@ -151,6 +187,14 @@ def run(ws: Workspace, settings, cache_base: str | None, freshness) -> Report:
               "checked")
     else:
         missing = [p for p in tracked if p not in shard_sources]
+        # Nothing to compile: commented out entirely, or package-info/module-info without
+        # annotations (checked up to a bound: reading every file of a huge tree is slow).
+        nothing = {p for p in missing[:3000] if _no_class_expected(root, p)}
+        missing = [p for p in missing if p not in nothing]
+        if nothing:
+            r.add("info", "coverage", f"{len(nothing)} tracked .java files declare nothing to "
+                  "compile (commented out, or package-info/module-info without annotations): "
+                  "no shard expected")
         in_compiled = [p for p in missing if p.rpartition("/")[0] in shard_dirs]
         outside = [p for p in missing if p.rpartition("/")[0] not in shard_dirs]
         if not missing:
@@ -194,6 +238,7 @@ def run(ws: Workspace, settings, cache_base: str | None, freshness) -> Report:
                   "plugin (an IDE build, -Pscip=false?)",
                   f"rebuild {task} with the plugin; until then the index is older than the code")
     no_class = 0
+    lacking: list[str] = []
     sample = [(k, rel) for k, rel in files][:20000]
     for k, rel in sample:
         task = ws.scip_roots()[k][1]
@@ -209,12 +254,17 @@ def run(ws: Workspace, settings, cache_base: str | None, freshness) -> Report:
         cls = (pkg.replace(".", "/") + "/" if pkg else "") + \
             os.path.basename(source)[:-len(".java")] + ".class"
         if not any(os.path.exists(os.path.join(x, cls)) for x in dirs):
+            if _no_class_expected(root, source):
+                continue
             no_class += 1
+            if len(lacking) < 5:
+                lacking.append(f"{source} ({task})")
             if no_class >= 50:
                 break
     if no_class:
         r.add("warn", "plugin", f"{'50+' if no_class >= 50 else no_class} shards have no class "
-              "file: javac failed after the plugin wrote them, or the classes were cleaned",
+              "file: javac failed after the plugin wrote them, or the classes were cleaned: "
+              + ", ".join(lacking) + (" …" if no_class > len(lacking) else ""),
               "look at the build output; refactor verify reports these too")
 
     # Freshness and builds running now.
@@ -247,6 +297,11 @@ def run(ws: Workspace, settings, cache_base: str | None, freshness) -> Report:
     r.add("info", "cache", f"{base}: {len(entries)} indexes, {total / 1e6:.0f} MB"
           + (f"; this checkout's {mine[0]['bytes'] / 1e6:.0f} MB" if mine else
              "; none for this checkout yet (built on first use)"))
+    empty = cachedir.empty_entries(base)
+    if empty:
+        r.add("warn", "cache", f"{len(empty)} cache entries without an index (a first build "
+              "interrupted): " + ", ".join(os.path.basename(x) for x in empty[:3])
+              + (" …" if len(empty) > 3 else ""), "scipq-mcp cache prune")
     if gone:
         r.add("warn", "cache", f"{len(gone)} indexes of checkouts that no longer exist ("
               f"{sum(e['bytes'] for e in gone) / 1e6:.0f} MB): "

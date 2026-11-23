@@ -338,7 +338,38 @@ def test_doctor(sample_copy, tmp_path):
     assert out.startswith("doctor: ") and "WARN [build] the Gradle build cache is on" in out
     assert "WARN [plugin] core/compileJava: classes compiled at" in out
     assert "shards have no class file" in out                 # Store, Session… are missing
+    assert "core/src/main/java/com/example/model/" in out.split("have no class file")[1]
     assert "[refactor]" in out and "[cache]" in out and "version " in out
+
+
+def test_doctor_files_with_nothing_to_compile_and_empty_cache_entries(sample_copy, tmp_path):
+    import os
+    import subprocess
+    import time
+    from scipq_mcp import cachedir
+    from scipq_mcp.service import Service
+    model = os.path.join(sample_copy, "core/src/main/java/com/example/model")
+    with open(os.path.join(model, "Old.java"), "w") as fh:
+        fh.write("// package com.example.model;\n/*\npublic class Old {}\n*/\n")
+    with open(os.path.join(model, "package-info.java"), "w") as fh:
+        fh.write("/** The model. */\npackage com.example.model;\n")
+    with open(os.path.join(model, "Fresh.java"), "w") as fh:
+        fh.write("package com.example.model;\n\npublic class Fresh {}\n")
+    subprocess.run(["git", "init", "-q"], cwd=sample_copy, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=sample_copy, check=True)
+    cache = tmp_path / "c"
+    empty = cache / "gone-0123456789ab"
+    empty.mkdir(parents=True)
+    old = time.time() - 3 * 86400
+    os.utime(empty, (old, old))
+    out = Service(sample_copy, cache_dir=str(cache)).doctor()
+    assert "2 tracked .java files declare nothing to compile" in out
+    assert "1 tracked .java files sit next to compiled ones but have no shard" in out
+    coverage = next(x for x in out.splitlines() if "sit next to compiled ones" in x)
+    assert "Fresh.java" in coverage and "Old.java" not in coverage
+    assert "1 cache entries without an index" in out and "gone-0123456789ab" in out
+    assert [e["dir"] for e in cachedir.prune(str(cache))] == [str(empty)]
+    assert not empty.exists()
 
 
 def test_check_refs(sample_copy, tmp_path):

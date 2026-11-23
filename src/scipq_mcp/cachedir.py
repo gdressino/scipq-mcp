@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import stat
 import sys
 
@@ -107,6 +108,34 @@ def entries(base: str | None = None) -> list[dict]:
     return out
 
 
+_ENTRY_NAME = re.compile(r".+-[0-9a-f]{12}")
+
+
+def empty_entries(base: str | None = None, min_age: float = 86400.0) -> list[str]:
+    """Entry directories without an index (an interrupted first build), older than min_age
+    seconds (a younger one may be being built)."""
+    import time
+
+    base = base or default_base()
+    out = []
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return out
+    now = time.time()
+    for name in names:
+        d = os.path.join(base, name)
+        if not _ENTRY_NAME.fullmatch(name) or not os.path.isdir(d) or os.path.islink(d) or \
+                os.path.exists(os.path.join(d, "index.sqlite")):
+            continue
+        try:
+            if now - os.path.getmtime(d) >= min_age:
+                out.append(d)
+        except OSError:
+            continue
+    return out
+
+
 def remove_entry(d: str) -> None:
     import shutil
 
@@ -137,4 +166,11 @@ def prune(base: str | None = None, older_than_days: float | None = None) -> list
                 removed.append(e)
             except (OSError, CacheError):
                 pass
+    for d in empty_entries(base):
+        try:
+            remove_entry(d)
+            removed.append({"dir": d, "root": "", "exists": False, "bytes": 0,
+                            "last_used": 0.0})
+        except (OSError, CacheError):
+            pass
     return removed

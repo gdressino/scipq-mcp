@@ -19,11 +19,13 @@ version and date when releasing.
   words in the owner or package as a bonus; tests, files whose header says they are
   generated and `[concepts] exclude` paths are left out unless asked.
 - `doctor()`: a checklist of what can make the index wrong or the tools weak: the plugin's
-  setup, tracked `.java` files without shards (next to compiled ones, or where nothing
-  compiles), classes built after the shards (an IDE build, the plugin off) and shards without
-  classes (javac failed), stale files and running builds (with their pid), the Gradle build
-  cache, indexes of deleted checkouts, configuration warnings, the JDK for library sources,
-  and what refactoring would use.
+  setup (which init scripts apply to this project, and why not), tracked `.java` files
+  without shards (next to compiled ones, or where nothing compiles; files that declare
+  nothing to compile are left out), classes built after the shards (an IDE build, the plugin
+  off) and shards without classes (javac failed; named), stale files and running builds
+  (with their pid), the Gradle build cache, indexes of deleted checkouts and cache entries
+  left without an index (`cache prune` removes both), configuration warnings, the JDK for
+  library sources, and what refactoring would use.
 - `check_refs(files, exclude)`: the code Markdown mentions (docs, skills, agent instructions),
   checked against the index at once: `Type#member`, `Type.method(…)`, qualified names,
   `{@link}`s and `File.java:N` paths (also abbreviated with `.../`). Reports types and members
