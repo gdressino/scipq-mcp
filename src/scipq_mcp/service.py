@@ -1248,7 +1248,7 @@ class Service:
                 if S.kind_of(sym) != "term":
                     raise QueryError("persistence takes an entity, a field of one, or nothing "
                                      "(the list of entities)")
-                text = P.render_field(nav, m, sym, list(st.by_name_globs))
+                text = P.render_field(nav, m, sym, list(st.by_name_globs), offset, limit)
                 return render.index_note(stats) + note + text, set()
         return body
 

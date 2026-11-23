@@ -1,0 +1,5 @@
+œ
+5shop/src/main/java/javax/jdo/annotations/Convert.java2javax/jdo/annotations/Convert#BZ java/lang/Class#B	:&javax/jdo/annotations/Convert#value().BRt
+javax/jdo/annotations/Convert#"$
+ java/lang/annotation/Annotation#(2Convert:!"java*public @interface Convert[
+&javax/jdo/annotations/Convert#value().(B2value:("java* public abstract Class<?> value()"java

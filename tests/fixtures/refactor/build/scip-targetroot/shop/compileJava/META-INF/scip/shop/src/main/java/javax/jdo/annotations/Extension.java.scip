@@ -1,0 +1,11 @@
+¥
+7shop/src/main/java/javax/jdo/annotations/Extension.java4 javax/jdo/annotations/Extension#BZ java/lang/String#B
+A-javax/jdo/annotations/Extension#vendorName().BRjava/lang/String#B
+:&javax/jdo/annotations/Extension#key().BRjava/lang/String#B
+<(javax/jdo/annotations/Extension#value().BRz
+ javax/jdo/annotations/Extension#"$
+ java/lang/annotation/Annotation#(2	Extension:#"java*public @interface Extensionj
+-javax/jdo/annotations/Extension#vendorName().(B2
+vendorName:+"java*#public abstract String vendorName()U
+&javax/jdo/annotations/Extension#key().(B2key:$"java*public abstract String key()[
+(javax/jdo/annotations/Extension#value().(B2value:&"java*public abstract String value()"java

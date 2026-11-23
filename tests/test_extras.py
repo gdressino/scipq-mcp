@@ -384,21 +384,54 @@ def test_persistence_model(refactor_root, tmp_path):
     from scipq_mcp.service import Service
     svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
     out = svc.persistence()
-    assert "2 entities" in out and "Order  ORDERS  3 fields, 1 relations" in out
+    assert "4 entities" in out and "Order  ORDERS  3 fields, 1 relations" in out
     order = svc.persistence("Order")
     assert "table: ORDERS" in order and 'column = "CLASS"' in order
-    assert "state  int  column from the field name" in order
+    assert "state  int  column STATE (from the field name)" in order
     assert "total  long  column TOTAL_AMOUNT (@Column)" in order
-    assert "lines  List<Line>  column from the field name  → many Line (mappedBy order)" in order
+    assert "lines  List<Line>  no column here: key ORDER in LINES (Line#order)  → many Line " \
+        "(mappedBy order)" in order
     assert "not persistent: note (@NotPersistent)" in order
     assert "fetch group withLines: lines, state" in order
     state = svc.persistence("Order#state")
-    assert "table ORDERS, column from the field name" in state and "in fetch groups: withLines" \
-        in state
+    assert "table ORDERS, column STATE (from the field name)" in state and \
+        "in fetch groups: withLines" in state
     assert "Order#setState()" in state and "a.setState(b.getState())" in state   # Lombok's
     assert 'return "state == :p";' in state                     # by name: a JDOQL filter
-    assert "relation to Order" in svc.persistence("Line#order")
+    line = svc.persistence("Line#order")
+    assert "relation to Order (other side: Order#lines, mappedBy)" in line
     assert "is not persistent" in svc.persistence("Counter")
+
+
+def test_persistence_joins_versions_and_interfaces(refactor_root, tmp_path):
+    from scipq_mcp.service import Service
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    c = svc.persistence("Customer")
+    assert "version: VERSION_NUMBER, column VERSION, field version" in c
+    assert "code  String  column CODE (@Column)  [length=20 allowsNull=false]" in c
+    assert "nickname  String  column NICKNAME (from the field name)  [@Convert(Upper)]" in c
+    assert "version  long  column VERSION (@Version of the class)  [version]" in c
+    assert "history  List<Order>  join table CUSTOMER_ORDERS (CUSTOMER_ID → this, ORDER_ID → " \
+        "the element)" in c
+    assert "payments  List<Payment>  no column here: key PAYER in PAYMENTS (Payment#payer)" in c
+    assert "@Unique(code) CUSTOMER_CODE" in c
+    p = svc.persistence("Payment")
+    assert "payer  Buyer  column PAYER (from the field name)  → Customer (implements Buyer) " \
+        "(other side: Customer#payments, mappedBy)" in p
+
+
+def test_persistence_uses_by_name_are_ranked(refactor_root, tmp_path):
+    from scipq_mcp.service import Service
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    out = svc.persistence("Customer#code")
+    body = out[out.index("by its name"):]
+    order = ["@Form(fields", '"payer.code', '"customer.code', "| code | nickname |",
+             'bind("code")', "| code | price |", "1 map or parameter key", "1 path through"]
+    at = [body.index(x) for x in order]
+    assert at == sorted(at), body
+    assert "9, most likely" in body
+    page = svc.persistence("Customer#code", limit=2)
+    assert "next offset 2" in page and '"payer.code' not in page
 
 
 def test_super_calls_of_other_overrides_do_not_dispatch_here(refactor_root, tmp_path):

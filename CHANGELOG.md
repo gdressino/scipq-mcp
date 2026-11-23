@@ -37,11 +37,23 @@ version and date when releasing.
   superclass's, with SUPERCLASS_TABLE), inheritance, discriminator, identity, persistent
   fields with their columns (explicit, from `@Column(name)` or `@Persistent(column)`, or from
   the field name), relations (with mappedBy and join tables), fetch groups and unique/index
-  members. A field: its column and relation, its accessors, who writes and reads it (setters,
-  Lombok's too, and assignments) and the lines that use it by name (queries, fixtures, form
-  bindings) to check. The `jdo` and `jpa` profiles describe keys, versions, transient
-  markers, inheritance, discriminators, mappedBy and join tables; `[persistence] column` takes
-  several annotations.
+  members. Where a field is stored: its column (the default one named), the other side's key
+  for a mappedBy collection, the join table and its columns; relations typed with an
+  interface that one entity implements, and the mappedBy field on the other side; a version
+  declared on the class (strategy, column, field), converters, unique constraint names,
+  length and nullability. A field: its column and relation, its accessors, who writes and
+  reads it (setters, Lombok's too, and assignments) and the lines that use it by name,
+  ranked: strings in its type's own files (forms, annotations), paths through relations to
+  the type, step tables that name the type, other strings read as code, other mentions; map
+  keys and paths through other types' fields of that name are counted. The `jdo` and `jpa`
+  profiles describe keys, versions, transient markers, inheritance, discriminators, mappedBy
+  and join tables; `[persistence] column` takes several annotations.
+
+### Fixed
+
+- `impact`, `changed`, `tests(transitive)` and `callers(include_overridden)` no longer count
+  `super.m()` calls in other classes as possible dispatches to an override of `m`: they are
+  bound to the caller's superclass.
 
 ## 0.5.0 — 2026-11-23
 

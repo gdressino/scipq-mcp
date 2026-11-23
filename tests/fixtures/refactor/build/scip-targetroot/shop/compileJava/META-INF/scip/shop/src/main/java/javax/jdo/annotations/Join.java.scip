@@ -1,0 +1,8 @@
+¸
+2shop/src/main/java/javax/jdo/annotations/Join.java/javax/jdo/annotations/Join#BZ java/lang/String#B
+7#javax/jdo/annotations/Join#table().BRjava/lang/String#B
+8$javax/jdo/annotations/Join#column().BRk
+javax/jdo/annotations/Join#"$
+ java/lang/annotation/Annotation#(2Join:"java*public @interface JoinV
+#javax/jdo/annotations/Join#table().(B2table:&"java*public abstract String table()Y
+$javax/jdo/annotations/Join#column().(B2column:'"java*public abstract String column()"java

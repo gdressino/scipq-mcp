@@ -468,11 +468,13 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         offset: Offset = 0, limit: Limit(100, 2000) = 100,
     ) -> str:
         """The persistence model the active profiles describe (jdo, jpa…). An entity: its table
-        (or its superclass's), inheritance, discriminator, identity, persistent fields with
-        their columns (explicit or from the field name), relations (mappedBy, join tables),
-        fetch groups and unique/index members. A field: its column and relation, its
-        accessors, who writes and reads it (setters, Lombok's too, and assignments), and the
-        lines that use it by name (reflection, fixtures, forms, queries) to check."""
+        (or its superclass's), inheritance, discriminator, identity, version, persistent
+        fields with their columns (explicit or from the field name; for mappedBy collections
+        the other side's key, for join tables their columns), relations (also through an
+        interface), fetch groups and unique/index members. A field: its column and relation,
+        its accessors, who writes and reads it (setters, Lombok's too, and assignments), and
+        the lines that use it by name (forms, relation paths, step tables, queries, keys),
+        most likely to matter first; offset/limit page them."""
         return service.persistence(symbol, project_root, scope, offset, limit)
 
     @tool

@@ -1,0 +1,9 @@
+Â
+5shop/src/main/java/javax/jdo/annotations/Version.java2javax/jdo/annotations/Version#BZ 0&javax/jdo/annotations/VersionStrategy#B=)javax/jdo/annotations/Version#strategy().BR<0&javax/jdo/annotations/VersionStrategy#B'65+javax/jdo/annotations/VersionStrategy#NONE.B7;java/lang/String#B
+;'javax/jdo/annotations/Version#column().BR* javax/jdo/annotations/Extension#B?+javax/jdo/annotations/Version#extensions().BR(t
+javax/jdo/annotations/Version#"$
+ java/lang/annotation/Annotation#(2Version:!"java*public @interface Versionk
+)javax/jdo/annotations/Version#strategy().(B2strategy:2"java**public abstract VersionStrategy strategy()\
+'javax/jdo/annotations/Version#column().(B2column:'"java*public abstract String column()m
++javax/jdo/annotations/Version#extensions().(B2
+extensions:0"java*(public abstract Extension[] extensions()"java

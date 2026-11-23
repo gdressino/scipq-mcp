@@ -1,9 +1,14 @@
-ò
-8shop/src/main/java/javax/jdo/annotations/Persistent.java5!javax/jdo/annotations/Persistent#BZ java/lang/String#B
+ê
+8shop/src/main/java/javax/jdo/annotations/Persistent.java5!javax/jdo/annotations/Persistent#BZ
+ java/lang/String#B
 <(javax/jdo/annotations/Persistent#name().BRjava/lang/String#B
-@,javax/jdo/annotations/Persistent#mappedBy().BR!}
+@,javax/jdo/annotations/Persistent#mappedBy().BR!java/lang/String#B
+>*javax/jdo/annotations/Persistent#column().BRjava/lang/String#B	
+=)javax/jdo/annotations/Persistent#table().B	R	}
 !javax/jdo/annotations/Persistent#"$
  java/lang/annotation/Annotation#(2
 Persistent:$"java*public @interface PersistentY
 (javax/jdo/annotations/Persistent#name().(B2name:%"java*public abstract String name()e
-,javax/jdo/annotations/Persistent#mappedBy().(B2mappedBy:)"java*!public abstract String mappedBy()"java
+,javax/jdo/annotations/Persistent#mappedBy().(B2mappedBy:)"java*!public abstract String mappedBy()_
+*javax/jdo/annotations/Persistent#column().(B2column:'"java*public abstract String column()\
+)javax/jdo/annotations/Persistent#table().(B2table:&"java*public abstract String table()"java

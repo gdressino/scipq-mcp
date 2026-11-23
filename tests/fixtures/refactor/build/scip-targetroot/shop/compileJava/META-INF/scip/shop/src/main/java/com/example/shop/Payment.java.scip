@@ -1,0 +1,9 @@
+‰	
+0shop/src/main/java/com/example/shop/Payment.javajavax/B
+javax/jdo/B javax/jdo/annotations/B3)javax/jdo/annotations/PersistenceCapable#B/3)javax/jdo/annotations/PersistenceCapable#B;1javax/jdo/annotations/PersistenceCapable#table().B-com/example/shop/Payment#BZ 0$com/example/shop/Payment#`<init>`().B!com/example/shop/Buyer#B3com/example/shop/Payment#payer.BRjava/lang/String#B	2com/example/shop/Payment#code.B	R	!com/example/shop/Buyer#B:$com/example/shop/Payment#getPayer().BZ )com/example/shop/Payment#payer.B˜
+com/example/shop/Payment#*Points to its payer through an interface. (2Payment:D"java*<@PersistenceCapable(table = "PAYMENTS")
+public class PaymentJ
+$com/example/shop/Payment#`<init>`().(	2<init>:"java*public Payment()G
+com/example/shop/Payment#payer.(2payer:"java*private Buyer payerE
+com/example/shop/Payment#code.(2code:"java*private String codeS
+$com/example/shop/Payment#getPayer().(2getPayer:"java*public Buyer getPayer()"java

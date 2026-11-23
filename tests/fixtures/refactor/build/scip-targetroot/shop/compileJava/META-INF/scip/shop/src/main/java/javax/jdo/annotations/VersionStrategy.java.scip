@@ -1,0 +1,14 @@
+Ò	
+=shop/src/main/java/javax/jdo/annotations/VersionStrategy.java:&javax/jdo/annotations/VersionStrategy#BZ =1javax/jdo/annotations/VersionStrategy#`<init>`().B?+javax/jdo/annotations/VersionStrategy#NONE.BR;1javax/jdo/annotations/VersionStrategy#`<init>`().BI5javax/jdo/annotations/VersionStrategy#VERSION_NUMBER.B
+R
+;1javax/jdo/annotations/VersionStrategy#`<init>`().B
+D0javax/jdo/annotations/VersionStrategy#DATE_TIME.B#R#;1javax/jdo/annotations/VersionStrategy#`<init>`().B#Î
+&javax/jdo/annotations/VersionStrategy#"
+java/lang/Enum#"!
+java/lang/constant/Constable#"
+java/lang/Comparable#"
+java/io/Serializable#(2VersionStrategy:#"java*public enum VersionStrategy`
+1javax/jdo/annotations/VersionStrategy#`<init>`().(	2<init>:!"java*private VersionStrategy()a
++javax/jdo/annotations/VersionStrategy#NONE.2NONE:,"java*$VersionStrategy.NONE /* ordinal 0 */
+5javax/jdo/annotations/VersionStrategy#VERSION_NUMBER.2VERSION_NUMBER:6"java*.VersionStrategy.VERSION_NUMBER /* ordinal 1 */p
+0javax/jdo/annotations/VersionStrategy#DATE_TIME.2	DATE_TIME:1"java*)VersionStrategy.DATE_TIME /* ordinal 2 */"java

@@ -1,0 +1,6 @@
+©
+-shop/src/main/java/com/example/shop/Form.java*com/example/shop/Form#BZ java/lang/String#B
+3com/example/shop/Form#fields().BRù
+com/example/shop/Form#5A form over an entity: the fields it edits, by name. "$
+ java/lang/annotation/Annotation#(2Form:"java*public @interface FormT
+com/example/shop/Form#fields().(B2fields:'"java*public abstract String fields()"java

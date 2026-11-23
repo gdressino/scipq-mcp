@@ -31,12 +31,17 @@ class PField:
     persistent: bool = True
     why_not: str = ""            # @NotPersistent, transient, static
     relation: str = ""           # the entity it points to (symbol)
+    via: str = ""                # the interface it is typed with, when that is not the entity
     many: bool = False           # a collection or map of it
     mapped_by: str = ""
     join: bool = False
+    join_table: str = ""
+    join_column: str = ""        # the join table's column pointing back to this entity
+    element_column: str = ""     # … and the one pointing to the element
     key: bool = False
     version: bool = False
     flags: list[str] = field(default_factory=list)
+    details: list[str] = field(default_factory=list)   # length, nullability
     inherited_from: str = ""
 
 
@@ -54,6 +59,8 @@ class Entity:
     fetch_groups: list[tuple[str, list[str]]] = field(default_factory=list)
     uniques: list[str] = field(default_factory=list)
     mapped: bool = False         # a mapped superclass / embeddable, no table of its own
+    version: str = ""            # a version declared on the class (strategy, column, field)
+    test: bool = False
 
 
 class Model:
@@ -66,6 +73,8 @@ class Model:
         self._mapped: set[str] | None = None
         self._by_name: dict[str, list[str]] | None = None
         self._supers: dict[str, list[str]] = {}
+        self._types: dict[str, list[str]] | None = None
+        self._implementers: dict[str, list[str]] = {}
 
     # --- lookups -------------------------------------------------------------------------
 
@@ -169,6 +178,28 @@ class Model:
                 self._by_name.setdefault(S.name_of(x), []).append(x)
         return self._by_name
 
+    def project_types(self) -> dict[str, list[str]]:
+        """{simple name: [type symbols]} of the types defined in the project."""
+        if self._types is None:
+            self._types = {}
+            for (sym,) in self.g.con.execute(
+                    "SELECT DISTINCT s.symbol FROM symbols s JOIN defs d ON d.symbol_id = s.id "
+                    "WHERE s.symbol LIKE '%#'"):
+                self._types.setdefault(S.name_of(sym), []).append(sym)
+        return self._types
+
+    def implementers(self, t: str) -> list[str]:
+        """The persistent subtypes of a type that is not persistent itself (an interface)."""
+        if t not in self._implementers:
+            persistent = self.entities() | self.mapped()
+            self._implementers[t] = sorted(x for x in self.g._subtypes_of({t})
+                                           if x in persistent)
+        return self._implementers[t]
+
+    def family(self, t: str) -> set[str]:
+        """A type and all its subtypes."""
+        return {t} | self.g._subtypes_of({t})
+
     # --- the model -------------------------------------------------------------------------
 
     def entity(self, t: str, light: bool = False) -> Entity:
@@ -176,7 +207,8 @@ class Model:
         and the fields of its supertypes."""
         defs = self.g.definitions(self.g.ids([t]).values())
         d = next(iter(defs.values()), ("", 0, "", 0, ""))
-        e = Entity(t, d[0], d[1], mapped=t in self.mapped() and t not in self.entities())
+        e = Entity(t, d[0], d[1], mapped=t in self.mapped() and t not in self.entities(),
+                   test=bool(d[3]))
         type_anns = self.annotations_of([t]).get(t, [])
         e.table, _ = self._spec_value(type_anns, self.st.table)
         e.inheritance, _ = self._spec_value(type_anns, self.st.persistence_attrs.get(
@@ -193,6 +225,7 @@ class Model:
         if not light:
             e.subclasses = sorted(x for x in self.g._subtypes_of({t}) if x in persistent)
         # Fetch groups and unique/index members name fields in strings.
+        version_field = version_column = ""
         for a, args in type_anns:
             name = S.name_of(a)
             if name in ("FetchGroup", "FetchGroups"):
@@ -201,9 +234,23 @@ class Model:
                     members = re.findall(r'name\s*=\s*"([^"]*)"', fg.group(2))
                     e.fetch_groups.append((fg.group(1), members))
             if name in ("Unique", "Uniques", "Index", "Indices"):
-                for mm in re.finditer(r'members\s*=\s*\{([^}]*)\}', args):
+                # One per members list; a container holds several (@Uniques({@Unique(…)})).
+                parts = re.split(r"@\s*(?:[\w$]+\s*\.\s*)*(?:Unique|Index)\b", args)
+                for part in parts:
+                    mm = re.search(r'members\s*=\s*\{([^}]*)\}', part)
+                    if not mm:
+                        continue
+                    label = self.attribute(part, "name")
                     e.uniques.append(f"@{name}(" + ", ".join(re.findall(r'"([^"]*)"',
-                                                                        mm.group(1))) + ")")
+                                                                        mm.group(1))) + ")"
+                                     + (f" {label}" if label else ""))
+            if a in self.st.persistence_markers.get("version", set()):
+                strategy = self.attribute(args, "strategy").rsplit(".", 1)[-1]
+                col = self.attribute(args, "column")
+                fm = re.search(r'key\s*=\s*"field-name"\s*,\s*value\s*=\s*"([^"]+)"', args)
+                e.version = ", ".join(x for x in (strategy, col and f"column {col}",
+                                                  fm and f"field {fm.group(1)}") if x)
+                version_field, version_column = (fm.group(1) if fm else ""), col
         # A container (@FetchGroups, @Uniques) and the annotations inside it are both
         # recorded: once each.
         e.fetch_groups = list(dict.fromkeys((n, tuple(ms)) for n, ms in e.fetch_groups))
@@ -224,6 +271,11 @@ class Model:
             anns = self.annotations_of([m[0] for m in members])
             for sym, src, line, sig in members:
                 e.fields.append(self._field(sym, src, line, sig, anns.get(sym, []), inherited))
+        for f in e.fields:
+            if version_field and f.name == version_field and not f.inherited_from:
+                f.version = True
+                if not f.column and version_column:
+                    f.column, f.column_from = version_column, "@Version of the class"
         return e
 
     def _field(self, sym: str, src: str, line: int, sig: str, anns: list[tuple[str, str]],
@@ -250,18 +302,107 @@ class Model:
         f.key = bool(names & markers.get("key", set()))
         f.version = bool(names & markers.get("version", set()))
         f.join = bool(names & markers.get("join", set()))
-        f.flags = sorted("@" + S.name_of(a) for a in names & markers.get("flags", set()))
+        flags = []
+        for a, args in anns:
+            if a not in markers.get("flags", set()):
+                continue
+            label = "@" + S.name_of(a)
+            if S.name_of(a) == "Convert":
+                conv = self.attribute(args, "value") or self.attribute(args, "converter")
+                if not conv:
+                    cm = re.match(r"\s*([\w$.]+)\.class\b", args)
+                    conv = cm.group(1) if cm else ""
+                if conv:
+                    label += f"({conv.removesuffix('.class').rsplit('.', 1)[-1]})"
+            flags.append(label)
+        f.flags = sorted(set(flags))
         f.mapped_by, _ = self._spec_value(anns, self.st.persistence_attrs.get("mapped_by", []))
-        # A relation: the type, or its last type argument, is persistent.
+        for a, args in anns:
+            if S.name_of(a) == "Column":
+                for attr, label in (("length", "length"), ("allowsNull", "allowsNull"),
+                                    ("nullable", "nullable"), ("jdbcType", "jdbcType")):
+                    v = self.attribute(args, attr)
+                    if v:
+                        f.details.append(f"{label} {v}")
+        # A join table: its name and columns (JDO @Join/@Element, JPA @JoinTable).
+        for a, args in anns:
+            n = S.name_of(a)
+            if a in markers.get("join", set()):
+                f.join_table = f.join_table or self.attribute(args, "table") or \
+                    self.attribute(args, "name")
+                f.join_column = self.attribute(args, "column") or _nested_column(
+                    args, "joinColumns")
+                f.element_column = f.element_column or _nested_column(args,
+                                                                      "inverseJoinColumns")
+            elif n == "Element":
+                f.element_column = self.attribute(args, "column") or f.element_column
+            elif n == "Persistent" and self.attribute(args, "table"):
+                f.join_table = self.attribute(args, "table")
+        f.join = f.join or bool(f.join_table)
+        # A relation: the type, or its last type argument, is persistent, or an interface
+        # that one persistent class implements.
         targets = re.findall(r"[A-Z][\w$]*", type_text)
         by_name = self.persistent_by_name()
+        many = "<" in type_text or type_text.endswith("[]")
         for tname in reversed(targets):
             cands = by_name.get(tname, [])
             if len(cands) == 1:
-                f.relation = cands[0]
-                f.many = "<" in type_text or type_text.endswith("[]")
+                f.relation, f.many = cands[0], many
                 break
+        else:
+            for tname in reversed(targets):
+                types = self.project_types().get(tname, [])
+                impl = self.implementers(types[0]) if len(types) == 1 else []
+                if len(impl) == 1:
+                    f.relation, f.via, f.many = impl[0], types[0], many
+                    break
         return f
+
+    def inverse(self, owner: str, f: PField) -> str:
+        """The field on the other side that names this one in its mappedBy, or ""."""
+        if not f.relation or f.mapped_by:
+            return ""
+        mine = self.family(owner) | set(self.supertypes(owner))
+        for x in self.entity(f.relation).fields:
+            if x.mapped_by == f.name and (not x.relation or x.relation in mine):
+                return x.symbol
+        return ""
+
+    def foreign_key(self, f: PField) -> tuple[str, str, str]:
+        """For a mappedBy collection: (table, column, field) of the other side's key."""
+        if not (f.relation and f.mapped_by):
+            return "", "", ""
+        other = self.entity(f.relation)
+        x = next((y for y in other.fields if y.name == f.mapped_by), None)
+        if x is None:
+            return table_of(self, other), "", ""
+        return table_of(self, other), x.column or x.name.upper(), x.symbol
+
+
+def _nested_column(args: str, attr: str) -> str:
+    """The name of the first @JoinColumn in `attr = {@JoinColumn(name = "X")…}`."""
+    m = re.search(re.escape(attr) + r'\s*=\s*\{?\s*@\s*[\w$.]*JoinColumn\s*\(\s*'
+                  r'(?:name\s*=\s*)?"([^"]+)"', args)
+    return m.group(1) if m else ""
+
+
+def column_text(m: Model, f: PField) -> str:
+    """Where a persistent field is stored, in words."""
+    if f.relation and f.mapped_by:
+        table, col, sym = m.foreign_key(f)
+        return (f"no column here: key {col} in {table} ({S.short(sym)})" if col else
+                f"no column here: the other side ({S.name_of(f.relation)}#{f.mapped_by}) "
+                "holds the key")
+    if f.join:
+        cols = ", ".join(x for x in (f.join_column and f"{f.join_column} → this",
+                                     f.element_column and f"{f.element_column} → the element")
+                         if x)
+        return f"join table {f.join_table or '(default name)'}" + (f" ({cols})" if cols else "")
+    if f.column:
+        return f"column {f.column} ({f.column_from})"
+    if f.many and f.relation:
+        return "join table (the default for a collection without mappedBy)"
+    return f"column {f.name.upper()} (from the field name)"
 
 
 def table_of(m: Model, e: Entity) -> str:
@@ -281,6 +422,8 @@ def render_entity(m: Model, e: Entity, offset: int, limit: int) -> str:
         lines.append(f"  inheritance: {e.inheritance}")
     if e.discriminator:
         lines.append(f"  discriminator: {e.discriminator}")
+    if e.version:
+        lines.append(f"  version: {e.version}")
     if e.superclass:
         lines.append(f"  extends the persistent {S.short(e.superclass)}")
     if e.subclasses:
@@ -293,18 +436,10 @@ def render_entity(m: Model, e: Entity, offset: int, limit: int) -> str:
     persistent = [f for f in e.fields if f.persistent]
     rows = []
     for f in persistent:
-        col = (f"column {f.column} ({f.column_from})" if f.column else
-               "column from the field name")
-        rel = ""
-        if f.relation:
-            rel = f"  → {'many ' if f.many else ''}{S.short(f.relation)}"
-            if f.mapped_by:
-                rel += f" (mappedBy {f.mapped_by})"
-            if f.join:
-                rel += " (join table)"
         extra = " ".join((["key"] if f.key else []) + (["version"] if f.version else [])
-                         + f.flags)
-        rows.append(f"    {f.name}  {f.type_text}  {col}{rel}"
+                         + f.flags + [x.replace(" ", "=") for x in f.details])
+        rows.append(f"    {f.name}  {f.type_text}  {column_text(m, f)}"
+                    + relation_text(m, e.symbol, f)
                     + (f"  [{extra}]" if extra else "")
                     + (f"  (from {S.name_of(f.inherited_from)})" if f.inherited_from else ""))
     lines.append(f"  persistent fields ({len(persistent)}):")
@@ -323,6 +458,20 @@ def render_entity(m: Model, e: Entity, offset: int, limit: int) -> str:
     return "\n".join(lines)
 
 
+def relation_text(m: Model, owner: str, f: PField) -> str:
+    if not f.relation:
+        return ""
+    out = f"  → {'many ' if f.many else ''}{S.short(f.relation)}"
+    if f.via:
+        out += f" (implements {S.name_of(f.via)})"
+    if f.mapped_by:
+        out += f" (mappedBy {f.mapped_by})"
+    inv = m.inverse(f.inherited_from or owner, f)
+    if inv:
+        out += f" (other side: {S.short(inv)}, mappedBy)"
+    return out
+
+
 def render_list(m: Model, scope_filter, offset: int, limit: int) -> str:
     ents = sorted(m.entities())
     rows = []
@@ -335,7 +484,8 @@ def render_list(m: Model, scope_filter, offset: int, limit: int) -> str:
         rows.append(f"  {S.short(t)}  {table_of(m, e)}"
                     + (f"  {e.inheritance}" if e.inheritance else "")
                     + (f"  extends {S.name_of(e.superclass)}" if e.superclass else "")
-                    + f"  {persistent} fields, {rels} relations  {e.source}:{e.line}")
+                    + f"  {persistent} fields, {rels} relations  {e.source}:{e.line}"
+                    + ("  [test]" if e.test else ""))
     if not rows:
         return "no entities (no persistence profile active, or none in this scope)"
     lines = [f"{len(rows)} entities (table, inheritance, own persistent fields):"]
@@ -345,30 +495,163 @@ def render_list(m: Model, scope_filter, offset: int, limit: int) -> str:
     return "\n".join(lines)
 
 
-def writes_by_name(root: str, name: str, globs: list[str], limit: int = 40) -> list[str]:
-    """Lines that write (or read) a persistent field by its name: reflection, fixtures, form
-    bindings, queries — strings in .java that read as code, table cells and quoted names in
-    .feature files, any mention in other configured files."""
-    from . import extras as X
-    from .refactor import _code_like
-    hits = X.uses_by_name(root, [name], list(dict.fromkeys(globs + ["*.feature"])), set(),
-                          limit=5000)
-    cell = re.compile(r"\|\s*" + re.escape(name) + r"\s*\||[\"'`]" + re.escape(name) + r"[\"'`]")
-    out = []
-    for h in hits:
-        if any(p.startswith(".") for p in h.source.split("/")[:-1]):
-            continue
-        if h.source.endswith(".java") and not _code_like(h.text, [name]):
-            continue
-        if h.source.endswith((".feature", ".md", ".txt")) and not cell.search(h.text):
-            continue
-        out.append(f"    {h.source}:{h.line}  {h.text[:140]}")
-        if len(out) >= limit:
-            break
+TIERS = {
+    1: "strings in the files of {owner} and its subtypes (forms, annotations)",
+    2: "paths through a relation to it",
+    3: "step tables that name it",
+    4: "other strings read as code (property ids, queries, other files)",
+    5: "other step tables and quoted mentions",
+}
+_KEY_CALL = re.compile(r"\b(put|get|getOrDefault|containsKey|remove|setParameter|addParameter)"
+                       r"\s*\(\s*\"")
+_PROSE = (".feature", ".md", ".txt", ".adoc")
+
+
+@dataclass
+class ByName:
+    rows: list[tuple[int, str, int, str]]      # (tier, source, line, text), best first
+    keys: list[tuple[str, int, str]]           # map or parameter keys: put/get("name")
+    elsewhere: list[tuple[str, int, str]]      # paths through other types' fields of that name
+    aliases: list[str]
+
+    @property
+    def total(self) -> int:
+        return len(self.rows) + len(self.keys) + len(self.elsewhere)
+
+
+def _alias(name: str) -> list[str]:
+    """How code names an instance of a type: Order -> order; a one-letter prefix off too
+    (XOrder -> order)."""
+    out = [name[:1].lower() + name[1:]]
+    if re.match(r"[A-Z][A-Z][a-z]", name):
+        out.append(name[1:2].lower() + name[2:])
     return out
 
 
-def render_field(nav, m: Model, sym: str, globs: list[str]) -> str:
+def relation_names(m: Model, family: set[str]) -> set[str]:
+    """Names of the fields, in any type, typed as one of these types (or as an interface only
+    they implement among persistent classes)."""
+    names = {S.name_of(t) for t in family}
+    persistent = m.entities() | m.mapped()
+    for t in family:
+        for sup in m.supertypes(t):
+            if sup not in persistent and m.implementers(sup) and \
+                    set(m.implementers(sup)) <= family:
+                names.add(S.name_of(sup))
+    names = {n for n in names if n}
+    if not names:
+        return set()
+    where = " OR ".join("d.signature LIKE ?" for _ in names)
+    word = re.compile(r"(?<![\w$])(" + "|".join(re.escape(n) for n in names) + r")(?![\w$])")
+    out = set()
+    for sym, sig in m.g.con.execute(
+            f"SELECT s.symbol, d.signature FROM defs d JOIN symbols s ON s.id = d.symbol_id "
+            f"WHERE {where}", [f"%{n}%" for n in names]):
+        if S.kind_of(sym) != "term" or not sig:
+            continue
+        head = re.sub(r"@\s*[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?", " ", sig).split("=")[0]
+        if word.search(head):
+            out.add(S.name_of(sym))
+    return out
+
+
+def by_name(m: Model, field_sym: str, globs: list[str]) -> ByName:
+    """Uses of a persistent field by its name, ranked by how surely they mean this field:
+    strings in its type's own files (forms), paths through relations to the type, step
+    tables that name the type, other strings read as code, other mentions; map keys and
+    paths through other types' fields of the same name are only counted."""
+    from . import extras as X
+    from .refactor import _code_like
+    name = S.name_of(field_sym)
+    owner = S.parent(field_sym)
+    family = m.family(owner)
+    defs = m.g.definitions(m.g.ids(family).values())
+    own_files = {d[0] for d in defs.values()}
+    type_names = {S.name_of(t) for t in family}
+    aliases = sorted(relation_names(m, family) | {a for t in type_names for a in _alias(t)})
+    alias_set = set(aliases)
+    hits = X.uses_by_name(m.root, [name], list(dict.fromkeys(globs + ["*.feature"])), set(),
+                          limit=20000)
+    seg = re.compile(r"([\w$]+)\s*\.\s*" + re.escape(name) + r"(?![\w$])")
+    cell = re.compile(r"\|\s*" + re.escape(name) + r"\s*\|")
+    quoted = re.compile(r"[\"'`]" + re.escape(name) + r"[\"'`]")
+    named = re.compile(r"(?<![\w$])(" + "|".join(re.escape(n) for n in type_names) +
+                       r")(?![\w$])") if type_names else None
+    rows, keys, elsewhere = [], [], []
+    for h in hits:
+        if any(p.startswith(".") for p in h.source.split("/")[:-1]):
+            continue
+        java = h.source.endswith(".java")
+        if java and not _code_like(h.text, [name]):
+            continue
+        if h.source.endswith(_PROSE):
+            if cell.search(h.text):
+                step = _step_above(m.lines(h.source), h.line - 1)
+                rows.append((3 if named and named.search(step) else 5, h.source, h.line,
+                             h.text))
+            elif quoted.search(h.text):
+                rows.append((5, h.source, h.line, h.text))
+            continue
+        if java and h.source in own_files:
+            rows.append((1, h.source, h.line, h.text))
+            continue
+        if java and _KEY_CALL.search(h.text):
+            keys.append((h.source, h.line, h.text))
+            continue
+        segs = {x.group(1) for x in seg.finditer(h.text)} - {"this"}
+        if segs & alias_set:
+            rows.append((2, h.source, h.line, h.text))
+        elif segs:
+            elsewhere.append((h.source, h.line, h.text))
+        else:
+            rows.append((4, h.source, h.line, h.text))
+    rows.sort(key=lambda r: (r[0], r[1], r[2]))
+    return ByName(rows, keys, elsewhere, aliases)
+
+
+def _n(k: int, what: str) -> str:
+    return f"{k} {what}" + ("" if k == 1 else "s")
+
+
+def _step_above(lines: list[str], i: int) -> str:
+    """The step a table row belongs to: the nearest line above that is not a table row."""
+    while i >= 0:
+        t = lines[i].strip() if i < len(lines) else ""
+        if t and not t.startswith(("|", "#")):
+            return t
+        i -= 1
+    return ""
+
+
+def render_by_name(b: ByName, owner: str, offset: int, limit: int) -> list[str]:
+    if not b.total:
+        return []
+    lines = [f"by its name, the index does not see (reflection, forms, fixtures, queries; "
+             f"{b.total}, most likely to matter first):"]
+    tier = None
+    for t, src, line, text in b.rows[offset:offset + limit]:
+        if t != tier:
+            tier = t
+            title = TIERS[t].format(owner=S.name_of(owner))
+            if t == 2:
+                title += f" ({', '.join(a + '.' for a in b.aliases[:8])})"
+            lines.append(f"  {title}:")
+        lines.append(f"    {src}:{line}  {text[:140]}")
+    if offset + limit < len(b.rows):
+        lines.append(f"  next offset {offset + limit} ({len(b.rows)} ranked)")
+    if b.keys:
+        files = sorted({k[0] for k in b.keys})
+        lines.append(f"  {_n(len(b.keys), 'map or parameter key')} (put/get(\"…\")) in "
+                     f"{_n(len(files), 'file')}, e.g. " + ", ".join(f"{a}:{n}" for a, n, _t in b.keys[:4]))
+    if b.elsewhere:
+        lines.append(f"  {_n(len(b.elsewhere), 'path')} through other types' fields of that name "
+                     f"(not a relation to {S.name_of(owner)}), e.g. "
+                     + ", ".join(f"{a}:{n}" for a, n, _t in b.elsewhere[:4]))
+    return lines
+
+
+def render_field(nav, m: Model, sym: str, globs: list[str], offset: int = 0,
+                 limit: int = 100) -> str:
     from . import context as C
     owner = S.parent(sym)
     e = m.entity(owner)
@@ -380,13 +663,15 @@ def render_field(nav, m: Model, sym: str, globs: list[str]) -> str:
     if not f.persistent:
         lines.append(f"  not persistent ({f.why_not})")
     else:
-        lines.append(f"  table {table_of(m, e)}, column "
-                     + (f"{f.column} ({f.column_from})" if f.column else
-                        "from the field name (no explicit column)"))
+        lines.append(f"  table {table_of(m, e)}, {column_text(m, f)}"
+                     + (f"  [{', '.join(f.details)}]" if f.details else ""))
         if f.relation:
-            lines.append(f"  relation to {'many ' if f.many else ''}{S.short(f.relation)}"
-                         + (f", mappedBy {f.mapped_by}" if f.mapped_by else "")
+            lines.append(f"  relation to{relation_text(m, owner, f)[3:]}"
                          + (", join table" if f.join else ""))
+        if f.version:
+            lines.append("  the version of the entity" + (f" ({e.version})" if e.version else ""))
+        if f.flags:
+            lines.append("  " + ", ".join(f.flags))
         groups = [n for n, members in e.fetch_groups if f.name in members]
         if groups:
             lines.append(f"  in fetch groups: {', '.join(groups)}")
@@ -401,9 +686,5 @@ def render_field(nav, m: Model, sym: str, globs: list[str]) -> str:
                 [f"  … and {len(s_.lines) - 15} more"] if len(s_.lines) > 15 else [])
             lines.append(s_.title)
             lines += ["  " + x for x in body[:60]]
-    by_name = writes_by_name(nav.ws.root, f.name, globs)
-    if by_name:
-        lines.append(f"by its name, the index does not see (reflection, fixtures, forms, "
-                     f"queries; check them, {len(by_name)}{'+' if len(by_name) >= 40 else ''}):")
-        lines += by_name
+    lines += render_by_name(by_name(m, sym, globs), owner, offset, limit)
     return "\n".join(lines)

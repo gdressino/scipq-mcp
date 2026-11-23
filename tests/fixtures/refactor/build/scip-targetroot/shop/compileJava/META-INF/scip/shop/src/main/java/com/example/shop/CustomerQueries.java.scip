@@ -1,0 +1,18 @@
+ˆ
+8shop/src/main/java/com/example/shop/CustomerQueries.javajava/B
+java/util/Bjava/util/HashMap#Bjava/B
+java/util/Bjava/util/Map#B5!com/example/shop/CustomerQueries#BZ! 8,com/example/shop/CustomerQueries#`<init>`().Bjava/lang/String#BA+com/example/shop/CustomerQueries#byPayer().BZ
+ java/lang/String#BA+com/example/shop/CustomerQueries#byAlias().BZ java/lang/String#BE/com/example/shop/CustomerQueries#otherEntity().BZ java/util/Map#Bjava/lang/String#Bjava/lang/Object#B@*com/example/shop/CustomerQueries#params().B%Z java/lang/String#B&,local 0B-.R&.java/util/Map#Bjava/lang/String#Bjava/lang/Object#Blocal 1BR0)java/util/HashMap#`<init>`(+2).B$+local 1B	java/util/Map#put().B
+local 0Blocal 1Bjava/lang/String#BB,com/example/shop/CustomerQueries#property().BZ 2(com/example/shop/CustomerQueries#bind().Bjava/lang/String#B>(com/example/shop/CustomerQueries#bind().BZ  java/lang/String#Blocal 2B'R'local 2BÔ
+!com/example/shop/CustomerQueries#êUses of Customer#code by name: a path through a relation, the type's alias, another
+ entity's field of the same name, a map key, a property id. (2CustomerQueries:$"java*public class CustomerQueriesZ
+,com/example/shop/CustomerQueries#`<init>`().(	2<init>: "java*public CustomerQueries()Y
++com/example/shop/CustomerQueries#byPayer().(2byPayer:"java*public String byPayer()Y
++com/example/shop/CustomerQueries#byAlias().(2byAlias:"java*public String byAlias()e
+/com/example/shop/CustomerQueries#otherEntity().(2otherEntity:#"java*public String otherEntity()k
+*com/example/shop/CustomerQueries#params().(2params:3"java*+public Map<String, Object> params(String v)J
+local 02v:"java*String vB*com/example/shop/CustomerQueries#params().Y
+local 1(=2m:"java*Map<String, Object> mB*com/example/shop/CustomerQueries#params().\
+,com/example/shop/CustomerQueries#property().(2property: "java*public String property()`
+(com/example/shop/CustomerQueries#bind().(2bind:,"java*$private String bind(String property)V
+local 22property:"java*String propertyB(com/example/shop/CustomerQueries#bind()."java

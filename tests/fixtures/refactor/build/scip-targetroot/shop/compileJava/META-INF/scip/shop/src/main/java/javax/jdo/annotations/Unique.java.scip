@@ -1,0 +1,8 @@
+Ì
+4shop/src/main/java/javax/jdo/annotations/Unique.java1javax/jdo/annotations/Unique#BZ java/lang/String#B
+8$javax/jdo/annotations/Unique#name().BRjava/lang/String#B
+;'javax/jdo/annotations/Unique#members().BR"q
+javax/jdo/annotations/Unique#"$
+ java/lang/annotation/Annotation#(2Unique: "java*public @interface UniqueU
+$javax/jdo/annotations/Unique#name().(B2name:%"java*public abstract String name()`
+'javax/jdo/annotations/Unique#members().(B2members:*"java*"public abstract String[] members()"java

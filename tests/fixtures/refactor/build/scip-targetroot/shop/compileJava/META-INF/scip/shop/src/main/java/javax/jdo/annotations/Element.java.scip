@@ -1,0 +1,8 @@
+ß
+5shop/src/main/java/javax/jdo/annotations/Element.java2javax/jdo/annotations/Element#BZ java/lang/String#B
+;'javax/jdo/annotations/Element#column().BRjava/lang/String#B
+=)javax/jdo/annotations/Element#mappedBy().BR!t
+javax/jdo/annotations/Element#"$
+ java/lang/annotation/Annotation#(2Element:!"java*public @interface Element\
+'javax/jdo/annotations/Element#column().(B2column:'"java*public abstract String column()b
+)javax/jdo/annotations/Element#mappedBy().(B2mappedBy:)"java*!public abstract String mappedBy()"java

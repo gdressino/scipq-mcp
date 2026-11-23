@@ -1,0 +1,40 @@
+…)
+1shop/src/main/java/com/example/shop/Customer.javajava/B
+java/util/Bjava/util/List#Bjavax/B
+javax/jdo/B javax/jdo/annotations/B'javax/jdo/annotations/Column#B#javax/B
+javax/jdo/B javax/jdo/annotations/B(javax/jdo/annotations/Convert#B$javax/B
+javax/jdo/B javax/jdo/annotations/B(javax/jdo/annotations/Element#B$javax/B
+javax/jdo/B javax/jdo/annotations/B* javax/jdo/annotations/Extension#B&javax/B
+javax/jdo/B javax/jdo/annotations/B%javax/jdo/annotations/Join#B!javax/B
+javax/jdo/B javax/jdo/annotations/B3)javax/jdo/annotations/PersistenceCapable#B/javax/B	
+javax/jdo/B	 javax/jdo/annotations/B	+!javax/jdo/annotations/Persistent#B	'javax/B
+
+javax/jdo/B
+ javax/jdo/annotations/B
+'javax/jdo/annotations/Unique#B
+#javax/B
+javax/jdo/B javax/jdo/annotations/B(javax/jdo/annotations/Version#B$javax/B
+javax/jdo/B javax/jdo/annotations/B0&javax/jdo/annotations/VersionStrategy#B,3)javax/jdo/annotations/PersistenceCapable#B;1javax/jdo/annotations/PersistenceCapable#table().B(javax/jdo/annotations/Version#B3)javax/jdo/annotations/Version#strategy().B	0&javax/jdo/annotations/VersionStrategy#B#?5javax/jdo/annotations/VersionStrategy#VERSION_NUMBER.B$21'javax/jdo/annotations/Version#column().B4:5+javax/jdo/annotations/Version#extensions().B* javax/jdo/annotations/Extension#B 7-javax/jdo/annotations/Extension#vendorName().B!+0&javax/jdo/annotations/Extension#key().B=@2(javax/jdo/annotations/Extension#value().BQV'javax/jdo/annotations/Unique#B.$javax/jdo/annotations/Unique#name().B1'javax/jdo/annotations/Unique#members().B ' com/example/shop/Form#B)com/example/shop/Form#fields().B.com/example/shop/Customer#BZ, 1%com/example/shop/Customer#`<init>`().B!com/example/shop/Buyer#B!&'javax/jdo/annotations/Column#B.$javax/jdo/annotations/Column#name().B0&javax/jdo/annotations/Column#length().B!4*javax/jdo/annotations/Column#allowsNull().B(2java/lang/String#B5com/example/shop/Customer#code.BZ (javax/jdo/annotations/Convert#B!com/example/shop/Upper#B'com/example/shop/Upper#class.Bjava/lang/String#B9#com/example/shop/Customer#nickname.BZ 6"com/example/shop/Customer#version.BR+!javax/jdo/annotations/Persistent#B3)javax/jdo/annotations/Persistent#table().B%javax/jdo/annotations/Join#B	.$javax/jdo/annotations/Join#column().B
+(javax/jdo/annotations/Element#B1'javax/jdo/annotations/Element#column().Bjava/util/List#B !com/example/shop/Order#B 8"com/example/shop/Customer#history.B Z   +!javax/jdo/annotations/Persistent#B"6,javax/jdo/annotations/Persistent#mappedBy().B"java/util/List#B##com/example/shop/Payment#B#9#com/example/shop/Customer#payments.B#"Z"# #java/lang/String#B%:$com/example/shop/Customer#getCode().B%Z%' )com/example/shop/Customer#code.B&:$com/example/shop/Customer#setCode().B)Z)+ java/lang/String#B)local 0B)#R)#)com/example/shop/Customer#code.B*local 0B*í
+com/example/shop/Customer#QA version kept in a field, a join table, the inverse side of a relation, a form. "
+com/example/shop/Buyer#(2Customer:Ò"java*É@PersistenceCapable(table = "CUSTOMERS")
+@Version(strategy = VersionStrategy.VERSION_NUMBER, column = "VERSION", extensions = {@Extension(vendorName = "datanucleus", key = "field-name", value = "version")})
+@Unique(name = "CUSTOMER_CODE", members = {"code"})
+@Form(fields = "code,nickname")
+public class Customer implements BuyerL
+%com/example/shop/Customer#`<init>`().(	2<init>:"java*public Customer()€
+com/example/shop/Customer#code.(2code:U"java*M@Column(name = "CODE", length = 20, allowsNull = "false")
+private String codeh
+#com/example/shop/Customer#nickname.(2nickname:5"java*-@Convert(Upper.class)
+private String nicknameM
+"com/example/shop/Customer#version.(2version:"java*private long version¸
+"com/example/shop/Customer#history.(2history:†"java*~@Persistent(table = "CUSTOMER_ORDERS")
+@Join(column = "CUSTOMER_ID")
+@Element(column = "ORDER_ID")
+private List<Order> historyy
+#com/example/shop/Customer#payments.(2payments:F"java*>@Persistent(mappedBy = "payer")
+private List<Payment> payments{
+$com/example/shop/Customer#getCode()."'
+!com/example/shop/Buyer#getCode().(2getCode:"java*public String getCode()[
+$com/example/shop/Customer#setCode().(2setCode:("java* public void setCode(String code)J
+local 02code:"java*String codeB$com/example/shop/Customer#setCode()."java
