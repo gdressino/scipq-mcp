@@ -578,17 +578,22 @@ class TestUse:
     lines: list[int]
 
 
-def tests_using(nav: Navigator, symbol: str) -> list[TestUse]:
+def is_test_reference(r: Reference) -> bool:
+    """In a test compile task (or, with all shards in one directory, under a test path)."""
+    task = r.module.rpartition("/")[2]
+    if task in (".", ""):
+        return bool(TEST_PATH.search(r.location.source))
+    return bool(TEST_TASK.search(task))
+
+
+def tests_using(nav: Navigator, symbol: str, refs: list[Reference] | None = None
+                ) -> list[TestUse]:
     """Test classes (shards of test compile tasks) that use the symbol directly."""
-    refs, _ = nav.references(symbol)
+    if refs is None:
+        refs, _ = nav.references(symbol)
     by_file: OrderedDict[str, TestUse] = OrderedDict()
     for r in refs:
-        task = r.module.rpartition("/")[2]
-        if task in (".", ""):
-            # All shards in one directory: no task to tell tests apart, use the source path.
-            if not TEST_PATH.search(r.location.source):
-                continue
-        elif not TEST_TASK.search(task):
+        if not is_test_reference(r):
             continue
         t = by_file.get(r.location.source)
         if t is None:
@@ -597,7 +602,8 @@ def tests_using(nav: Navigator, symbol: str) -> list[TestUse]:
             cls = os.path.basename(r.location.source).rsplit(".", 1)[0]
             t = TestUse(f"{pkg}.{cls}" if pkg else cls, r.module, r.location.source, [])
             by_file[r.location.source] = t
-        t.lines.append(r.location.line)
+        if r.location.line not in t.lines:
+            t.lines.append(r.location.line)
     return sorted(by_file.values(), key=lambda t: (t.module, t.test_class))
 
 

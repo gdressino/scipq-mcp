@@ -23,6 +23,7 @@ from . import render
 from . import setup as SETUP
 from . import symbols as S
 from . import config as CFG
+from . import context as C
 from . import libsrc as L
 from .cachedir import CacheError
 from .graph import Graph, GraphError
@@ -82,7 +83,7 @@ class Service:
     def workspace(self, project_root: str | None) -> Workspace:
         return Workspace(self._root(project_root), self.shards_dir)
 
-    def _run(self, project_root: str | None, *bodies: Body) -> str:
+    def _run(self, project_root: str | None, *bodies: Body, foot_first: bool = False) -> str:
         try:
             ws = self.workspace(project_root)
         except WorkspaceError as e:
@@ -110,6 +111,8 @@ class Service:
         if nav.unreadable:
             foot = (foot + "\n" if foot else "") + render.unreadable(sorted(nav.unreadable))
         text = texts[0] if len(texts) == 1 else "\n\n".join(texts)
+        if foot and foot_first:  # they condition everything below (context)
+            return foot + "\n" + text
         return text + ("\n" + foot if foot else "")
 
     @staticmethod
@@ -490,6 +493,162 @@ class Service:
                 {t.source for t in uses}
         return body
 
+    # --- context ----------------------------------------------------------------------------
+
+    def _b_context(self, symbol: str, token_budget: int = 4000) -> Body:
+        def body(nav: Navigator):
+            sym, note = self._resolve(nav, symbol)
+            short = S.short(sym)
+            d = nav.definition(sym)
+            if d is None:
+                ctx = self._external_context(nav, sym, short)
+            elif S.is_type(sym):
+                ctx = C.Context("type", C.head_of(nav, d))
+                for sec in (C.members_section(nav, d, short),
+                            C.subtypes_section(nav, sym, short)):
+                    if sec is not None:
+                        ctx.sections.append(sec)
+                refs = _drop_imports(nav, nav.references(sym)[0])
+                users = C.users_section(refs, short)
+                if users is not None:
+                    ctx.sections.append(users)
+                ctx.sections.append(self._tests_section(nav, sym, refs))
+            elif S.kind_of(sym) == "term":
+                ctx = C.Context("field", C.head_of(nav, d))
+                secs, refs, accessors = C.field_sections(nav, d, short)
+                ctx.sections += secs
+                ctx.sections.append(self._tests_section(nav, sym, refs))
+                ctx.hints.append(self._by_name_hint(nav, sym, refs, short))
+                ctx.sources |= {r.location.source for r in refs}
+            else:
+                ctx = C.Context("method", C.head_of(nav, d))
+                callers, srcs, refs = C.callers_section(nav, sym, short)
+                if not callers.lines:
+                    ctx.hints.append(callers.title)
+                for sec in (C.body_section(nav, d, short),
+                            C.overridden_by_section(nav, sym, short), callers,
+                            C.callees_section(nav, sym, short),
+                            self._tests_section(nav, sym, refs)):
+                    if sec is not None:
+                        ctx.sections.append(sec)
+                ctx.sources |= srcs
+                n = C.overload_count(nav, d)
+                if n > 1:
+                    ctx.hints.append(f"{n} overloads → overloads({short})")
+                if re.match(r"(get|set|is|has)[A-Z]", S.name_of(sym)):
+                    ctx.hints.append(self._by_name_hint(nav, sym, refs, short))
+                ctx.hints.append(self._impact_hint(nav, sym, short))
+            if d is not None:
+                ctx.sources.add(d.location.source)
+            ctx.hints = [h for h in ctx.hints if h]
+            ctx.sections = [s for s in ctx.sections if s is not None]
+            return note + C.fit(ctx, token_budget), ctx.sources
+        return body
+
+    def _external_context(self, nav: Navigator, sym: str, short: str) -> C.Context:
+        lib = self._library(sym, nav.ws.root)
+        ctx = C.Context("external", [sym])
+        if lib is None:
+            ctx.head.append("external (JDK or a dependency): no sources jar found for it")
+        else:
+            m = lib.member
+            line = m.line if m else lib.body[0]
+            ctx.head += [f"external — {lib.lib.coordinates}",
+                         f"source: {lib.lib.jar}!/{lib.lib.entry}:{line}"]
+            if getattr(lib, "note", ""):
+                ctx.head.append(f"note: {lib.note}")
+            if m is not None:
+                ctx.head += [f"in: {render._decl(lib.type_declaration)}",
+                             f"{m.kind}: {render._decl(m.declaration)}"]
+                if len(lib.overloads) > 1:
+                    ctx.hints.append(f"{len(lib.overloads)} overloads → overloads({short})")
+            else:
+                ctx.head.append(render._decl(lib.type_declaration))
+            doc = (m.javadoc if m is not None else lib.type_javadoc).strip()
+            if doc:
+                if len(doc) > C.JAVADOC_CHARS:
+                    doc = doc[:C.JAVADOC_CHARS].rstrip() + " …"
+                ctx.head += [""] + doc.splitlines()
+            first, last = lib.body
+            if m is not None and last - first < 60:
+                width = len(str(last))
+                ctx.sections.append(C.Section(
+                    "body", "body:", [f"{first + k:>{width}}  {t.rstrip()[:C.LINE_CHARS]}"
+                                      for k, t in enumerate(lib.source.lines(first, last))],
+                    f"source({short})", C.BODY_TAIL))
+        if S.is_type(sym):
+            refs = _drop_imports(nav, nav.references(sym)[0])
+            users = C.users_section(refs, short)
+            if users is not None:
+                ctx.sections.append(users)
+                users.name = "callers"  # its share of the budget
+        else:
+            callers, srcs, refs = C.callers_section(nav, sym, short)
+            if not callers.lines:
+                ctx.hints.append(callers.title)
+            ctx.sections.append(callers)
+            ctx.sources |= srcs
+        ctx.sections.append(self._tests_section(nav, sym, refs))
+        return ctx
+
+    def _tests_section(self, nav: Navigator, sym: str, refs: list) -> C.Section | None:
+        uses = X.tests_using(nav, sym, refs)
+        if not uses:
+            return None
+        gradle = "./gradlew" if os.path.exists(os.path.join(nav.ws.root, "gradlew")) \
+            else "gradle"
+        lines = render.tests(sym, uses, X.test_task, gradle,
+                             self.settings(nav.ws.root).tests_filter).splitlines()[1:]
+        run = next((k for k, x in enumerate(lines) if x.startswith("run them")), len(lines))
+        n = f"1 class uses" if len(uses) == 1 else f"{len(uses)} classes use"
+        return C.Section("tests", f"tests ({n} it directly):", lines,
+                         f"tests({S.short(sym)})", len(lines) - run)
+
+    def _by_name_hint(self, nav: Navigator, sym: str, refs: list, short: str) -> str:
+        names = X.property_names(sym)
+        if not names:
+            return ""
+        exclude = {(r.location.source, r.location.line) for r in refs}
+        hits = X.uses_by_name(nav.ws.root, names, self.settings(nav.ws.root).by_name_globs,
+                              exclude)
+        if not hits:
+            return ""
+        n = f"{len(hits)}+" if len(hits) >= 200 else str(len(hits))
+        return (f"{n} possible uses by name ({', '.join(names)}) in strings and other files "
+                f"→ references({short}, by_name=True)")
+
+    def _impact_hint(self, nav: Navigator, sym: str, short: str) -> str:
+        """Only from an auxiliary index that already exists and is (nearly) up to date: context
+        never builds it."""
+        try:
+            ix = Index(nav.ws, self.cache_dir, self.index_external, self.build_workers)
+            if not os.path.exists(ix.path):
+                return (f"impact needs the auxiliary index (built on first use, ~20 s on a "
+                        f"large project) → impact({short})")
+            behind = ix.pending()
+            if behind > C.IMPACT_MAX_BEHIND:
+                return (f"impact: the auxiliary index is {behind} shards behind → "
+                        f"impact({short}) updates it")
+            if behind:
+                ix.update()
+            g = Graph(ix)
+            try:
+                nodes, truncated = g.impact(sym, 3, True)
+            finally:
+                g.close()
+        except (CacheError, IndexError_, sqlite3.Error, OSError):
+            return ""
+        if not nodes:
+            return "impact (depth 3): nothing in this project reaches it"
+        by_module: dict[str, int] = {}
+        for n in nodes:
+            by_module[n.module or "(root)"] = by_module.get(n.module or "(root)", 0) + 1
+        top = sorted(by_module.items(), key=lambda kv: -kv[1])[:6]
+        tests = sum(1 for n in nodes if n.test)
+        return (f"impact (depth 3): {len(nodes)} definitions ({tests} in tests"
+                + ("; truncated" if truncated else "") + "); "
+                + ", ".join(f"{m} {c}" for m, c in top) + f" → impact({short})")
+
     # --- v2: queries over the auxiliary index -----------------------------------------------
 
     @contextlib.contextmanager
@@ -720,6 +879,10 @@ class Service:
         return self._run(project_root, self._b_callees(symbol, include_fields, include_types,
                                                        offset, limit))
 
+    def context(self, symbol: str, project_root: str | None = None,
+                token_budget: int = 4000) -> str:
+        return self._run(project_root, self._b_context(symbol, token_budget), foot_first=True)
+
     def source(self, symbol: str, project_root: str | None = None, max_lines: int = 200) -> str:
         return self._run(project_root, self._b_source(symbol, max_lines))
 
@@ -802,6 +965,7 @@ class Service:
         "tests": "_b_tests", "index_status": "_b_index_status",
         "impact": "_b_impact", "path": "_b_path", "changed": "_b_changed", "deps": "_b_deps",
         "dead_code": "_b_dead_code", "census": "_b_census", "cache_status": "_b_cache_status",
+        "context": "_b_context",
     }
 
     def batch(self, queries: list[dict[str, Any]], project_root: str | None = None) -> str:

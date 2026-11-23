@@ -131,6 +131,7 @@ sessions are closed.
 | Tool | What it answers | Like |
 |---|---|---|
 | `setup` | how this project produces shards, whether they are fresh, the steps to enable them | — |
+| `context(symbol, token_budget)` | start here before changing a symbol: definition and body, overrides, callers with the call lines, callees, tests (a type: members, subtypes, users; a field: accessors, writers, readers), trimmed to a budget; each cut section names the tool for the rest | — |
 | `find_symbols(name, match)` | definitions by name or part of it (exact, prefix, contains, camel humps; case-insensitive) | workspace/symbol |
 | `references(symbol, exclude_imports, by_name)` | every use, grouped by file, with the line of code and the enclosing method (imports left out for types; large results open with a summary); optionally possible uses by name in strings | findReferences |
 | `definition(symbol)` | location, kind, signature, javadoc, what it overrides or extends | definition + hover |

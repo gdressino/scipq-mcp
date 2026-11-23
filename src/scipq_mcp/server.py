@@ -28,7 +28,8 @@ members of other classes and text in comments; these tools do not, and they answ
 under a second with no startup. Use grep for text (string literals, comments, logs, non-Java
 files) and for code edited since the last compilation. If an LSP/IDE tool is also available,
 prefer these unless you need uncompiled code. find_symbols finds a symbol from part of its
-name.
+name. Before changing a symbol, start with `context`: definition, body, callers, callees,
+overrides and tests in one answer, trimmed to a token budget.
 
 FIRST USE: the tools need the shards. If a tool answers that there are no SCIP shards, call
 `setup`: it inspects the build (Gradle/Maven) and returns the exact steps and the init script
@@ -81,7 +82,8 @@ def _new_server(instructions: str) -> Any:
         return _Server("scipq", instructions=instructions)
 
 
-CORE_TOOLS = {"setup", "find_symbols", "references", "definition", "source", "implementations",
+CORE_TOOLS = {"setup", "context", "find_symbols", "references", "definition", "source",
+              "implementations",
               "supertypes", "members", "callers", "callees", "outline", "tests", "index_status",
               "batch"}
 
@@ -177,6 +179,20 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         JDK and library symbols come from the JDK's src.zip and the -sources.jar files in the
         Gradle/Maven caches, saying which version."""
         return service.definition(symbol, project_root)
+
+    @tool
+    def context(symbol: Symbol, project_root: ProjectRoot = "",
+                token_budget: Annotated[int, Field(
+                    ge=250, le=32000, description="Approximate size of the answer in tokens; "
+                                                  "a small symbol gets a smaller answer")]
+                = 4000) -> str:
+        """Start here before changing a symbol: one answer with what you would otherwise ask
+        for in 5-6 calls. A method: definition, body, what overrides it, callers (call lines),
+        callees and tests. A type: declaration, members, subtypes, files using it, tests. A
+        field: accessors (Lombok too), writers and readers, tests. Library and JDK symbols:
+        their declaration and javadoc, and their uses here. Trimmed to the budget; each cut
+        section names the tool that shows all of it."""
+        return service.context(symbol, project_root, token_budget)
 
     @tool
     def source(symbol: Symbol, project_root: ProjectRoot = "",

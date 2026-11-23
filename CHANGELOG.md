@@ -5,6 +5,19 @@ version and date when releasing.
 
 ## Unreleased
 
+### Added
+
+- `context(symbol, token_budget=4000)`: what an agent needs before changing a symbol, in one
+  answer trimmed to a budget (≈4 characters per token) and never padded. A method: definition
+  and body (long ones keep their start and end), what overrides it, callers with the call
+  line (tests last), callees with their signatures, the tests that use it with the command to
+  run them, a count of overloads, possible uses by name for accessors, and an impact summary
+  when the auxiliary index already exists (context never builds it). A type: declaration,
+  members, subtypes, the files using it, tests. A field: accessors (Lombok included), writers
+  and readers (told apart by the line's text), possible uses by name, tests. Library and JDK
+  symbols: declaration and javadoc from the sources jar, and their uses in the project.
+  Freshness warnings come first. Part of `--tools core`.
+
 ### Changed
 
 - Library sources: jars stay open and parsed files are kept in memory for the life of the
