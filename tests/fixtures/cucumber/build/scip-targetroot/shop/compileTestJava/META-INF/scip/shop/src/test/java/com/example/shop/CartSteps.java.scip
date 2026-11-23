@@ -1,11 +1,13 @@
-Ã
+“
 2shop/src/test/java/com/example/shop/CartSteps.javaio/B	io/cucumber/B
 io/cucumber/java/Bio/cucumber/java/en/B$io/cucumber/java/en/Given#B io/B	io/cucumber/B
 io/cucumber/java/Bio/cucumber/java/en/B#io/cucumber/java/en/Then#Bio/B	io/cucumber/B
-io/cucumber/java/Bio/cucumber/java/en/B#io/cucumber/java/en/When#B/com/example/shop/CartSteps#BZ 2&com/example/shop/CartSteps#`<init>`().B com/example/shop/Cart#B4 com/example/shop/CartSteps#cart.BR$io/cucumber/java/en/Given#B
+io/cucumber/java/Bio/cucumber/java/en/B#io/cucumber/java/en/When#B/com/example/shop/CartSteps#BZ' 2&com/example/shop/CartSteps#`<init>`().B com/example/shop/Cart#B4 com/example/shop/CartSteps#cart.BR$io/cucumber/java/en/Given#B
 
 ?)com/example/shop/CartSteps#anEmptyCart().BZ
- java/lang/String#B"local 0B#'R'* com/example/shop/CartSteps#cart.B+!com/example/shop/Cart#`<init>`().B#io/cucumber/java/en/When#B	8"com/example/shop/CartSteps#iAdd().BZ local 1BR* com/example/shop/CartSteps#cart.B&com/example/shop/Cart#add().Blocal 1B#io/cucumber/java/en/Then#B	@*com/example/shop/CartSteps#theCartHolds().BZ local 2B!&R&* com/example/shop/CartSteps#cart.B'com/example/shop/Cart#size().Blocal 2B 0&java/lang/AssertionError#`<init>`(+2).B$* com/example/shop/CartSteps#cart.B/3'com/example/shop/Cart#size().B48#io/cucumber/java/en/Then#B	:$com/example/shop/CartSteps#unused().BZ {
+ java/lang/String#B"local 0B#'R'* com/example/shop/CartSteps#cart.B+!com/example/shop/Cart#`<init>`().B#io/cucumber/java/en/When#B	8"com/example/shop/CartSteps#iAdd().BZ local 1BR* com/example/shop/CartSteps#cart.B&com/example/shop/Cart#add().Blocal 1B#io/cucumber/java/en/Then#B	@*com/example/shop/CartSteps#theCartHolds().BZ local 2B!&R&* com/example/shop/CartSteps#cart.B'com/example/shop/Cart#size().Blocal 2B 0&java/lang/AssertionError#`<init>`(+2).B$* com/example/shop/CartSteps#cart.B/3'com/example/shop/Cart#size().B48$io/cucumber/java/en/Given#B
+E/com/example/shop/CartSteps#theBackgroundFrom().B!Z java/lang/String#B"(local 3B)-R"-$io/cucumber/java/en/Given#B 
+;%com/example/shop/CartSteps#aCoupon().B!Z " java/lang/String#B!local 4B!#R!##io/cucumber/java/en/Then#B$	:$com/example/shop/CartSteps#unused().B%Z$& {
 com/example/shop/CartSteps#/Step definitions (glue) for the cart features. (2	CartSteps:"java*public class CartStepsN
 &com/example/shop/CartSteps#`<init>`().(	2<init>:"java*public CartSteps()E
  com/example/shop/CartSteps#cart.(2cart:"java*private Cart cartè
@@ -17,6 +19,12 @@ public void iAdd(int count)G
 local 12count:"java*	int countB"com/example/shop/CartSteps#iAdd().ê
 *com/example/shop/CartSteps#theCartHolds().(2theCartHolds:R"java*J@Then("^the cart holds (\d+) items?$")
 public void theCartHolds(int count)O
-local 22count:"java*	int countB*com/example/shop/CartSteps#theCartHolds().m
+local 22count:"java*	int countB*com/example/shop/CartSteps#theCartHolds().°
+/com/example/shop/CartSteps#theBackgroundFrom().(2theBackgroundFrom:Y"java*Q@Given("the background from {string}")
+public void theBackgroundFrom(String path)U
+local 32path:"java*String pathB/com/example/shop/CartSteps#theBackgroundFrom().x
+%com/example/shop/CartSteps#aCoupon().(2aCoupon:D"java*<@Given("a coupon {string}")
+public void aCoupon(String code)K
+local 42code:"java*String codeB%com/example/shop/CartSteps#aCoupon().m
 $com/example/shop/CartSteps#unused().(2unused:;"java*3@Then("nobody uses this step")
 public void unused()"java

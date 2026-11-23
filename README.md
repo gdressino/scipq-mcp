@@ -266,14 +266,24 @@ Cucumber: `tests(transitive=true)` and `changed` list the scenarios affected (th
 step definitions reached, or changed `.feature` lines) and a command to run them, from
 `[cucumber]`: `run` with `{names}` (an anchored regex of the scenario names, `\Q…\E` each) or
 `{features}` (`path:line,…`), and `run_features` with `{tags}` (one tag of its own per feature),
-used when whole features are affected. Scenarios carrying one of `exclude_tags` (default
-`@pending`, `@ignore`, `@wip`, `@skip`) are reported: the build leaves them out.
+used when whole features are affected, and `run_all` (the whole suite) when there are too many
+scenarios to name. Scenarios carrying one of `exclude_tags` (default `@pending`, `@ignore`,
+`@wip`, `@skip`) are reported: the build leaves them out. `include_steps` lists steps that load
+another feature's Background (the quoted argument is its path, resolved against the resource
+roots or by suffix): the included steps count where the including step runs, transitively, and a
+changed line of the included file selects those scenarios.
 
 ```toml
 [cucumber]
 run = "./gradlew :app:cucumber -Pname='{names}'"
 run_features = "./gradlew :app:cucumber -Ptags='{tags}'"
+run_all = "./gradlew :app:cucumber"
+include_steps = ["the background from {string}"]
 ```
+
+A name filter matches outline rows by their name with the Examples values filled in, while
+JUnit and Gradle reports list them under the template name (with `<placeholders>`): that is
+expected. Scenarios elsewhere with the same name also run; the output says how many.
 
 Everyone on the team also needs the shards: the init script from `scipq-mcp gradle-init` in
 `~/.gradle/init.d/` (or the Maven snippet from `setup`), then a compilation.

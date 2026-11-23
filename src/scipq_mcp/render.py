@@ -1084,41 +1084,93 @@ def _cut(rows: list[str], limit: int) -> list[str]:
     return rows[:limit] + ([f"    … and {len(rows) - limit} more"] if len(rows) > limit else [])
 
 
-def steps_check(glues, feats, match, offset: int, limit: int) -> str:
+def _step_count(steps) -> str:
+    """"N steps", and the distinct lines when an outline's rows make them differ (grep counts
+    lines; each Examples row is a step of its own here)."""
+    lines = len({(s.source, s.line) for s in steps})
+    n = len(steps)
+    return f"{n} steps" + (f" ({lines} lines: an outline's steps count once per Examples row)"
+                           if lines != n else "")
+
+
+def _distinct(steps) -> list:
+    """Steps once per (file, line, text): an outline step without placeholders is one."""
+    seen, out = set(), []
+    for s in steps:
+        if (s.source, s.line, s.text) not in seen:
+            seen.add((s.source, s.line, s.text))
+            out.append(s)
+    return out
+
+
+def steps_check(glues, suite, match, exclude_tags, offset: int, limit: int) -> str:
+    feats = suite.feats
     steps = [(f, s) for f in feats for s in f.steps]
-    undefined, ambiguous, used = [], [], set()
+    undefined, left_out, nowhere, ambiguous, used = [], [], [], [], set()
+    excluded = set(exclude_tags)
     for f, s in steps:
         m = match(s)
         used |= {id(x) for x in m}
+        row = f"    {s.source}:{s.line}  {s.keyword} {s.text}".rstrip()
         if not m:
-            undefined.append(f"    {s.source}:{s.line}  {s.keyword} {s.text}".rstrip())
+            runs = suite.runs_in(s)
+            tags = [set(suite.by_source[src].scenarios[k].tags) for src, idx in runs.items()
+                    for k in idx]
+            if not tags:
+                nowhere.append(row)
+            elif all(t & excluded for t in tags):
+                left_out.append(row + "  (" + " ".join(sorted(set().union(*tags) & excluded))
+                                + ")")
+            else:
+                undefined.append(row)
         elif len(m) > 1:
-            ambiguous.append(f"    {s.source}:{s.line}  {s.keyword} {s.text}  → "
-                             + ", ".join(S.short(x.symbol) for x in m))
+            ambiguous.append(row + "  → " + ", ".join(S.short(x.symbol) for x in m))
     unknown = [f"    {_glue_label(x)}  @{x.annotation}" + (f"({x.text!r})" if x.text else
                                                              "(not made of string literals)")
                for x in glues if x.kind == "unknown"]
     unused = [f"    {_glue_label(x)}  @{x.annotation}({x.text!r})" for x in glues
               if x.regex is not None and id(x) not in used]
+    missing = [f"    {i.step.source}:{i.step.line}  {i.step.keyword} {i.step.text}".rstrip()
+               for i in suite.missing()]
     kinds = {k: sum(1 for x in glues if x.kind == k) for k in ("expression", "regex", "unknown")}
     lines = [f"cucumber: {len(glues)} step definitions ({kinds['expression']} expressions, "
              f"{kinds['regex']} regexes" + (f", {kinds['unknown']} not understood"
                                             if kinds["unknown"] else "")
              + f"); {len(feats)} features, {sum(len(f.scenarios) for f in feats)} scenarios, "
-             f"{len(steps)} steps (docs/, hidden and ignored files left out)"]
-    for title, rows in (("undefined steps (no step definition matches)", undefined),
-                        ("ambiguous steps (several match)", ambiguous),
-                        ("step definitions not understood (pattern)", unknown),
-                        ("step definitions no step uses", unused)):
-        lines.append(f"  {title}: {len(rows) or 'none'}")
-        lines += _cut(rows[offset:], limit)
+             f"{_step_count(_distinct(s for _f, s in steps))} (docs/, hidden and ignored files "
+             "left out)"]
+    if suite.includes:
+        lines.append(f"  {len(suite.includes)} steps include another feature's Background "
+                     "([cucumber] include_steps)")
+    sections = [("undefined steps (no step definition matches)", undefined, True),
+                ("undefined steps only in scenarios the build leaves out ([cucumber] "
+                 "exclude_tags)", left_out, False),
+                ("undefined steps that run in no scenario (a Background with no scenario that "
+                 "no include step loads, e.g. a fixture read by a test)", nowhere, False),
+                ("ambiguous steps (several match)", ambiguous, True),
+                ("include steps naming a .feature that is not there", missing, False),
+                ("step definitions not understood (pattern)", unknown, True),
+                ("step definitions no step uses", unused, True)]
+    for title, rows, always in sections:
+        if rows or always:
+            lines.append(f"  {title}: {len(rows) or 'none'}")
+            lines += _cut(rows[offset:], limit)
+    if suite.cycles:
+        lines.append("  WARNING: features that include themselves (a cycle): "
+                     + ", ".join(sorted(set(suite.cycles))[:5]))
     return "\n".join(lines)
 
 
-def feature_steps(feat, match, offset: int, limit: int) -> str:
+def feature_steps(feat, match, offset: int, limit: int, suite=None) -> str:
     lines = [f"{feat.name or '(no name)'} — {feat.source} ({feat.language}, "
              f"{len(feat.scenarios)} scenarios" + (f", tags {' '.join(feat.tags)}" if feat.tags
                                                    else "") + ")"]
+    if suite is not None and suite.included(feat.source):
+        reach = suite.reach(feat.source)
+        lines.append(f"its Background is included by other features: it runs in "
+                     f"{sum(len(v) for v in reach.values())} scenarios of {len(reach)} features")
+    includes = {} if suite is None else {(i.step.line, i.step.text): i for i in suite.includes
+                                         if i.step.source == feat.source}
     rows, seen = [], set()
     for s in feat.steps:
         key = (s.line, s.text)
@@ -1128,6 +1180,10 @@ def feature_steps(feat, match, offset: int, limit: int) -> str:
         m = match(s)
         target = ("UNDEFINED" if not m else _glue_label(m[0]) if len(m) == 1 else
                   "AMBIGUOUS: " + ", ".join(S.short(x.symbol) for x in m))
+        inc = includes.get(key)
+        if inc is not None:
+            target += (f"; includes {inc.target}" if inc.target else
+                       f"; includes {inc.path!r}: NOT FOUND")
         rows.append(f"  {s.line:>5}  {s.keyword} {s.text}  → {target}")
     shown, suffix = page(rows, offset, limit)
     return "\n".join(lines + ([f"steps{suffix}:"] if suffix else []) + list(shown))
@@ -1136,7 +1192,7 @@ def feature_steps(feat, match, offset: int, limit: int) -> str:
 def _run_block(run) -> list[str]:
     if not run:
         return []
-    affected, by_source, cmds, excluded = run
+    affected, by_source, cmds, excluded, notes = run
     n = sum(len(v) for v in affected.values())
     lines = [f"scenarios to run: {n} in {len(affected)} features"]
     shown = 0
@@ -1152,6 +1208,7 @@ def _run_block(run) -> list[str]:
         lines.append(f"  … and {n - shown} more")
     lines.append("run them (scipq-mcp does not):")
     lines += [f"  {c}" for c in cmds]
+    lines += [f"note: {x}" for x in notes]
     if excluded:
         lines.append(f"WARNING: {len(excluded)} of them carry a tag the build leaves out "
                      "([cucumber] exclude_tags), so they will not run: " + "; ".join(excluded[:5])
@@ -1159,28 +1216,31 @@ def _run_block(run) -> list[str]:
     return lines
 
 
-def glue_uses(glues, uses, run, offset: int, limit: int) -> str:
+def glue_uses(glues, uses, run, offset: int, limit: int, suite=None) -> str:
     x = glues[0]
     lines = [_glue_label(x)]
     for g in glues:
         lines.append(f"  @{g.annotation}({g.text!r})  ({g.kind}"
                      + (f": {g.regex.pattern[:120]}" if g.regex is not None else "") + ")")
-    rows, seen = [], set()
+    rows, seen, distinct = [], set(), []
     for f, s in uses:
         key = (s.source, s.line, s.text)
         if key in seen:
             continue
         seen.add(key)
+        distinct.append(s)
         sc = [f.scenarios[k].name for k in s.pickles[:1]]
-        rows.append(f"  {s.source}:{s.line}  {s.keyword} {s.text}"
-                    + (f"  [{sc[0]}]" if sc else ""))
+        where = (f"  [{sc[0]}]" if sc else
+                 "  [a Background other features include]" if suite is not None
+                 and suite.exported(s) else "")
+        rows.append(f"  {s.source}:{s.line}  {s.keyword} {s.text}{where}")
     if not rows:
         lines.append("no step in the project's .feature files uses it (docs/, hidden and "
                      "ignored files left out)")
         return "\n".join(lines)
     shown, suffix = page(rows, offset, limit)
-    lines.append(f"used by {len(rows)} steps in {len({f.source for f, _s in uses})} "
-                 f"features{suffix}:")
+    lines.append(f"used by {_step_count(distinct)} in "
+                 f"{len({f.source for f, _s in uses})} features{suffix}:")
     lines += list(shown)
     return "\n".join(lines + _run_block(run))
 

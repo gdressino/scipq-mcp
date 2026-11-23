@@ -7,7 +7,9 @@ Glue methods carry an annotation from a language subpackage of `io.cucumber.java
 become a Python regex here. Feature files are read with Gherkin's keywords for the language they
 declare (`# language: es`; English by default): a step's keyword is removed exactly. Each
 Examples row of an outline is a scenario of its own (a pickle), and a Background's steps belong
-to every scenario of its feature (or of its Rule).
+to every scenario of its feature (or of its Rule). Steps that load another feature's Background
+(`[cucumber] include_steps`, e.g. `the background from {string}`) make the included steps run
+where the including step runs, transitively (`Suite`).
 """
 
 from __future__ import annotations
@@ -85,6 +87,7 @@ class Step:
     keyword: str              # "" when the language is unknown (see `match`)
     text: str                 # without its keyword
     pickles: list[int] = field(default_factory=list)  # Feature.scenarios it runs in
+    background: bool = False  # in a Background
 
 
 @dataclass
@@ -424,6 +427,7 @@ def parse_feature(text: str, source: str) -> Feature | None:
                 current.pickles = [len(feat.scenarios) - 1]
                 feat.steps.append(current)
             else:
+                current.background = True
                 backgrounds[-1][1].append(current)
                 feat.steps.append(current)
     # A Background's steps run in every scenario of its scope (the feature, or its Rule).
@@ -431,7 +435,7 @@ def parse_feature(text: str, source: str) -> Feature | None:
         idx = [k for k, sc in enumerate(feat.scenarios) if not bg_rule or sc.rule == bg_rule]
         for st in bg_steps:
             st.pickles = idx
-    return feat if feat.name or feat.scenarios else None
+    return feat if feat.name or feat.scenarios or feat.steps else None
 
 
 def features(root: str) -> list[Feature]:
@@ -445,6 +449,118 @@ def features(root: str) -> list[Feature]:
         if f is not None:
             out.append(f)
     return out
+
+
+@dataclass
+class Include:
+    """A step that loads another feature's Background (`[cucumber] include_steps`)."""
+    step: Step
+    path: str                 # as written in the step
+    target: str | None        # the included feature's source; None when not found
+
+
+def _quoted(text: str) -> str | None:
+    m = re.search(r'"([^"]*)"|\'([^\']*)\'', text)
+    return None if m is None else m.group(1) if m.group(1) is not None else m.group(2)
+
+
+class Suite:
+    """The features of a project and the steps that include other features' Backgrounds.
+
+    An included feature's exported steps (its Background's, or all of them when it has none)
+    run wherever the including step runs: in every pickle of the including feature when the
+    include is in its Background, in one pickle when it is in a scenario; transitively."""
+
+    def __init__(self, feats: list[Feature], include_steps: list[str] | tuple = ()):
+        self.feats = feats
+        self.by_source = {f.source: f for f in feats}
+        self.includes: list[Include] = []
+        self.cycles: list[str] = []
+        patterns = [rx for _k, rx in (compile_glue(t, {}) for t in include_steps) if rx]
+        if patterns:
+            for f in feats:
+                for st in f.steps:   # an outline's step once per row: each has its pickle
+                    if not any(rx.fullmatch(st.text) for rx in patterns):
+                        continue
+                    path = _quoted(st.text)
+                    if path is not None:
+                        self.includes.append(Include(st, path, self._resolve(path, f.source)))
+        self._included_by: dict[str, list[Include]] = {}
+        for inc in self.includes:
+            if inc.target and inc.target != inc.step.source:
+                self._included_by.setdefault(inc.target, []).append(inc)
+        self._reach: dict[str, dict[str, set[int]]] = {}
+        self._visiting: set[str] = set()
+
+    def _resolve(self, path: str, origin: str) -> str | None:
+        p = re.sub(r"^(?:classpath:)?(?:\./)*/*", "", path.strip().replace("\\", "/"))
+        if not p:
+            return None
+        near = os.path.normpath(os.path.join(os.path.dirname(origin), p))
+        if near in self.by_source:
+            return near
+        found = [src for src in self.by_source if src == p or src.endswith("/" + p)]
+        if not found:
+            return None
+        # Several (one per module, say): the one sharing the longest prefix with the includer.
+        return max(found, key=lambda src: (len(os.path.commonprefix([src, origin])), src))
+
+    def missing(self) -> list[Include]:
+        """Include steps naming a feature that is not there (once per line and path)."""
+        out, seen = [], set()
+        for inc in self.includes:
+            key = (inc.step.source, inc.step.line, inc.path)
+            if inc.target is None and key not in seen:
+                seen.add(key)
+                out.append(inc)
+        return out
+
+    def included(self, source: str) -> bool:
+        return source in self._included_by
+
+    def exported(self, step: Step) -> bool:
+        f = self.by_source.get(step.source)
+        if f is None or not self.included(step.source):
+            return False
+        return step.background or not any(st.background for st in f.steps)
+
+    def reach(self, source: str) -> dict[str, set[int]]:
+        """{feature source: pickles} where `source`'s exported steps run."""
+        if source in self._reach:
+            return self._reach[source]
+        if source in self._visiting:
+            self.cycles.append(source)
+            return {}
+        self._visiting.add(source)
+        out: dict[str, set[int]] = {}
+        for inc in self._included_by.get(source, []):
+            for src, idx in self.runs_in(inc.step).items():
+                out.setdefault(src, set()).update(idx)
+        self._visiting.discard(source)
+        self._reach[source] = out
+        return out
+
+    def runs_in(self, step: Step) -> dict[str, set[int]]:
+        """{feature source: pickles} a step runs in, through includes as well."""
+        out = {step.source: set(step.pickles)} if step.pickles else {}
+        if self.exported(step):
+            for src, idx in self.reach(step.source).items():
+                out.setdefault(src, set()).update(idx)
+        return out
+
+    def at_lines(self, source: str, lines: set[int]) -> dict[str, set[int]]:
+        """{feature source: pickles} affected by these changed lines (1-based) of a feature:
+        its own (`pickles_at`) and, for a line outside its scenarios, where it is included."""
+        f = self.by_source.get(source)
+        if f is None:
+            return {}
+        out = {source: pickles_at(f, lines)}
+        if self.included(source):
+            first = min((sc.header for sc in f.scenarios), default=None)
+            if first is None or any(ln < first for ln in lines):
+                for src, idx in self.reach(source).items():
+                    out.setdefault(src, set()).update(idx)
+        return {k: v for k, v in out.items() if v}
 
 
 def matcher(glues: list[Glue]):
@@ -525,11 +641,13 @@ MAX_NAMED = 150  # scenarios a name filter lists at most
 
 
 def run_commands(affected: dict[str, set[int]], feats: list[Feature], run: str,
-                 run_features: str, gradle: str = "gradle") -> list[str]:
+                 run_features: str, gradle: str = "gradle", run_all: str = "",
+                 notes: list[str] | None = None) -> list[str]:
     """Commands to run the affected pickles ({feature source: pickle indexes}). When every
     affected feature is affected whole and has a tag of its own, `run_features` with {tags};
     otherwise `run` with {names} (an anchored regex of the scenario names) or {features}
-    (path:line of each)."""
+    (path:line of each); `run_all` (the whole suite) when there are too many to name. Notes
+    on what a name filter does beyond the affected pickles go to `notes`."""
     by_source = {f.source: f for f in feats}
     own = own_tags(feats)
     whole = all(len(idx) == len(by_source[src].scenarios) and src in own
@@ -542,7 +660,11 @@ def run_commands(affected: dict[str, set[int]], feats: list[Feature], run: str,
         if run_features and all(src in own for src in affected):
             tags = " or ".join(own[src] for src in sorted(affected))
             return [_fill(run_features, tags=tags) + f"   ({len(affected)} whole features)"]
-        return [f"{total} scenarios in {len(affected)} features: run the whole Cucumber suite"]
+        if run_all:
+            return [run_all + f"   (the whole suite: {total} scenarios in {len(affected)} "
+                              "features are affected)"]
+        return [f"{total} scenarios in {len(affected)} features: run the whole Cucumber suite "
+                "(or set [cucumber] run_all to print its command)"]
     names, locs = [], []
     for src, idx in sorted(affected.items()):
         for k in sorted(idx):
@@ -550,10 +672,33 @@ def run_commands(affected: dict[str, set[int]], feats: list[Feature], run: str,
             names.append(sc.name)
             locs.append(f"{src}:{sc.line}")
     if run:
+        if notes is not None and "{names}" in run:
+            notes += name_notes(affected, feats)
         return [_fill(run, names=name_filter(names), features=",".join(locs),
                       tags=" or ".join(own.get(s, "") for s in sorted(affected) if s in own))]
     return [f"{gradle} test -Dcucumber.features={','.join(locs)}   (the test task that runs "
             "Cucumber; or set [cucumber] run = \"… {names}\" / run_features = \"… {tags}\")"]
+
+
+def name_notes(affected: dict[str, set[int]], feats: list[Feature]) -> list[str]:
+    """What a {names} filter does that the list of affected scenarios does not show: other
+    scenarios with the same names also run; outline rows are named with their values."""
+    out = []
+    names = {f.scenarios[k].name for f in feats if f.source in affected
+             for k in affected[f.source]}
+    extra = [(f.source, sc) for f in feats for k, sc in enumerate(f.scenarios)
+             if sc.name in names and k not in affected.get(f.source, ())]
+    if extra:
+        shared = sorted({sc.name for _src, sc in extra})
+        out.append(f"the name filter also runs {len(extra)} other scenarios with the same names "
+                   f"(in {len({src for src, _sc in extra})} features), e.g. "
+                   + "; ".join(repr(n[:60]) for n in shared[:3]))
+    if any(f.scenarios[k].line != f.scenarios[k].header for f in feats
+           if f.source in affected for k in affected[f.source]):
+        out.append("outline rows are matched by their name with the Examples values filled in; "
+                   "JUnit and Gradle reports show the template name (with <placeholders>): that "
+                   "is expected, the filter is right")
+    return out
 
 
 def _fill(template: str, **values: str) -> str:

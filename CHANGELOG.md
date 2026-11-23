@@ -21,8 +21,16 @@ version and date when releasing.
 - `tests(transitive=true)` and `changed` list the Cucumber scenarios affected (glue reached,
   changed `.feature` lines) and how to run them: `[cucumber] run` with `{names}` /
   `{features}`, `run_features` with `{tags}` (whole features with a tag of their own); more
-  than 150 scenarios: whole features by tag, or the whole suite. Scenarios carrying an
-  `exclude_tags` tag are reported.
+  than 150 scenarios: whole features by tag, or the whole suite (`run_all`). Scenarios carrying
+  an `exclude_tags` tag are reported; a name filter's extra runs (scenarios elsewhere with the
+  same name) are noted, and so is the template name reports show for outline rows.
+- `[cucumber] include_steps`: steps that load another feature's Background (the quoted path,
+  resolved against the resource roots or by suffix). The included steps count where the
+  including step runs (every scenario for a Background, one for a scenario), transitively;
+  changed lines of an included file select those scenarios; a missing file is reported.
+- `steps(check=True)` lists apart the undefined steps that only occur in scenarios the build
+  leaves out and those that run in no scenario (a Background no include step loads), so the
+  first list is what needs fixing; step counts say how many distinct lines they are.
 
 ## 0.3.0 — 2026-11-22
 

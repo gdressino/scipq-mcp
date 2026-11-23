@@ -209,7 +209,9 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         """Cucumber-JVM. For a step definition: its expression and every feature step it runs,
         with the command to run those scenarios. For a .feature: each step and the method that
         runs it (undefined/ambiguous marked). For a step's text: the method(s) it runs. tests
-        (transitive) and changed also list the scenarios affected."""
+        (transitive) and changed also list the scenarios affected. A {names} filter matches
+        outline rows by their filled-in name; reports show the template name: keep the
+        filter as printed."""
         return service.steps(query, project_root, check, offset, limit)
 
     @tool

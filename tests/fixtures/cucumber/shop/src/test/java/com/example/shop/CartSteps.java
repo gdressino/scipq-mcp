@@ -25,6 +25,15 @@ public class CartSteps {
         }
     }
 
+    @Given("the background from {string}")
+    public void theBackgroundFrom(String path) {
+        // Runs the Background steps of another feature (see [cucumber] include_steps).
+    }
+
+    @Given("a coupon {string}")
+    public void aCoupon(String code) {
+    }
+
     @Then("nobody " + "uses this step")
     public void unused() {
     }

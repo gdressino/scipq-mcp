@@ -543,8 +543,10 @@ class Service:
                 return note + "no Cucumber step definitions or .feature files in this project", \
                     set()
             match = CU.matcher(glues)
+            suite = CU.Suite(feats, st.cucumber_include_steps)
             if check or not query:
-                return note + render.steps_check(glues, feats, match, offset, limit), set()
+                return note + render.steps_check(glues, suite, match, st.cucumber_exclude_tags,
+                                                 offset, limit), set()
             if query.endswith(".feature"):
                 src = nav._normalize_source(query)
                 feat = next((f for f in feats if f.source == src), None)
@@ -557,7 +559,8 @@ class Service:
                         raise QueryError(f"{query}: {e}") from e
                 if feat is None:
                     raise QueryError(f"{query}: no feature in it")
-                return note + render.feature_steps(feat, match, offset, limit), set()
+                return note + render.feature_steps(feat, match, offset, limit,
+                                                   suite), set()
             by_symbol: dict[str, list] = {}
             for x in glues:
                 by_symbol.setdefault(x.symbol, []).append(x)
@@ -575,10 +578,11 @@ class Service:
                     for s in f.steps:
                         if any(x.symbol == sym for x in match(s)):
                             uses.append((f, s))
-                            affected.setdefault(f.source, set()).update(s.pickles)
+                            for src, idx in suite.runs_in(s).items():
+                                affected.setdefault(src, set()).update(idx)
                 run = self._cucumber_run_lines(nav.ws.root, affected, feats, st)
-                return note + render.glue_uses(by_symbol[sym], uses, run, offset, limit), \
-                    {x.source for x in by_symbol[sym]}
+                return note + render.glue_uses(by_symbol[sym], uses, run, offset, limit,
+                                               suite), {x.source for x in by_symbol[sym]}
             found: dict[str, object] = {}
             for s in CU.text_steps(query):
                 for x in match(s):
@@ -592,8 +596,9 @@ class Service:
         if not affected:
             return []
         gradle = "./gradlew" if os.path.exists(os.path.join(root, "gradlew")) else "gradle"
+        notes: list[str] = []
         cmds = CU.run_commands(affected, feats, st.cucumber_run, st.cucumber_run_features,
-                               gradle)
+                               gradle, st.cucumber_run_all, notes)
         by_source = {f.source: f for f in feats}
         excluded = []
         for src, idx in sorted(affected.items()):
@@ -602,7 +607,7 @@ class Service:
                 bad = [t for t in sc.tags if t in st.cucumber_exclude_tags]
                 if bad:
                     excluded.append(f"{src}:{sc.line} {sc.name} ({' '.join(bad)})")
-        return [affected, by_source, cmds, excluded]
+        return [affected, by_source, cmds, excluded, notes]
 
     def _cucumber_affected(self, nav: Navigator, g, st, glue_symbols: set[str],
                            changed_features: dict[str, list] | None = None) -> str:
@@ -616,19 +621,21 @@ class Service:
             return ""
         feats = CU.features(nav.ws.root)
         match = CU.matcher(glues)
+        suite = CU.Suite(feats, st.cucumber_include_steps)
         reached = glue_symbols & {x.symbol for x in glues}
         affected: dict[str, set[int]] = {}
+
+        def add(found: dict[str, set[int]]) -> None:
+            for src, idx in found.items():
+                affected.setdefault(src, set()).update(idx)
         if reached:
             for f in feats:
                 for s in f.steps:
                     if reached & {x.symbol for x in match(s)}:
-                        affected.setdefault(f.source, set()).update(s.pickles)
+                        add(suite.runs_in(s))
         for src, ranges in (changed_features or {}).items():
-            f = next((x for x in feats if x.source == src), None)
-            if f is None:
-                continue
             lines = {ln for start, count in ranges for ln in range(start, start + max(count, 1))}
-            affected.setdefault(src, set()).update(CU.pickles_at(f, lines))
+            add(suite.at_lines(src, lines))
         run = self._cucumber_run_lines(nav.ws.root, affected, feats, st)
         return render.cucumber_affected(run, len(reached)) if run else ""
 

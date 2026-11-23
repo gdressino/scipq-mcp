@@ -97,6 +97,10 @@ class Settings:
     cucumber_run_features: str = ""
     cucumber_exclude_tags: list[str] = field(default_factory=lambda: ["@pending", "@ignore",
                                                                       "@wip", "@skip"])
+    cucumber_run_all: str = ""           # the whole suite, when too many scenarios to name
+    # Step texts (Cucumber Expressions) whose quoted argument names another .feature whose
+    # Background they load: its steps run where the including step does.
+    cucumber_include_steps: list[str] = field(default_factory=list)
     concept_attributes: list[str] = field(default_factory=list)
     tests_filter: str = ""               # template: {module} {task} {fqcn} {simple} {classes}
     tests_filter_from: str = ""          # where it came from
@@ -457,6 +461,11 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
         s.cucumber_run_features = cu["run_features"]
     if isinstance(cu.get("exclude_tags"), list):
         s.cucumber_exclude_tags = [t for t in cu["exclude_tags"] if isinstance(t, str)]
+    if isinstance(cu.get("run_all"), str) and cu["run_all"]:
+        s.cucumber_run_all = cu["run_all"]
+    for t in cu.get("include_steps", []) if isinstance(cu.get("include_steps"), list) else []:
+        if isinstance(t, str) and t and t not in s.cucumber_include_steps:
+            s.cucumber_include_steps.append(t)
     t = data.get("tests", {})
     if t.get("filter"):
         s.tests_filter = t["filter"]
