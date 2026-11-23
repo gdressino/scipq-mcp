@@ -153,3 +153,16 @@ def test_setup_shows_the_configuration(sample_copy, tmp_path):
         fh.write('profiles = ["junit"]\n')
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).setup(include_template=False)
     assert "scipq configuration:" in out and "profiles: junit — .scipq.toml" in out
+
+
+def test_dead_code_exclude(sample_copy, tmp_path):
+    with open(os.path.join(sample_copy, ".scipq.toml"), "w") as fh:
+        fh.write('[dead_code]\nexclude = ["core/src/main/java/com/example/model/Point*", '
+                 '"/abs/*"]\n')
+    st = CFG.settings_for(sample_copy, home=str(tmp_path / "home"))
+    assert st.dead_code_exclude == ["core/src/main/java/com/example/model/Point*"]
+    assert any("dead_code.exclude" in w and "/abs/*" in w for w in st.warnings)
+    svc = Service(sample_copy, cache_dir=str(tmp_path / "c"))
+    out = svc.dead_code()
+    assert "Point#scaled()" not in out
+    assert "unreferenced definitions in [dead_code] exclude paths left out" in out

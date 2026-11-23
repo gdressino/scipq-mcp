@@ -5,6 +5,18 @@ version and date when releasing.
 
 ## Unreleased
 
+### Added
+
+- `[dead_code] exclude` (in `.scipq.toml` or a `[[project]]` entry): path globs whose
+  definitions are never dead-code candidates, e.g. generated web-service clients; the answer
+  says how many were left out.
+- `init-config` proposes generated directories for `[dead_code] exclude` too, and finds them
+  at the right level: the highest directory where at least 90% of the files carry a
+  "generated" header, so a module mixing its own code with generated packages gets only those
+  packages. Name-based detection (`*-out`, `generated`, `gen`, `dist`) applies only to
+  directories without Java sources, and no longer to `reports` (report templates are where
+  names are used as text).
+
 ### Fixed
 
 - Library sources (definition, source, members, overloads of JDK and dependency symbols):

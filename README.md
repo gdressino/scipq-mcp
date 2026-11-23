@@ -212,6 +212,9 @@ filter = "./run-tests.sh {task} {tests}"   # {module} {task}; {tests} {classes} 
 [project.by_name]
 globs = ["*.java", "*.xml"]
 
+[project.dead_code]
+exclude = ["ws-client/src/*"]              # generated code: never dead-code candidates
+
 [[project.entry_points]]
 type_names = ["*Screen"]
 ```
@@ -237,7 +240,16 @@ filter = "./gradlew {module}:test --tests '{fqcn}'"
 
 [by_name]
 globs = ["*.xml", "*.jrxml"]
+exclude = ["ws-client/src/soap/*"]   # generated: names there would hide dead code elsewhere
+
+[dead_code]
+exclude = ["ws-client/src/soap/*"]   # and its own unused members are not candidates
 ```
+
+`init-config` proposes both excludes for directories that look generated: named like generated
+output (`*-out`, `generated`, `dist`…, without Java sources), or where nearly all files start
+with a "generated / do not edit" header; in a module that mixes its own code with generated
+packages, only those packages. Check the list before committing it.
 
 Precedence, key by key, lowest first: built-in profiles, your profiles, the repository's
 `.scipq.toml` (the team's defaults), the matching `[[project]]` entry of your configuration

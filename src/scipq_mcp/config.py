@@ -42,7 +42,7 @@ from importlib import resources
 
 KNOWN_PROFILE_KEYS = {"profile", "entry_points", "persistence", "by_name", "concepts", "tests"}
 KNOWN_PROJECT_KEYS = {"match", "profiles", "tests", "entry_points", "by_name", "concepts",
-                      "persistence"}
+                      "persistence", "dead_code"}
 KNOWN_MATCH_KEYS = {"path", "root_project", "git_remote"}
 MATCH_ORDER = ("path", "root_project", "git_remote")
 
@@ -89,6 +89,7 @@ class Settings:
     by_name_globs: list[str] = field(default_factory=lambda: ["*.java"])
     by_name_exclude: list[str] = field(default_factory=list)    # path globs
     by_name_patterns: list[str] = field(default_factory=list)
+    dead_code_exclude: list[str] = field(default_factory=list)  # path globs: never candidates
     concept_attributes: list[str] = field(default_factory=list)
     tests_filter: str = ""               # template: {module} {task} {fqcn} {simple} {classes}
     tests_filter_from: str = ""          # where it came from
@@ -240,6 +241,10 @@ def sanitize_repo_config(data: dict) -> tuple[dict, list[str]]:
             clean = _capped(value, key, warnings)
             if clean is not None:
                 out[key] = clean
+    dc = out.get("dead_code")
+    if isinstance(dc, dict) and "exclude" in dc:
+        dc["exclude"] = [g for g in dc["exclude"] if _relative_glob(g, "dead_code.exclude",
+                                                                     warnings)]
     bn = out.get("by_name")
     if isinstance(bn, dict):
         for k in ("globs", "exclude"):
@@ -302,14 +307,21 @@ def repo_template(profiles: list[str], detected: bool, generated: list[str] = ()
     """A `.scipq.toml` to start from (printed by `scipq-mcp init-config`)."""
     names = ", ".join(f'"{p}"' for p in profiles)
     if generated:
-        by_name = ("[by_name]\n# Directories that look generated (by name, or by a \"generated\" "
-                   "header): names there\n# would hide dead code. Check the list.\nexclude = ["
-                   + ", ".join(f'"{d}/*"' for d in generated) + "]\n"
+        dirs = "[" + ", ".join(f'"{d}/*"' for d in generated) + "]"
+        by_name = ("# Directories that look generated (by name, or because nearly all their "
+                   "files start\n# with a \"generated\" header). Check the list: drop any that "
+                   "holds your own code.\n"
+                   "[by_name]   # names written there would hide dead code elsewhere\n"
+                   f"exclude = {dirs}\n"
                    "# globs = [\"*.xml\", \"*.jrxml\"]      # files where names are used as "
-                   "text")
+                   "text\n\n"
+                   "[dead_code]   # and their own unused members are not candidates\n"
+                   f"exclude = {dirs}")
     else:
         by_name = ("# [by_name]\n# globs = [\"*.xml\", \"*.jrxml\"]      # files where names are "
-                   "used as text (reflection, reports)\n# exclude = [\"generated/*\"]")
+                   "used as text (reflection, reports)\n# exclude = [\"generated/*\"]\n\n"
+                   "# [dead_code]\n# exclude = [\"generated/*\"]   # paths whose members are "
+                   "never dead-code candidates")
     why = ("detected from the annotations this checkout uses" if detected else
            "no shards yet: compile with the init script (scipq-mcp gradle-init), then run "
            "init-config again to detect them")
@@ -424,6 +436,8 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
             s.by_name_globs.append(g)
     s.by_name_exclude += list(bn.get("exclude", []))
     s.by_name_patterns += list(bn.get("patterns", []))
+    s.dead_code_exclude += [g for g in data.get("dead_code", {}).get("exclude", [])
+                            if isinstance(g, str) and g]
     s.concept_attributes += list(data.get("concepts", {}).get("attributes", []))
     t = data.get("tests", {})
     if t.get("filter"):

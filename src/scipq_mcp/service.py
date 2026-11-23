@@ -807,10 +807,16 @@ class Service:
                                    entry_type_names=st.entry_type_names,
                                    entry_packages=st.entry_packages,
                                    by_name_globs=globs, by_name_exclude=st.by_name_exclude,
-                                   root=nav.ws.root)
+                                   root=nav.ws.root, exclude_paths=st.dead_code_exclude)
                 suppressed = dict(g.suppressed)
                 weak = list(g.low_confidence)
+                excluded = g.excluded
             note = f"-- profiles: {', '.join(st.profiles) or 'none'} ({st.source or 'none'})\n"
+            if excluded:
+                note += (f"-- {excluded} unreferenced definitions in [dead_code] exclude paths "
+                         "left out: "
+                         + ", ".join(st.dead_code_exclude[:6])
+                         + (" …" if len(st.dead_code_exclude) > 6 else "") + "\n")
             return render.index_note(stats) + note + render.dead_code(rows, offset, limit,
                                                                       suppressed, weak), set()
         return body
