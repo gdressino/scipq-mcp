@@ -166,7 +166,7 @@ class Model:
 
     def stale_library(self, simple: str) -> str:
         """For a library class the project does not use: a note when only old versions of
-        its artifact have it ("only in flow-data 2.10.5; 25.1.5 has none"), else ""."""
+        its artifact have it ("only in ui-data 1.2; 3.0 has none"), else ""."""
         if simple in self.external_names:
             return ""
         if simple in self._stale:
