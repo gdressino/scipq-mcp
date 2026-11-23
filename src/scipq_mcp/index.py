@@ -13,6 +13,7 @@ import fcntl
 import os
 from collections import deque
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -101,6 +102,25 @@ class UpdateStats:
     removed: int = 0
     seconds: float = 0.0
     built_from_scratch: bool = False
+    unreadable: int = 0      # shards cut short (being written), retried next time
+
+
+def default_workers() -> int:
+    """Conservative: other work (builds, tests in other worktrees) shares the machine."""
+    return max(1, min(4, (os.cpu_count() or 1) // 4))
+
+
+def low_priority(cmd: list) -> list:
+    """`cmd` under `nice -n 10` and, on Linux, `ionice -c2 -n7` (best effort, lowest), when the
+    tools exist: background work must not compete with builds and tests."""
+    out = list(cmd)
+    ionice = shutil.which("ionice")
+    if ionice and sys.platform.startswith("linux"):
+        out = [ionice, "-c2", "-n7"] + out
+    nice = shutil.which("nice")
+    if nice:
+        out = [nice, "-n", "10"] + out
+    return out
 
 
 def is_test_shard(module: str, source: str) -> bool:
@@ -117,7 +137,8 @@ def extract(path: str, source: str, root: str) -> dict:
     out = {"defs": [], "refs": [], "rels": [], "anns": []}
     try:
         docs = read_documents(path)
-    except (OSError, ValueError):
+    except (OSError, ValueError, IndexError):
+        out["error"] = True  # cut short (being written): retried on the next update
         return out
     lines_cache: list[str] | None = None
 
@@ -264,9 +285,12 @@ def _extract_job(args):
 # --- the database -----------------------------------------------------------------------------
 
 class Index:
-    def __init__(self, ws: Workspace, cache_base: str | None = None, external: str = "all"):
+    def __init__(self, ws: Workspace, cache_base: str | None = None, external: str = "all",
+                 workers: int | None = None):
         if external not in EXTERNAL_MODES:
             raise ValueError(f"external must be one of {EXTERNAL_MODES}")
+        self.workers = workers or default_workers()
+        self.unreadable = 0
         self.ws = ws
         self.dir_base = cache_base or default_base()
         self.dir = entry_dir(ws.root, self.dir_base)
@@ -349,8 +373,10 @@ class Index:
         if self.pending() < PARALLEL_FROM:
             return self.update()
         t0 = time.perf_counter()
-        cmd = [sys.executable, "-m", "scipq_mcp.index", self.ws.root, self.dir_base,
-               self.external, os.path.relpath(self.ws.shards_dir, self.ws.root)]
+        cmd = low_priority([sys.executable, "-m", "scipq_mcp.index", self.ws.root,
+                            self.dir_base, self.external,
+                            os.path.relpath(self.ws.shards_dir, self.ws.root),
+                            str(self.workers)])
         proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, text=True)
         if proc.returncode != 0:
@@ -362,6 +388,7 @@ class Index:
             stats.shards, stats.processed = int(vals["shards"]), int(vals["processed"])
             stats.removed = int(vals["removed"])
             stats.built_from_scratch = vals["scratch"] == "1"
+            stats.unreadable = int(vals.get("unreadable", 0))
         except (KeyError, ValueError):
             pass
         return stats
@@ -432,12 +459,14 @@ class Index:
             if not orphan:
                 jobs.append((sid, path, source, ws.root))
         stats.processed = len(jobs)
+        self.unreadable = 0
         for n, (sid, rows) in enumerate(self._extract_all(jobs), 1):
             self._insert(con, sid, rows, ids)
             if progress and n % 500 == 0:
                 progress(n, len(jobs))
         if self.external != "all":
             self._drop_external(con)
+        stats.unreadable = self.unreadable
         if stats.built_from_scratch:
             con.executescript(INDEXES)
             if self.external != "all":
@@ -449,7 +478,7 @@ class Index:
             for job in jobs:
                 yield _extract_job(job)
             return
-        workers = max(2, min(8, (os.cpu_count() or 2)))
+        workers = max(1, self.workers)
         window = workers * 4  # results in flight: keeps memory bounded when inserts lag
         with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as ex:
             pending = deque()
@@ -489,6 +518,10 @@ class Index:
                     ids[sym] = sid
 
     def _insert(self, con: sqlite3.Connection, sid: int, rows: dict, ids: dict[str, int]) -> None:
+        if rows.get("error"):
+            con.execute("UPDATE shards SET size = -1 WHERE id = ?", (sid,))  # force a retry
+            self.unreadable += 1
+            return
         syms = {d[0] for d in rows["defs"]}
         syms |= {r[0] for r in rows["refs"]} | {r[1] for r in rows["refs"] if r[1]}
         syms |= {r[0] for r in rows["rels"]} | {r[1] for r in rows["rels"]}
@@ -535,13 +568,14 @@ class Index:
 
 
 def _main(argv: list[str]) -> int:
-    """`python -m scipq_mcp.index ROOT CACHE_BASE EXTERNAL SHARDS_DIR`: run one update (used by
-    Index.ensure for big builds, so the server process stays small)."""
-    root, base, external, shards_dir = argv
-    ix = Index(Workspace(root, shards_dir), base, external)
+    """`python -m scipq_mcp.index ROOT CACHE_BASE EXTERNAL SHARDS_DIR [WORKERS]`: run one update
+    (used by Index.ensure for big builds, so the server process stays small)."""
+    root, base, external, shards_dir = argv[:4]
+    workers = int(argv[4]) if len(argv) > 4 else None
+    ix = Index(Workspace(root, shards_dir), base, external, workers)
     st = ix.update()
     print(f"shards={st.shards} processed={st.processed} removed={st.removed} "
-          f"scratch={int(st.built_from_scratch)}")
+          f"scratch={int(st.built_from_scratch)} unreadable={st.unreadable}")
     return 0
 
 

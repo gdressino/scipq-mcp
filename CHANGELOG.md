@@ -19,6 +19,13 @@ version and date when releasing.
 
 ### Changed
 
+- Background work yields to builds and tests: the index build (in its child process), grep and
+  find run under `nice -n 10` and, on Linux, `ionice -c2 -n7`; the build uses min(4, CPUs/4)
+  workers by default (`--build-workers`).
+- The shared library map is built under a lock: other sessions wait for it (up to 45 s) and
+  then say it is being built, instead of answering without sources.
+- Shards cut short by a compilation in progress are skipped with a warning (and retried by the
+  index), instead of failing or vanishing silently.
 - dead_code: candidates whose only trace is their bean property name (`getDescription` and
   "description") are listed apart as low confidence instead of being dropped.
 - dead_code: names in other files come from a text index (FTS5) in the auxiliary database,

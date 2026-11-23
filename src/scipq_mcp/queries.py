@@ -317,6 +317,7 @@ class DocView:
 class Navigator:
     def __init__(self, workspace: Workspace):
         self.ws = workspace
+        self.unreadable: set[str] = set()
 
     # --- plumbing ---------------------------------------------------------------------------
 
@@ -324,7 +325,9 @@ class Navigator:
         for sh in shards:
             try:
                 docs = read_documents(sh.path)
-            except (OSError, ValueError):
+            except (OSError, ValueError, IndexError):
+                # Typically a shard being rewritten by a compilation right now.
+                self.unreadable.add(sh.source)
                 continue
             for doc in docs:
                 yield DocView(sh, doc, self.ws.root)

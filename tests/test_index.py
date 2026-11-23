@@ -258,3 +258,30 @@ def test_dead_code_names_in_other_files(sample_copy, cache):
     out = svc.dead_code(scope="com.example.model")
     assert "getSize" not in out.replace("app/src/main/java/com/example/app/Reflect.java", "")
     assert "app/src/main/java/com/example/app/Reflect.java 1" in out
+
+
+def test_truncated_shard_is_skipped_and_retried(sample_copy, cache):
+    shard = os.path.join(sample_copy, "build/scip-targetroot/core/compileJava/META-INF/scip/"
+                                      "core/src/main/java/com/example/model/Group.java.scip")
+    data = open(shard, "rb").read()
+    with open(shard, "wb") as fh:  # a compilation is writing it right now
+        fh.write(data[: len(data) // 2])
+    out = Service(sample_copy, cache_dir=cache).references("Entity#setState")
+    assert "Group.java" not in out.split("WARNING")[0]
+    assert "1 shard could not be read" in out and "Group.java" in out
+    ix = Index(Workspace(sample_copy), cache)
+    st = ix.update()
+    assert st.unreadable == 1
+    with open(shard, "wb") as fh:  # the compilation finished
+        fh.write(data)
+    assert Index(Workspace(sample_copy), cache).update().processed >= 1
+    assert "Group.java" in Service(sample_copy, cache_dir=cache).references("Entity#setState")
+
+
+def test_low_priority_commands():
+    from scipq_mcp.index import default_workers, low_priority
+    cmd = low_priority(["grep", "x"])
+    assert cmd[-2:] == ["grep", "x"]
+    if shutil.which("nice"):
+        assert cmd[:3] == [shutil.which("nice"), "-n", "10"]
+    assert 1 <= default_workers() <= 4

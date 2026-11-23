@@ -621,6 +621,13 @@ def tests(symbol: str, uses, task_of, gradle: str = "gradle", template: str = ""
 def index_note(stats) -> str:
     if stats is None or not stats.processed and not stats.removed:
         return ""
+    if getattr(stats, "unreadable", 0):
+        return (index_note_plain(stats) + f"-- {stats.unreadable} shards could not be read "
+                "(probably being written by a compilation); they are retried next time\n")
+    return index_note_plain(stats)
+
+
+def index_note_plain(stats) -> str:
     if stats.built_from_scratch:
         return (f"-- index built: {stats.processed} shards in {stats.seconds:.0f} s (once per "
                 "checkout; later updates are incremental)\n")
@@ -884,3 +891,9 @@ def library_members(type_symbol: str, groups, offset: int, limit: int) -> str:
     shown, suffix = page(rows, offset, limit)
     return "\n".join([f"{S.short(type_symbol)} (library) — {total} members{suffix}"]
                      + list(shown))
+
+
+def unreadable(sources: list[str]) -> str:
+    return (f"WARNING: {len(sources)} shard{'s' if len(sources) != 1 else ''} could not be read, "
+            f"probably being written by a compilation right now (their results are missing; "
+            f"retry when it finishes): {_some(sources)}")

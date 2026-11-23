@@ -459,7 +459,7 @@ def _slim_schemas(mcp: Any) -> None:
 def serve(root: str | None = None, shards_dir: str | None = None,
           freshness: str = "full", always: bool = False, cache_dir: str | None = None,
           index_external: str = "all", config_file: str | None = None,
-          tools: str = "all") -> None:
+          tools: str = "all", build_workers: int | None = None) -> None:
     import os
     import sys
 
@@ -476,8 +476,8 @@ def serve(root: str | None = None, shards_dir: str | None = None,
             prune(cache_dir)
         except (OSError, CacheError):
             pass
-    build(Service(root, shards_dir, freshness, cache_dir, index_external, config_file),
-          active, tool_selection(tools)).run("stdio")
+    build(Service(root, shards_dir, freshness, cache_dir, index_external, config_file,
+                  build_workers=build_workers), active, tool_selection(tools)).run("stdio")
 
 
 __all__ = ["build", "serve", "__version__"]

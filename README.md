@@ -118,7 +118,8 @@ through `project_root`.
 Server options: `--root DIR` (default project), `--shards-dir` (default
 `build/scip-targetroot`), `--freshness full|results|off` (see below), `--always`,
 `--cache-dir DIR`, `--index-external all|methods|none`, `--config FILE`,
-`--tools all|core|name,name…` (fewer tools, less context; `core` keeps the navigation basics).
+`--tools all|core|name,name…` (fewer tools, less context; `core` keeps the navigation basics),
+`--build-workers N` (index build; default min(4, CPUs/4), always at low CPU/IO priority).
 
 ## Tools
 

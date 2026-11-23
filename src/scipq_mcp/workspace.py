@@ -231,7 +231,7 @@ class Workspace:
         try:
             while pending or running:
                 while pending and len(running) < GREP_JOBS:
-                    running.append(subprocess.Popen(base + pending.pop(), cwd=self.shards_dir,
+                    running.append(subprocess.Popen(_low(base + pending.pop()), cwd=self.shards_dir,
                                                     stdout=subprocess.PIPE,
                                                     stderr=subprocess.PIPE, env=env))
                 drain(running.pop(0))
@@ -454,8 +454,9 @@ class _FreshnessCheck:
         # With relative start points, %p prints "<dir>/<name>"; find expands \t and \0 itself.
         out = tempfile.TemporaryFile()
         try:
-            proc = subprocess.Popen([find, *dirs, "-maxdepth", "1", "-name", pattern, "-type", "f",
-                                     "-printf", r"%T@\t%p\0"], cwd=cwd, stdout=out,
+            proc = subprocess.Popen(_low([find, *dirs, "-maxdepth", "1", "-name", pattern,
+                                          "-type", "f", "-printf", r"%T@\t%p\0"]), cwd=cwd,
+                                    stdout=out,
                                     stderr=subprocess.DEVNULL)
         except OSError:
             out.close()
@@ -529,6 +530,12 @@ def split_shard_path(rel: str) -> tuple[str, str] | None:
         return None
     j = i + len(marker)
     return rel[:j], rel[j:-len(SUFFIX)]
+
+
+def _low(cmd: list) -> list:
+    from .index import low_priority
+
+    return low_priority(cmd)
 
 
 def build_task(module: str) -> str:

@@ -43,7 +43,7 @@ class Service:
     def __init__(self, default_root: str | None = None, shards_dir: str | None = None,
                  freshness: str = "full", cache_dir: str | None = None,
                  index_external: str = "all", config_file: str | None = None,
-                 library_roots: list[str] | None = None):
+                 library_roots: list[str] | None = None, build_workers: int | None = None):
         """freshness: "full" (every shard against its source, ~0.1 s on 10k files, run in
         parallel with the query), "results" (only the files in the answer) or "off"."""
         if freshness not in FRESHNESS_MODES:
@@ -55,6 +55,7 @@ class Service:
         self.index_external = index_external
         self.config_file = config_file
         self.library_roots = library_roots
+        self.build_workers = build_workers
 
     def settings(self, root: str, graph=None) -> CFG.Settings:
         present = graph.annotations_present() if graph is not None else None
@@ -103,6 +104,8 @@ class Service:
         elif self.freshness == "results":
             fresh = ws.freshness_of(sources)
         foot = render.freshness(fresh, sources)
+        if nav.unreadable:
+            foot = (foot + "\n" if foot else "") + render.unreadable(sorted(nav.unreadable))
         text = texts[0] if len(texts) == 1 else "\n\n".join(texts)
         return text + ("\n" + foot if foot else "")
 
@@ -208,6 +211,8 @@ class Service:
             if d is not None and d.lib.jar.endswith("src.zip") and ix.jdk_note:
                 d.note = ix.jdk_note
             return d
+        except L.LibraryBusy as e:
+            raise QueryError(str(e)) from e
         except (CacheError, OSError, sqlite3.Error):
             return None
 
@@ -402,6 +407,8 @@ class Service:
             for c in candidates:
                 if sym in L.library_ancestors(index, c):
                     out.append(c)
+        except L.LibraryBusy as e:
+            raise QueryError(str(e)) from e
         except (CacheError, OSError, sqlite3.Error, QueryError):
             pass
         return sorted(set(out))
@@ -455,7 +462,7 @@ class Service:
     @contextlib.contextmanager
     def _graph(self, nav: Navigator):
         try:
-            ix = Index(nav.ws, self.cache_dir, self.index_external)
+            ix = Index(nav.ws, self.cache_dir, self.index_external, self.build_workers)
             stats = ix.ensure()
             g = Graph(ix)
         except (CacheError, IndexError_, sqlite3.Error) as e:

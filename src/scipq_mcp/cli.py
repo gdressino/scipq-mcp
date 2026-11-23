@@ -31,6 +31,7 @@ def _query_parser(sub) -> None:
     q.add_argument("--config", help="project configuration file (default: "
                                     "$XDG_CONFIG_HOME/scipq/config.toml)")
     q.add_argument("--index-external", choices=["all", "methods", "none"], default="all")
+    q.add_argument("--build-workers", type=int, default=None)
     q.add_argument("--freshness", choices=FRESHNESS_MODES, default="full",
                    help="stale-shard check: every file (full), only the files in the answer "
                         "(results), or none (off)")
@@ -93,7 +94,8 @@ def _query_parser(sub) -> None:
 
 def _run_query(a) -> str:
     svc = Service(a.root, a.shards_dir, freshness=a.freshness, cache_dir=a.cache_dir,
-                  index_external=a.index_external, config_file=a.config)
+                  index_external=a.index_external, config_file=a.config,
+                  build_workers=a.build_workers)
     t = a.tool
     if t == "find":
         return svc.find(a.name, limit=a.limit, offset=a.offset, match=a.match)
@@ -210,6 +212,9 @@ def main(argv: list[str] | None = None) -> None:
                    help="references to JDK/library symbols kept in the index (default: all)")
     s.add_argument("--config", help="project configuration file (default: "
                                     "$XDG_CONFIG_HOME/scipq/config.toml)")
+    s.add_argument("--build-workers", type=int, default=None,
+                   help="worker processes for building the auxiliary index (default: "
+                        "min(4, CPUs/4); builds run at low CPU and I/O priority)")
     s.add_argument("--tools", default="all",
                    help="tools to expose: all (default), core (the navigation basics), or a "
                         "comma-separated list of names; fewer tools cost less context")
@@ -234,7 +239,8 @@ def main(argv: list[str] | None = None) -> None:
         serve(getattr(a, "root", None), getattr(a, "shards_dir", None),
               getattr(a, "freshness", "full"), getattr(a, "always", False),
               getattr(a, "cache_dir", None), getattr(a, "index_external", "all"),
-              getattr(a, "config", None), getattr(a, "tools", "all"))
+              getattr(a, "config", None), getattr(a, "tools", "all"),
+              getattr(a, "build_workers", None))
     elif a.command == "gradle-init":
         sys.stdout.write(_template())
     elif a.command == "query":

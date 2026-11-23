@@ -12,6 +12,8 @@ is used, and the answer says which jar it came from.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
 import re
 import shutil
@@ -25,6 +27,11 @@ from .cachedir import default_base, ensure_private_dir
 from .javasrc import JavaSource, Member, enum_constant
 
 REFRESH_SECONDS = 600
+LOCK_WAIT_SECONDS = 45  # how long to wait for another session that is building the map
+
+
+class LibraryBusy(Exception):
+    """Another session holds the library map's lock for longer than we wait."""
 
 
 @dataclass
@@ -219,6 +226,7 @@ class LibraryIndex:
                  jdk_zip: str | None = None):
         base = ensure_private_dir(cache_base or default_base())
         self.path = os.path.join(base, "libraries.sqlite")
+        self.lock_path = os.path.join(base, "libraries.lock")
         self.roots = list(roots if roots is not None else default_roots())
         if jdk_zip:  # this project's JDK instead of the one on PATH
             self.roots = [r for r in self.roots if not r.endswith("src.zip")] + [jdk_zip]
@@ -256,8 +264,32 @@ class LibraryIndex:
                         out[p] = (st.st_mtime_ns, st.st_size)
         return out
 
+    @contextlib.contextmanager
+    def _lock(self, wait: float | None = None):
+        """Exclusive lock for building or extending the map (shared by every checkout and
+        session): others wait up to `wait` seconds (LOCK_WAIT_SECONDS), then LibraryBusy."""
+        with open(self.lock_path, "w") as fh:
+            deadline = time.monotonic() + (LOCK_WAIT_SECONDS if wait is None else wait)
+            while True:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() > deadline:
+                        raise LibraryBusy("the library sources map is being built by another "
+                                          "session; retry in a moment") from None
+                    time.sleep(0.2)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+
     def refresh(self, force: bool = False) -> int:
         """Updates the class map if it is older than REFRESH_SECONDS. Returns jars (re)read."""
+        with self._lock():
+            return self._refresh(force)
+
+    def _refresh(self, force: bool = False) -> int:
         con = self._connect()
         try:
             last = con.execute("SELECT value FROM meta WHERE key='scanned_at'").fetchone()
@@ -361,18 +393,27 @@ class LibraryIndex:
         con = self._connect()
         try:
             rows = self._query(con, class_path)
-            if not rows:
-                self._index_jars(con, self._likely_jars(class_path))
-                rows = self._query(con, class_path)
         finally:
             con.close()
         if not rows:
-            self.refresh()
-            con = self._connect()
-            try:
-                rows = self._query(con, class_path)
-            finally:
-                con.close()
+            # Build or extend the map under the lock; whoever was already doing it may have
+            # added the class meanwhile, so look again first.
+            with self._lock():
+                con = self._connect()
+                try:
+                    rows = self._query(con, class_path)
+                    if not rows:
+                        self._index_jars(con, self._likely_jars(class_path))
+                        rows = self._query(con, class_path)
+                finally:
+                    con.close()
+                if not rows:
+                    self._refresh()
+                    con = self._connect()
+                    try:
+                        rows = self._query(con, class_path)
+                    finally:
+                        con.close()
         # Only this project's JDK among the JDK source zips the shared map knows.
         rows = [r for r in rows if not r[0].endswith("src.zip") or r[0] == self.jdk_zip]
         if not rows:

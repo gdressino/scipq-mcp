@@ -540,7 +540,14 @@ def _peek_roles(b, a: int, z: int) -> int | None:
 
 
 def read_documents(path: str) -> list[Document]:
-    """Documents of an Index file (scip-javac writes one per shard)."""
+    """Documents of an Index file (scip-javac writes one per shard). A file cut short (being
+    written by a compilation) raises DecodeError."""
     with open(path, "rb") as fh:
         buf = fh.read()
-    return [Document(buf, v) for n, w, v in fields(buf, 0, len(buf)) if n == 2 and w == 2]
+    try:
+        docs = [Document(buf, v) for n, w, v in fields(buf, 0, len(buf)) if n == 2 and w == 2]
+        for d in docs:
+            d.index()  # validates the top-level structure of each document
+        return docs
+    except IndexError as e:
+        raise DecodeError("truncated shard") from e

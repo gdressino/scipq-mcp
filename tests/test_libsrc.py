@@ -177,3 +177,27 @@ def test_typed_with_library_subtypes(sample_root, tmp_path):
                   library_roots=[L.jdk_src_zip()])  # just the JDK: no full cache scan
     out = svc.typed("java/util/List#", subtypes=True)
     assert "with" in out and "ArrayList" in out   # Group: new ArrayList<>()
+
+
+def test_library_map_waits_for_another_builder(libroot, tmp_path, monkeypatch):
+    import threading
+
+    monkeypatch.setattr(L, "LOCK_WAIT_SECONDS", 0.5)
+    ix = L.LibraryIndex(str(tmp_path / "cache"), [libroot])
+    other = L.LibraryIndex(str(tmp_path / "cache"), [libroot])
+    held = threading.Event()
+    release = threading.Event()
+
+    def builder():
+        with other._lock():
+            held.set()
+            release.wait(5)
+
+    t = threading.Thread(target=builder)
+    t.start()
+    held.wait(5)
+    with pytest.raises(L.LibraryBusy):
+        ix.find_class("org/acme/ui/Widget")   # not in the map yet, and the lock is busy
+    release.set()
+    t.join()
+    assert ix.find_class("org/acme/ui/Widget").coordinates == "org.acme:acme-ui:1.10.0"
