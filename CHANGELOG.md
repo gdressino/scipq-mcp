@@ -32,6 +32,16 @@ version and date when releasing.
   combine `supertypes` and `type_names` (a type must match both) and name classes listed in
   XML files (`[[entry_points.xml]] files, elements`); `dead_code` keeps those classes too.
   A `servlet` profile (annotations and `web.xml`), and Vaadin 7/8 UIs and views in `vaadin`.
+- `persistence(symbol)`: the persistence model the active profiles describe. No symbol: the
+  entities with their tables, inheritance and field counts. An entity: its table (or its
+  superclass's, with SUPERCLASS_TABLE), inheritance, discriminator, identity, persistent
+  fields with their columns (explicit, from `@Column(name)` or `@Persistent(column)`, or from
+  the field name), relations (with mappedBy and join tables), fetch groups and unique/index
+  members. A field: its column and relation, its accessors, who writes and reads it (setters,
+  Lombok's too, and assignments) and the lines that use it by name (queries, fixtures, form
+  bindings) to check. The `jdo` and `jpa` profiles describe keys, versions, transient
+  markers, inheritance, discriminators, mappedBy and join tables; `[persistence] column` takes
+  several annotations.
 
 ## 0.5.0 — 2026-11-23
 

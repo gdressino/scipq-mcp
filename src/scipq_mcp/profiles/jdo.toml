@@ -10,5 +10,17 @@ annotations = ["javax.jdo.annotations.PersistenceCapable",
 
 [persistence]
 entity = ["javax.jdo.annotations.PersistenceCapable"]
+mapped = ["javax.jdo.annotations.PersistenceAware", "javax.jdo.annotations.EmbeddedOnly"]
 table = { annotation = ["javax.jdo.annotations.PersistenceCapable"], attribute = "table" }
-column = { annotation = ["javax.jdo.annotations.Column"], attribute = "name" }
+column = [{ annotation = ["javax.jdo.annotations.Column"], attribute = "name" },
+          { annotation = ["javax.jdo.annotations.Persistent"], attribute = "column" }]
+transient = ["javax.jdo.annotations.NotPersistent"]
+key = ["javax.jdo.annotations.PrimaryKey"]
+version = ["javax.jdo.annotations.Version"]
+join = ["javax.jdo.annotations.Join"]
+flags = ["javax.jdo.annotations.Serialized", "javax.jdo.annotations.Convert",
+         "javax.jdo.annotations.Embedded", "javax.jdo.annotations.Extension"]
+inheritance = { annotation = ["javax.jdo.annotations.Inheritance"], attribute = "strategy" }
+discriminator = { annotation = ["javax.jdo.annotations.Discriminator"], attribute = "column" }
+mapped_by = [{ annotation = ["javax.jdo.annotations.Persistent"], attribute = "mappedBy" },
+             { annotation = ["javax.jdo.annotations.Element"], attribute = "mappedBy" }]

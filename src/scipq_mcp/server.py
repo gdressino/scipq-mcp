@@ -459,6 +459,23 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
                                  limit)
 
     @tool
+    def persistence(
+        symbol: Annotated[str, Field(description="An entity, a field of one, or empty for the "
+                                                 "list of entities")] = "",
+        project_root: ProjectRoot = "",
+        scope: Annotated[str, Field(description="With no symbol: only entities in this "
+                                                "package or path")] = "",
+        offset: Offset = 0, limit: Limit(100, 2000) = 100,
+    ) -> str:
+        """The persistence model the active profiles describe (jdo, jpa…). An entity: its table
+        (or its superclass's), inheritance, discriminator, identity, persistent fields with
+        their columns (explicit or from the field name), relations (mappedBy, join tables),
+        fetch groups and unique/index members. A field: its column and relation, its
+        accessors, who writes and reads it (setters, Lombok's too, and assignments), and the
+        lines that use it by name (reflection, fixtures, forms, queries) to check."""
+        return service.persistence(symbol, project_root, scope, offset, limit)
+
+    @tool
     def check_refs(
         project_root: ProjectRoot = "",
         files: Annotated[list[str] | None, Field(

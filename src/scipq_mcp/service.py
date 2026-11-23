@@ -1221,6 +1221,37 @@ class Service:
                                                                       suppressed, weak), set()
         return body
 
+    def _b_persistence(self, symbol: str = "", scope: str = "", offset: int = 0,
+                       limit: int = 100) -> Body:
+        def body(nav: Navigator):
+            from . import persistence as P
+            with self._graph(nav) as (g, stats):
+                st = self.settings(nav.ws.root, g)
+                if not st.entity_annotations:
+                    raise QueryError("no persistence profile active (jdo, jpa or one of "
+                                     "yours): nothing marks entities")
+                m = P.Model(g, st, nav.ws.root)
+                if not symbol:
+                    def in_scope(e) -> bool:
+                        return not scope or G.scope_matches(scope, S.package_of(e.symbol),
+                                                            e.source)
+                    text = P.render_list(m, in_scope, offset, limit)
+                    return render.index_note(stats) + text, set()
+                sym, note = self._resolve(nav, symbol)
+                if S.is_type(sym):
+                    if sym not in m.entities() | m.mapped():
+                        raise QueryError(f"{S.short(sym)} is not persistent (no "
+                                         "entity annotation of the active profiles)")
+                    e = m.entity(sym)
+                    return render.index_note(stats) + note + P.render_entity(
+                        m, e, offset, limit), {e.source}
+                if S.kind_of(sym) != "term":
+                    raise QueryError("persistence takes an entity, a field of one, or nothing "
+                                     "(the list of entities)")
+                text = P.render_field(nav, m, sym, list(st.by_name_globs))
+                return render.index_note(stats) + note + text, set()
+        return body
+
     def _b_check_refs(self, files: list[str] | None = None, exclude: list[str] | None = None,
                       offset: int = 0, limit: int = 200) -> Body:
         def body(nav: Navigator):
@@ -1367,6 +1398,10 @@ class Service:
                 api_only: bool = True, limit: int = 50, all_worktrees: bool = False) -> str:
         return self._run(project_root, self._b_compare(other_root, scope, api_only, limit,
                                                        all_worktrees), foot_first=True)
+
+    def persistence(self, symbol: str = "", project_root: str | None = None, scope: str = "",
+                    offset: int = 0, limit: int = 100) -> str:
+        return self._run(project_root, self._b_persistence(symbol, scope, offset, limit))
 
     def check_refs(self, project_root: str | None = None, files: list[str] | None = None,
                    exclude: list[str] | None = None, offset: int = 0, limit: int = 200) -> str:

@@ -90,6 +90,10 @@ class Settings:
     entity_annotations: set[str] = field(default_factory=set)
     table: list[tuple[set[str], str]] = field(default_factory=list)   # (annotations, attribute)
     column: list[tuple[set[str], str]] = field(default_factory=list)
+    # The persistence model (persistence tool): marker annotations (transient, key, version,
+    # join, flags) and attribute specs (inheritance, discriminator, mapped_by).
+    persistence_markers: dict[str, set[str]] = field(default_factory=dict)
+    persistence_attrs: dict[str, list[tuple[set[str], str]]] = field(default_factory=dict)
     by_name_globs: list[str] = field(default_factory=lambda: ["*.java"])
     by_name_exclude: list[str] = field(default_factory=list)    # path globs
     by_name_patterns: list[str] = field(default_factory=list)
@@ -458,6 +462,10 @@ def settings_for(root: str, config_file: str | None = None, home: str | None = N
 
 
 def _apply(s: Settings, data: dict, origin: str = "") -> None:
+    def strings(v) -> list[str]:
+        return [v] if isinstance(v, str) else [x for x in v if isinstance(x, str)] \
+            if isinstance(v, list) else []
+
     for ep in data.get("entry_points", []):
         if not isinstance(ep, dict):
             continue
@@ -482,17 +490,25 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
         s.entry_type_names += list(ep.get("type_names", []))
     p = data.get("persistence", {})
     s.entity_annotations |= {to_symbol(a) for a in p.get("entity", [])}
-    for key, target in (("table", s.table), ("column", s.column)):
-        spec = p.get(key)
-        if spec:
-            anns = spec.get("annotation", [])
-            anns = [anns] if isinstance(anns, str) else anns
-            target.append(({to_symbol(a) for a in anns}, spec.get("attribute", "name")))
+    def specs(v) -> list[tuple[set[str], str]]:
+        out = []
+        for spec in (v if isinstance(v, list) else [v] if isinstance(v, dict) else []):
+            if isinstance(spec, dict):
+                anns = spec.get("annotation", [])
+                anns = [anns] if isinstance(anns, str) else anns
+                out.append(({to_symbol(a) for a in anns}, spec.get("attribute", "name")))
+        return out
+    s.table += specs(p.get("table"))
+    s.column += specs(p.get("column"))
+    for key in ("mapped", "transient", "key", "version", "join", "flags", "relations"):
+        if p.get(key):
+            s.persistence_markers.setdefault(key, set()).update(
+                to_symbol(a) for a in strings(p.get(key)))
+    for key in ("inheritance", "discriminator", "mapped_by"):
+        if p.get(key):
+            s.persistence_attrs.setdefault(key, []).extend(specs(p.get(key)))
     bn = data.get("by_name", {})
 
-    def strings(v) -> list[str]:
-        return [v] if isinstance(v, str) else [x for x in v if isinstance(x, str)] \
-            if isinstance(v, list) else []
     for g in strings(bn.get("globs", [])):
         if g not in s.by_name_globs:
             s.by_name_globs.append(g)

@@ -378,3 +378,24 @@ def test_impact_lists_the_entry_points_reached(sample_copy, tmp_path):
     assert "servlet  d1  Service#activate()" in out and "in app/src/main/webapp/WEB-INF/web.xml" \
         in out
     assert "job  d1  TestSupport#reset()" in out and "named like *Support" in out
+
+
+def test_persistence_model(refactor_root, tmp_path):
+    from scipq_mcp.service import Service
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    out = svc.persistence()
+    assert "2 entities" in out and "Order  ORDERS  3 fields, 1 relations" in out
+    order = svc.persistence("Order")
+    assert "table: ORDERS" in order and 'column = "CLASS"' in order
+    assert "state  int  column from the field name" in order
+    assert "total  long  column TOTAL_AMOUNT (@Column)" in order
+    assert "lines  List<Line>  column from the field name  → many Line (mappedBy order)" in order
+    assert "not persistent: note (@NotPersistent)" in order
+    assert "fetch group withLines: lines, state" in order
+    state = svc.persistence("Order#state")
+    assert "table ORDERS, column from the field name" in state and "in fetch groups: withLines" \
+        in state
+    assert "Order#setState()" in state and "a.setState(b.getState())" in state   # Lombok's
+    assert 'return "state == :p";' in state                     # by name: a JDOQL filter
+    assert "relation to Order" in svc.persistence("Line#order")
+    assert "is not persistent" in svc.persistence("Counter")

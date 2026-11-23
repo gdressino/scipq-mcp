@@ -59,6 +59,8 @@ def _query_parser(sub) -> None:
     add("context", "symbol", budget={"type": int, "default": 4000})
     add("steps", **paging, query={"default": ""}, check={"action": "store_true"})
     add("doctor")
+    add("persistence", symbol={"default": ""}, scope={"default": ""},
+        offset={"type": int, "default": 0}, limit={"type": int, "default": 100})
     add("check-refs", files={"nargs": "*", "default": None}, exclude={"nargs": "*", "default": None},
         offset={"type": int, "default": 0}, limit={"type": int, "default": 200})
     add("concepts", "query", offset={"type": int, "default": 0},
@@ -122,6 +124,8 @@ def _run_query(a) -> str:
         return svc.definition(a.symbol)
     if t == "doctor":
         return svc.doctor()
+    if t == "persistence":
+        return svc.persistence(a.symbol, scope=a.scope, offset=a.offset, limit=a.limit)
     if t == "check-refs":
         return svc.check_refs(files=a.files, exclude=a.exclude, offset=a.offset,
                               limit=a.limit)

@@ -18,5 +18,26 @@ annotations = [
 
 [persistence]
 entity = ["jakarta.persistence.Entity", "javax.persistence.Entity"]
+# Persistent without a table of their own: their fields go to the entities that use them.
+mapped = ["jakarta.persistence.MappedSuperclass", "javax.persistence.MappedSuperclass",
+          "jakarta.persistence.Embeddable", "javax.persistence.Embeddable"]
 table = { annotation = ["jakarta.persistence.Table", "javax.persistence.Table"], attribute = "name" }
-column = { annotation = ["jakarta.persistence.Column", "javax.persistence.Column"], attribute = "name" }
+column = [{ annotation = ["jakarta.persistence.Column", "javax.persistence.Column"], attribute = "name" },
+          { annotation = ["jakarta.persistence.JoinColumn", "javax.persistence.JoinColumn"], attribute = "name" }]
+transient = ["jakarta.persistence.Transient", "javax.persistence.Transient"]
+key = ["jakarta.persistence.Id", "javax.persistence.Id", "jakarta.persistence.EmbeddedId",
+       "javax.persistence.EmbeddedId"]
+version = ["jakarta.persistence.Version", "javax.persistence.Version"]
+join = ["jakarta.persistence.JoinTable", "javax.persistence.JoinTable"]
+flags = ["jakarta.persistence.Convert", "javax.persistence.Convert", "jakarta.persistence.Lob",
+         "javax.persistence.Lob", "jakarta.persistence.Embedded", "javax.persistence.Embedded",
+         "jakarta.persistence.Enumerated", "javax.persistence.Enumerated"]
+relations = ["jakarta.persistence.OneToMany", "jakarta.persistence.ManyToOne",
+             "jakarta.persistence.OneToOne", "jakarta.persistence.ManyToMany",
+             "javax.persistence.OneToMany", "javax.persistence.ManyToOne",
+             "javax.persistence.OneToOne", "javax.persistence.ManyToMany"]
+inheritance = { annotation = ["jakarta.persistence.Inheritance", "javax.persistence.Inheritance"], attribute = "strategy" }
+discriminator = { annotation = ["jakarta.persistence.DiscriminatorColumn", "javax.persistence.DiscriminatorColumn"], attribute = "name" }
+mapped_by = { annotation = ["jakarta.persistence.OneToMany", "jakarta.persistence.ManyToMany",
+                            "jakarta.persistence.OneToOne", "javax.persistence.OneToMany",
+                            "javax.persistence.ManyToMany", "javax.persistence.OneToOne"], attribute = "mappedBy" }
