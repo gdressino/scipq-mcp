@@ -1,6 +1,6 @@
 # scipq-mcp design
 
-Status: v1 and v2 implemented; v3 items 1–9 implemented, 10 proposed.
+Status: v1 and v2 implemented; v3 items 1–9 implemented; 10 dropped as out of scope.
 
 ## Principles
 
@@ -221,4 +221,4 @@ section. Unknown keys are reported, not ignored silently.
    make: shadowing by locals and enclosing classes, library overrides, JDO/JPA columns, tables
    and class-name discriminators. The patch is stored in the cache, applied by the agent with
    `git apply`; `verify` checks the new index after the build.
-10. Generalize: Kotlin, and reading an aggregated `index.scip` from other indexers.
+10. Dropped (out of scope): Kotlin, and reading an aggregated `index.scip` from other indexers.

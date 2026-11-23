@@ -1,0 +1,24 @@
+Å
+/shop/src/main/java/com/example/shop/Shapes.java,com/example/shop/Shapes#BZ /#com/example/shop/Shapes#`<init>`().B4com/example/shop/Shapes#Shape#BZ 5)com/example/shop/Shapes#Shape#`<init>`().B;%com/example/shop/Shapes#Shape#draw().BZ 	5com/example/shop/Shapes#Circle#B	Z	 6*com/example/shop/Shapes#Circle#`<init>`().B	(com/example/shop/Shapes#Shape#B	 %java/lang/Override#B
+	<&com/example/shop/Shapes#Circle#draw().BZ
+ 	/%com/example/shop/Shapes#Circle#super.B/%com/example/shop/Shapes#Shape#draw().B5com/example/shop/Shapes#Square#BZ 6*com/example/shop/Shapes#Square#`<init>`().B(com/example/shop/Shapes#Shape#B %java/lang/Override#B	<&com/example/shop/Shapes#Square#draw().BZ 	/%com/example/shop/Shapes#Square#super.B/%com/example/shop/Shapes#Shape#draw().B6 com/example/shop/Shapes#paint().BZ (com/example/shop/Shapes#Shape#Blocal 0BRlocal 0B	/%com/example/shop/Shapes#Shape#draw().B
+í
+com/example/shop/Shapes#OOverrides that call their superclass: a super.draw() is bound at compile time. (2Shapes:"java*public class ShapesH
+#com/example/shop/Shapes#`<init>`().(	2<init>:"java*public Shapes()E
+com/example/shop/Shapes#Shape#(2Shape:"java*static class ShapeF
+)com/example/shop/Shapes#Shape#`<init>`().(	2<init>:"java*Shape()D
+%com/example/shop/Shapes#Shape#draw().(2draw:"java*void draw()z
+com/example/shop/Shapes#Circle#""
+com/example/shop/Shapes#Shape#(2Circle:)"java*!static class Circle extends ShapeH
+*com/example/shop/Shapes#Circle#`<init>`().(	2<init>:"java*Circle()|
+&com/example/shop/Shapes#Circle#draw()."+
+%com/example/shop/Shapes#Shape#draw().(2draw:"java*@Override
+void draw()z
+com/example/shop/Shapes#Square#""
+com/example/shop/Shapes#Shape#(2Square:)"java*!static class Square extends ShapeH
+*com/example/shop/Shapes#Square#`<init>`().(	2<init>:"java*Square()|
+&com/example/shop/Shapes#Square#draw()."+
+%com/example/shop/Shapes#Shape#draw().(2draw:"java*@Override
+void draw()O
+ com/example/shop/Shapes#paint().(P2paint:""java*static void paint(Shape s)?
+local 02s:"java*Shape sB com/example/shop/Shapes#paint()."java

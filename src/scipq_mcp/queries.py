@@ -663,6 +663,7 @@ class Navigator:
         visited = {symbol}
         nodes = 0
         level = 0
+        texts: dict[str, list[str]] = {}
         while targets and level < max(1, depth):
             level += 1
             refs_by_target = self._references_many(set(targets))
@@ -670,6 +671,10 @@ class Navigator:
             for target, parents in targets.items():
                 grouped: dict[str, list[Reference]] = {}
                 for ref in refs_by_target.get(target, []):
+                    # super.m() in another class is bound to its own superclass: never here.
+                    if level == 1 and target != symbol and \
+                            self._is_super_call(ref, S.name_of(target), texts):
+                        continue
                     grouped.setdefault(ref.container or "(top level)", []).append(ref)
                 for parent, via in parents:
                     for caller, sites in sorted(grouped.items(), key=lambda kv: _site_key(kv[1][0])):
@@ -684,6 +689,21 @@ class Navigator:
                             next_targets.setdefault(caller, []).append((node, ""))
             targets = next_targets
         return root
+
+    def _is_super_call(self, ref: Reference, name: str, cache: dict) -> bool:
+        src = ref.location.source
+        lines = cache.get(src)
+        if lines is None:
+            try:
+                with open(os.path.join(self.ws.root, src), encoding="utf-8",
+                          errors="replace") as fh:
+                    lines = fh.read().split("\n")
+            except OSError:
+                lines = []
+            cache[src] = lines
+        r = ref.location.range
+        return r.start_line < len(lines) and \
+            S.is_super_call(lines[r.start_line], r.start_char, name)
 
     def _references_many(self, syms: set[str]) -> dict[str, list[Reference]]:
         out: dict[str, list[Reference]] = {}

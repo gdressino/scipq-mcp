@@ -309,16 +309,22 @@ class Graph:
     # impact / tests / path -------------------------------------------------------------------
 
     def impact(self, symbol: str, depth: int = 3, include_overridden: bool = True,
-               max_nodes: int = 20000) -> tuple[list[Node], bool]:
+               max_nodes: int = 20000, root: str = "") -> tuple[list[Node], bool]:
         """Transitive callers, breadth first. With include_overridden, calls to the methods it
-        overrides count too (they may dispatch here). Returns (nodes, truncated)."""
+        overrides count too (they may dispatch here), except `super.m()` calls (read from the
+        sources under `root`), which are bound to the caller's superclass. Returns (nodes,
+        truncated)."""
         start = self.ids([symbol]).get(symbol)
         if start is None:
             return [], False
         frontier = [start]
+        overridden: set[int] = set()
         if include_overridden and S.is_method(symbol):
-            frontier += self.ancestors(start)
+            overridden = set(self.ancestors(start)) - {start}
+            frontier += sorted(overridden)
         seen = set(frontier)
+        texts: dict[str, list[str]] = {}
+        name = S.name_of(symbol)
         nodes: dict[int, Node] = {}
         names: dict[int, str] = self.names(frontier)
         truncated = False
@@ -329,6 +335,10 @@ class Graph:
             for target, caller, shard_id, sites in rows:
                 if caller in seen or shard_id not in sh:
                     continue
+                if level == 1 and target in overridden and root:
+                    sites = _not_super(root, sh[shard_id][0], sites, name, texts)
+                    if not sites:
+                        continue
                 seen.add(caller)
                 nxt.append(caller)
                 src, mod, test = sh[shard_id]
@@ -983,6 +993,29 @@ def _annotation_text(root: str, source: str, def_line: int, before: int = 25) ->
 
 
 # --- helpers ----------------------------------------------------------------------------------
+
+def _not_super(root: str, source: str, sites: str, name: str, cache: dict) -> str:
+    """The sites ("line:col,…", 0-based) of a reference list that are not `super.name(…)`."""
+    lines = cache.get(source)
+    if lines is None:
+        try:
+            with open(os.path.join(root, source), encoding="utf-8", errors="replace") as fh:
+                lines = fh.read().split("\n")
+        except OSError:
+            lines = []
+        cache[source] = lines
+    keep = []
+    for s in sites.split(","):
+        if not s:
+            continue
+        line, _, rest = s.partition(":")
+        col = int(rest.split("@", 1)[0] or -1) if rest else -1
+        ln = int(line)
+        if ln < len(lines) and S.is_super_call(lines[ln], col, name):
+            continue
+        keep.append(s)
+    return ",".join(keep)
+
 
 def _lines(sites: str) -> list[int]:
     out = []

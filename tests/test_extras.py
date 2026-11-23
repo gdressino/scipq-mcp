@@ -399,3 +399,13 @@ def test_persistence_model(refactor_root, tmp_path):
     assert 'return "state == :p";' in state                     # by name: a JDOQL filter
     assert "relation to Order" in svc.persistence("Line#order")
     assert "is not persistent" in svc.persistence("Counter")
+
+
+def test_super_calls_of_other_overrides_do_not_dispatch_here(refactor_root, tmp_path):
+    # Circle#draw() calls super.draw() (Shape#draw): bound to Shape, never to Square.
+    from scipq_mcp.service import Service
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    out = svc.impact("Shapes#Square#draw", depth=1)
+    assert "paint" in out and "Circle" not in out
+    out = svc.callers("Shapes#Square#draw", include_overridden=True)
+    assert "paint" in out and "Circle" not in out

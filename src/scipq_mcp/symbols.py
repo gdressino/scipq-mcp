@@ -212,6 +212,20 @@ def name_of(symbol: str) -> str:
     return d[-1].name if d else symbol
 
 
+_SUPER_BEFORE = re.compile(r"\bsuper\s*\.\s*$")
+
+
+def is_super_call(text: str, col: int, name: str) -> bool:
+    """Whether the occurrence of a method `name` at column `col` of a source line is
+    `super.name(…)` (or `Iface.super.name(…)`): bound to the caller's superclass at compile
+    time, so it never dispatches to an override. When the column does not point at the name
+    (tabs, astral characters), every call of that name on the line must be a super call."""
+    if col >= 0 and text[col:col + len(name)] == name:
+        return bool(_SUPER_BEFORE.search(text[:col]))
+    calls = re.findall(r"(\bsuper\s*\.\s*)?(?<![\w$])" + re.escape(name) + r"\s*\(", text)
+    return bool(calls) and all(calls)
+
+
 def package_of(symbol: str) -> str:
     return ".".join(x.name for x in parse(symbol) if x.suffix == NAMESPACE)
 

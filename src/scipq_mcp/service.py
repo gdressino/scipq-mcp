@@ -530,7 +530,7 @@ class Service:
             if transitive:
                 sym, note = self._resolve(nav, symbol)
                 with self._graph(nav) as (g, stats):
-                    nodes, _trunc = g.impact(sym, max(1, min(depth, 8)))
+                    nodes, _trunc = g.impact(sym, max(1, min(depth, 8)), root=nav.ws.root)
                     st = self.settings(nav.ws.root, g)
                     keep = self._test_classes(g, nodes, st)
                     # Glue methods are test code without @Test: before the filter below.
@@ -901,7 +901,7 @@ class Service:
                 ix.update()
             g = Graph(ix)
             try:
-                nodes, truncated = g.impact(sym, 3, True)
+                nodes, truncated = g.impact(sym, 3, True, root=nav.ws.root)
             finally:
                 g.close()
         except (CacheError, IndexError_, sqlite3.Error, OSError):
@@ -1091,7 +1091,7 @@ class Service:
             sym, note = self._resolve(nav, symbol)
             d = max(1, min(depth, 10))
             with self._graph(nav) as (g, stats):
-                nodes, trunc = g.impact(sym, d, include_overridden)
+                nodes, trunc = g.impact(sym, d, include_overridden, root=nav.ws.root)
                 st = self.settings(nav.ws.root, g)
                 entries = g.entry_points(nodes, st.entry_specs, nav.ws.root)
             text = render.impact(sym, nodes, trunc, d, group_by, offset, limit, entries)
@@ -1140,7 +1140,7 @@ class Service:
                     raise QueryError(str(e)) from e
                 nodes: dict[str, object] = {}
                 for sym in res["definitions"]:
-                    for n in g.impact(sym, max(1, min(depth, 8)))[0]:
+                    for n in g.impact(sym, max(1, min(depth, 8)), root=nav.ws.root)[0]:
                         nodes.setdefault(n.symbol, n)
                 st = self.settings(nav.ws.root, g)
                 # Changed test code is itself to be run.
