@@ -36,8 +36,38 @@ class Member:
         return self.name_line or self.start_line
 
 
+# Comments and literals, leftmost first (as a scanner would see them): line and block comments
+# (to the end when unterminated), text blocks, and string/char literals (which stop at the end
+# of the line; an escape may continue them on the next one).
+_LITERALS = re.compile(r'//[^\n]*|/\*.*?(?:\*/|\Z)|""".*?(?:"""|\Z)|"(?:\\.|[^"\\\n])*"?'
+                       r"|'(?:\\.|[^'\\\n])*'?", re.S)
+_NOT_NEWLINE = re.compile(r"[^\n]")
+
+
+def _blank(s: str) -> str:
+    return " " * len(s) if "\n" not in s else _NOT_NEWLINE.sub(" ", s)
+
+
+def _mask_match(m: re.Match) -> str:
+    t = m.group()
+    if t[0] == "/":
+        return _blank(t)
+    if t.startswith('"""'):
+        return t[0] + _blank(t[1:-1]) + t[-1] if len(t) > 1 else t
+    q = t[0]
+    body = t[1:-1]
+    if len(t) > 1 and t[-1] == q and (len(body) - len(body.rstrip("\\"))) % 2 == 0:
+        return q + _blank(body) + q  # closed (the last quote is not escaped)
+    return q + _blank(t[1:])
+
+
 def mask(text: str) -> str:
     """Comments and literal contents replaced by spaces; offsets and newlines preserved."""
+    return _LITERALS.sub(_mask_match, text)
+
+
+def _mask_slow(text: str) -> str:
+    """The reference scanner `mask` must agree with (kept for tests)."""
     out = list(text)
     i, n = 0, len(text)
 
@@ -136,8 +166,7 @@ class JavaSource:
     def members(self, body_open: int, body_close: int, is_enum: bool = False,
                 type_name: str = "") -> list[Member]:
         """Members at the top level of a type body. A constructor is a method named like the
-        type (`type_name`)."""
-        self._type_name = type_name
+        type (`type_name`). Safe to call from several threads on one instance."""
         m, t = self.masked, self.text
         out: list[Member] = []
         i = body_open + 1
@@ -157,7 +186,7 @@ class JavaSource:
                     i = _match_brace(m, i) + 1  # an initializer or enum constant body
                     continue
                 end = _match_brace(m, i)
-                mem = self._member(seg, i, end, True)
+                mem = self._member(seg, i, end, type_name)
                 if mem:
                     out.append(mem)
                 i = end + 1
@@ -169,7 +198,7 @@ class JavaSource:
                     out.append(Member("enum constants", "", " ".join(t[seg:i].split()),
                                       self.line_of(_skip_space(m, seg)), self.line_of(i), ""))
                 else:
-                    mem = self._member(seg, i, i, False)
+                    mem = self._member(seg, i, i, type_name)
                     if mem:
                         out.append(mem)
                 seg = i + 1
@@ -177,7 +206,7 @@ class JavaSource:
             i += 1
         return out
 
-    def _member(self, seg: int, header_end: int, end: int, has_body: bool) -> Member | None:
+    def _member(self, seg: int, header_end: int, end: int, type_name: str) -> Member | None:
         m, t = self.masked, self.text
         start = _skip_space(m, seg)
         if start >= header_end:
@@ -204,7 +233,7 @@ class JavaSource:
             name = names[-1].group(1) if names else ""
             if not name or name in _CONTROL:
                 return None
-            kind = "constructor" if name == getattr(self, "_type_name", "") else "method"
+            kind = "constructor" if name == type_name else "method"
             return Member(kind, name, declaration, self.line_of(start), self.line_of(end),
                           javadoc, mods, self.line_of(start + names[-1].start(1)))
         lhs = _split_top_level_equals(bare)

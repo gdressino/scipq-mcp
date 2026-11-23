@@ -228,7 +228,8 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
     @tool
     def overloads(symbol: Symbol, project_root: ProjectRoot = "", offset: Offset = 0,
                   limit: Limit(100) = 100) -> str:
-        """Every overload of a method in its type, with the uses of each."""
+        """Every overload of a method in its type, with the uses of each in the project; for
+        a library or JDK method, its overloads come from the sources jar."""
         return service.overloads(symbol, project_root, offset, limit)
 
     @tool

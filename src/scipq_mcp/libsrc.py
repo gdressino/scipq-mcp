@@ -18,8 +18,10 @@ import os
 import re
 import shutil
 import sqlite3
+import threading
 import time
 import zipfile
+from collections import OrderedDict
 from dataclasses import dataclass
 
 from . import symbols as S
@@ -28,6 +30,8 @@ from .javasrc import JavaSource, Member, enum_constant
 
 REFRESH_SECONDS = 600
 LOCK_WAIT_SECONDS = 45  # how long to wait for another session that is building the map
+OPEN_ZIPS = 8           # jars kept open: opening the JDK's src.zip alone reads ~15,000 entries
+PARSED_SOURCES = 64     # parsed .java files kept (hierarchies read the same files repeatedly)
 
 
 class LibraryBusy(Exception):
@@ -231,11 +235,60 @@ class LibraryIndex:
         if jdk_zip:  # this project's JDK instead of the one on PATH
             self.roots = [r for r in self.roots if not r.endswith("src.zip")] + [jdk_zip]
         self.jdk_zip = jdk_zip or next((r for r in self.roots if r.endswith("src.zip")), "")
+        self._zips: OrderedDict[tuple, zipfile.ZipFile] = OrderedDict()
+        self._parsed: OrderedDict[tuple, JavaSource] = OrderedDict()
+        self._cache_lock = threading.Lock()
+        self._absent: dict[str, float] = {}  # class -> when the whole map last lacked it
+
+    def source(self, lib: LibClass) -> JavaSource | None:
+        """The parsed .java of a class, from a jar kept open (keyed by path, mtime and size, so
+        a jar rewritten on disk is opened again)."""
+        try:
+            st = os.stat(lib.jar)
+        except OSError:
+            return None
+        zkey = (lib.jar, st.st_mtime_ns, st.st_size)
+        key = zkey + (lib.entry,)
+        with self._cache_lock:
+            src = self._parsed.get(key)
+            if src is not None:
+                self._parsed.move_to_end(key)
+                return src
+            z = self._zips.get(zkey)
+            if z is None:
+                try:
+                    z = zipfile.ZipFile(lib.jar)
+                except (OSError, zipfile.BadZipFile):
+                    return None
+                self._zips[zkey] = z
+                while len(self._zips) > OPEN_ZIPS:
+                    self._zips.popitem(last=False)[1].close()
+            else:
+                self._zips.move_to_end(zkey)
+            try:
+                text = z.read(lib.entry).decode("utf-8", errors="replace")
+            except (OSError, KeyError, zipfile.BadZipFile):
+                return None
+        src = JavaSource(text)
+        with self._cache_lock:
+            self._parsed[key] = src
+            while len(self._parsed) > PARSED_SOURCES:
+                self._parsed.popitem(last=False)
+        return src
+
+    def close(self) -> None:
+        with self._cache_lock:
+            for z in self._zips.values():
+                z.close()
+            self._zips.clear()
+            self._parsed.clear()
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.path, timeout=30)
-        con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA busy_timeout=30000")
+        if getattr(self, "_schema_ready", False):
+            return con
+        con.execute("PRAGMA journal_mode=WAL")
         con.executescript("""
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS jars (id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL,
@@ -243,7 +296,10 @@ class LibraryIndex:
             CREATE TABLE IF NOT EXISTS classes (name TEXT NOT NULL, jar_id INTEGER NOT NULL,
                 entry TEXT NOT NULL, PRIMARY KEY (name, jar_id)) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS classes_jar ON classes(jar_id);
+            CREATE TABLE IF NOT EXISTS supertypes (symbol TEXT PRIMARY KEY,
+                jar TEXT NOT NULL, supers TEXT NOT NULL) WITHOUT ROWID;
         """)
+        self._schema_ready = True
         return con
 
     def _jars_on_disk(self) -> dict[str, tuple[int, int]]:
@@ -399,6 +455,9 @@ class LibraryIndex:
             rows = self._query(con, class_path)
         finally:
             con.close()
+        missed = self._absent.get(class_path)
+        if not rows and missed is not None and time.time() - missed < REFRESH_SECONDS:
+            return None  # already looked everywhere (resolving names tries many candidates)
         if not rows:
             # Build or extend the map under the lock; whoever was already doing it may have
             # added the class meanwhile, so look again first.
@@ -419,6 +478,7 @@ class LibraryIndex:
                     finally:
                         con.close()
         if not rows:
+            self._absent[class_path] = time.time()
             return None
         rows.sort(key=lambda r: (not r[0].endswith("src.zip"), _version_key(r[2])), reverse=True)
         jar, entry, coords = rows[0]
@@ -470,12 +530,9 @@ def lookup(index: LibraryIndex, symbol: str) -> LibDefinition | None:
     lib = index.find_class(class_path)
     if lib is None:
         return None
-    try:
-        with zipfile.ZipFile(lib.jar) as z:
-            text = z.read(lib.entry).decode("utf-8", errors="replace")
-    except (OSError, KeyError, zipfile.BadZipFile):
+    src = index.source(lib)
+    if src is None:
         return None
-    src = JavaSource(text)
     decl = src.find_type(types)
     if decl is None:
         return None
@@ -532,12 +589,9 @@ def _type_members(index: LibraryIndex, type_symbol: str
     lib = index.find_class(class_path) if class_path else None
     if lib is None:
         return None
-    try:
-        with zipfile.ZipFile(lib.jar) as z:
-            text = z.read(lib.entry).decode("utf-8", errors="replace")
-    except (OSError, KeyError, zipfile.BadZipFile):
+    src = index.source(lib)
+    if src is None:
         return None
-    src = JavaSource(text)
     decl = src.find_type(types)
     if decl is None:
         return None
@@ -653,18 +707,13 @@ def library_supertypes(index: LibraryIndex, type_symbol: str) -> list[str]:
         return []
     con = index._connect()
     try:
-        con.execute("CREATE TABLE IF NOT EXISTS supertypes (symbol TEXT PRIMARY KEY, "
-                    "jar TEXT NOT NULL, supers TEXT NOT NULL) WITHOUT ROWID")
         row = con.execute("SELECT jar, supers FROM supertypes WHERE symbol = ?",
                           (type_symbol,)).fetchone()
         if row and row[0] == lib.jar:
             return [x for x in row[1].split(" ") if x]
-        try:
-            with zipfile.ZipFile(lib.jar) as z:
-                text = z.read(lib.entry).decode("utf-8", errors="replace")
-        except (OSError, KeyError, zipfile.BadZipFile):
+        src = index.source(lib)
+        if src is None:
             return []
-        src = JavaSource(text)
         decl = src.find_type(types)
         if decl is None:
             return []

@@ -258,3 +258,30 @@ def test_param_types():
         None, "Entry")
     assert L.param_types("void g(@Nullable T t, String s)", {"T"}) == (None, "String")
     assert L.param_types("int count") is None
+
+
+def test_overloads_of_a_library_method(libroot, tmp_path, sample_root):
+    svc = Service(sample_root, cache_dir=str(tmp_path / "cache"), library_roots=[libroot])
+    out = svc.overloads("org/acme/ui/Widget#addColumn(+1).")
+    assert "3 overloads" in out
+    assert "this       Widget#addColumn(+1)" in out
+    assert "acme-ui:1.10.0 org/acme/ui/Widget.java:" in out
+    assert "Column<T> addColumn(Renderer<T> renderer)" in out
+
+
+def test_mask_agrees_with_the_reference_scanner():
+    from scipq_mcp.javasrc import _mask_slow, mask
+    cases = ['a "b\\" c', '"\\"\n x', "'\"' + \"'\"", 'x /* a\n b */ y // c\n"d"',
+             '"""\n t "q" \n"""', '"""\nopen', '"a\\\\" + b', "'\\''", '"open\nnext "x"',
+             "/* never closed", 's = "\\\\\\""; t', WIDGET, BASE, PANEL]
+    for c in cases:
+        assert mask(c) == _mask_slow(c), c
+
+
+def test_library_index_reuses_open_jars(libroot, tmp_path):
+    ix = L.LibraryIndex(str(tmp_path / "cache"), [libroot])
+    lib = ix.find_class("org/acme/ui/Widget")
+    a, b = ix.source(lib), ix.source(lib)
+    assert a is b and len(ix._zips) == 1
+    assert ix.find_class("org/acme/ui/Nope") is None and "org/acme/ui/Nope" in ix._absent
+    ix.close()

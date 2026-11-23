@@ -281,6 +281,12 @@ class TypedUse:
     owner: str          # the field, method, or type the use belongs to
     location: Location
     detail: str         # signature line (or local variable declaration)
+    via: str = ""       # the subtype this is a use of, with typed(subtypes=True)
+
+
+def typed_order(u: TypedUse):
+    return (TYPED_ORDER.index(u.category), u.location.source, u.location.range.start_line,
+            u.location.range.start_char)
 
 
 def typed(nav: Navigator, type_symbol: str) -> list[TypedUse]:
@@ -349,8 +355,7 @@ def typed(nav: Navigator, type_symbol: str) -> list[TypedUse]:
             detail = line if cat in ("method body", "initializer") else (signature_line(info)
                                                                           or line)
             out.append(TypedUse(cat, sym, loc, detail))
-    out.sort(key=lambda u: (TYPED_ORDER.index(u.category), u.location.source,
-                            u.location.range.start_line))
+    out.sort(key=typed_order)
     return out
 
 
@@ -362,6 +367,8 @@ class FamilyMember:
     symbol: str
     relation: str                   # "this", "ancestor", "descendant", "sibling"
     uses: list[Reference] = field(default_factory=list)
+    declaration: str = ""           # library members (no definition): their declaration
+    where: str = ""                 # and location in the sources jar
 
 
 def family(nav: Navigator, method: str) -> list[FamilyMember]:

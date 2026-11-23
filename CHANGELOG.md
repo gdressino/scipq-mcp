@@ -3,6 +3,22 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Changed
+
+- Library sources: jars stay open and parsed files are kept in memory for the life of the
+  server (opening the JDK's `src.zip` alone takes ~50 ms), and classes missing from every jar
+  are remembered; masking comments and literals in `.java` files is twice as fast. A cold
+  `typed(subtypes=true)` reads hundreds of library files.
+- `typed(subtypes=true)`: one section per kind of use, with the uses of every subtype merged
+  and tagged with it (`[HashMap]`).
+- `overloads` works for library and JDK methods (from the sources jar), with the uses of each
+  overload in the project.
+- `index_status` shows the profiles chosen from the project's annotations when the auxiliary
+  index exists (it said "none" before they were chosen).
+- README: one server process per agent session, and `uv cache clean` waits for them.
+
 ## 0.2.1 — 2026-11-22
 
 ### Added

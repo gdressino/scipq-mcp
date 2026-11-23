@@ -271,3 +271,18 @@ def test_typed_declared_type_only(nav):
     assert cats("java/util/concurrent/ConcurrentHashMap#") == {"initializer": {11},
                                                               "import": {6}}
     assert cats("java/util/Set#")["field"] == {11}
+
+
+def test_typed_with_subtypes_has_one_section_per_category(nav):
+    out = Service(nav.ws.root).typed("com/example/model/Entity#", subtypes=True)
+    headers = [line for line in out.splitlines() if line.endswith(":") and
+               not line.startswith(" ")]
+    assert len(headers) == len(set(headers)) and "field:" in headers
+    assert "[Account]  Service#seed" in out and "[Group]  Service#activateAll()" in out
+
+
+def test_index_status_profiles(sample_copy, tmp_path):
+    svc = Service(sample_copy, cache_dir=str(tmp_path / "cache"))
+    assert "once the auxiliary index exists" in svc.index_status()
+    svc.dead_code()
+    assert "auto (annotations found in the project)" in svc.index_status()

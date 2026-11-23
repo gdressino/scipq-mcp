@@ -490,7 +490,9 @@ def typed(type_symbol: str, uses, categories: list[str] | None, offset: int, lim
             current = u.category
             lines.append(f"{current}:")
         owner = f"{S.short(u.owner)}  " if u.owner and u.category != "import" else ""
-        lines.append(f"  {u.location.source}:{u.location.line}  {owner}— {u.detail[:140]}")
+        via = f"[{u.via}]  " if u.via else ""
+        lines.append(f"  {u.location.source}:{u.location.line}  {via}{owner}— "
+                     f"{u.detail[:140]}")
     return "\n".join(lines)
 
 
@@ -501,8 +503,8 @@ def family(method: str, fam, ws: Workspace, offset: int, limit: int,
     total_uses = sum(len(m.uses) for m in fam)
     lines = [f"{S.short(method)} — family of {len(fam)} methods, {total_uses} uses in total"]
     for m in fam:
-        where = loc(m.definition) if m.definition else "external"
-        sig = signature_line(m.definition.info) if m.definition else ""
+        where = loc(m.definition) if m.definition else (m.where or "external")
+        sig = signature_line(m.definition.info) if m.definition else _decl(m.declaration)
         lines.append(f"  {m.relation:<10} {member_name(m)}  {where}  {len(m.uses)} uses"
                      + (f"  — {sig}" if sig else ""))
     if show_uses:

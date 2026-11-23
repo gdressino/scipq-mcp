@@ -121,6 +121,11 @@ Server options: `--root DIR` (default project), `--shards-dir` (default
 `--tools all|core|name,name…` (fewer tools, less context; `core` keeps the navigation basics),
 `--build-workers N` (index build; default min(4, CPUs/4), always at low CPU/IO priority).
 
+Each agent session starts its own server process (~70 MB at rest). The whole process runs at
+low CPU and I/O priority (nice 10, best-effort I/O 7 on Linux), so it yields to builds and
+tests. With `uvx`, every running server holds uv's cache: `uv cache clean` waits until those
+sessions are closed.
+
 ## Tools
 
 | Tool | What it answers | Like |
@@ -134,7 +139,7 @@ Server options: `--root DIR` (default project), `--shards-dir` (default
 | `supertypes(symbol)` | supertypes of a type, or the methods a method overrides, direct first | type hierarchy |
 | `members(symbol, inherited)` | own and inherited members of a type, marking overrides and generated ones | — |
 | `family(symbol)` | a method's override family (ancestors, descendants, siblings) and the uses of each | — |
-| `overloads(symbol)` | every overload of a method and the uses of each | — |
+| `overloads(symbol)` | every overload of a method (also library ones) and the uses of each | — |
 | `outline(file)` | definitions in a file, nested, with signatures; takes a path or a type name | documentSymbol |
 | `callers(symbol, depth, include_overridden)` | incoming calls grouped by enclosing method | incomingCalls |
 | `callees(symbol, include_fields, include_types)` | methods called from a body | outgoingCalls |

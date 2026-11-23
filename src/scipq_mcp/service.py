@@ -8,6 +8,7 @@ and its warning is appended to every answer.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import fnmatch
 import os
 import re
@@ -56,6 +57,8 @@ class Service:
         self.config_file = config_file
         self.library_roots = library_roots
         self.build_workers = build_workers
+        self._lib_indexes: dict[tuple, L.LibraryIndex] = {}
+        self._lib_lock = threading.Lock()
 
     def settings(self, root: str, graph=None) -> CFG.Settings:
         present = graph.annotations_present() if graph is not None else None
@@ -197,8 +200,15 @@ class Service:
         return body
 
     def _library_index(self, root: str):
+        """One per project JDK, kept for the life of the service: it holds open jars and
+        parsed sources (reopening the JDK's src.zip costs ~50 ms)."""
         zip_path, note = L.jdk_for_project(root) if self.library_roots is None else ("", "")
-        ix = L.LibraryIndex(self.cache_dir, self.library_roots, zip_path or None)
+        key = (root, zip_path, tuple(self.library_roots or ()))
+        with self._lib_lock:
+            ix = self._lib_indexes.get(key)
+            if ix is None:
+                ix = L.LibraryIndex(self.cache_dir, self.library_roots, zip_path or None)
+                self._lib_indexes[key] = ix
         ix.jdk_note = note
         return ix
 
@@ -373,7 +383,9 @@ class Service:
             if subtypes:
                 subs = self._subtypes(nav, sym)
                 for t in subs:
-                    uses = uses + X.typed(nav, t)
+                    uses = uses + [dataclasses.replace(u, via=S.short(t))
+                                   for u in X.typed(nav, t)]
+                uses.sort(key=X.typed_order)  # one section per category, subtypes merged
                 if subs:
                     note += (f"-- with {len(subs)} subtypes: "
                              + ", ".join(S.short(t) for t in subs[:12])
@@ -430,12 +442,33 @@ class Service:
                 if syms and all(S.is_method(x) and S.parent(x) == S.parent(syms[0])
                                 and S.name_of(x) == S.name_of(syms[0]) for x in syms):
                     sym, note = syms[0], f"-- {symbol} → {len(syms)} overloads\n"
-                    return note + render.overloads(sym, X.overloads(nav, sym), nav.ws, offset,
-                                                   limit), set()
+                    items = X.overloads(nav, sym) or self._library_overloads(nav, sym)
+                    return note + render.overloads(sym, items, nav.ws, offset, limit), set()
+            elif S.is_method(r.symbol) and nav.definition(r.symbol) is None:
+                note = "" if S.looks_like_symbol(symbol) else f"-- {r.note}\n"
+                items = self._library_overloads(nav, r.symbol)
+                return note + render.overloads(r.symbol, items, nav.ws, offset, limit), set()
             sym, note, items = self._resolved(nav, symbol, lambda s: X.overloads(nav, s))
             srcs = {r.location.source for m in items for r in m.uses}
             return note + render.overloads(sym, items, nav.ws, offset, limit), srcs
         return body
+
+    def _library_overloads(self, nav: Navigator, sym: str) -> list:
+        """Overloads of a library method (from its sources jar, numbered as SCIP does), each
+        with its uses in this project."""
+        try:
+            index = self._library_index(nav.ws.root)
+        except (CacheError, OSError) as e:
+            raise QueryError(f"library sources unavailable: {e}") from e
+        lib = L.lookup(index, sym)
+        if lib is None or lib.member is None or not lib.overloads:
+            return []
+        owner, name = S.parent(sym), S.name_of(sym)
+        syms = [f"{owner}{name}({'+' + str(k) if k else ''})." for k in range(len(lib.overloads))]
+        uses = nav._references_many(set(syms))
+        return [X.FamilyMember(None, s, "this" if s == sym else "overload", uses.get(s, []),
+                               m.declaration, f"{lib.lib.coordinates} {lib.lib.entry}:{m.line}")
+                for s, m in zip(syms, lib.overloads)]
 
     def _b_tests(self, symbol: str, transitive: bool = False, depth: int = 3) -> Body:
         def body(nav: Navigator):
@@ -623,9 +656,28 @@ class Service:
     def _b_index_status(self) -> Body:
         def body(nav: Navigator):
             st = X.index_status(nav)
-            st.settings = self.settings(nav.ws.root)
+            st.settings = self._settings_if_indexed(nav)
             return render.status(st, nav.ws.root), set()
         return body
+
+    def _settings_if_indexed(self, nav: Navigator) -> CFG.Settings:
+        """Settings with the profiles chosen from the project's annotations when the auxiliary
+        index already exists (a status never builds or updates it)."""
+        try:
+            ix = Index(nav.ws, self.cache_dir, self.index_external, self.build_workers)
+            if os.path.exists(ix.path):
+                g = Graph(ix)
+                try:
+                    return self.settings(nav.ws.root, g)
+                finally:
+                    g.close()
+        except (CacheError, IndexError_, sqlite3.Error):
+            pass
+        st = self.settings(nav.ws.root)
+        if not st.source:
+            st.source = ("chosen from the project's annotations once the auxiliary index "
+                         "exists (the first impact, dead_code, census… builds it)")
+        return st
 
     # --- tools ------------------------------------------------------------------------------
 
