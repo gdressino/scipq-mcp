@@ -317,7 +317,7 @@ def extract(path: str, source: str, root: str) -> dict:
         out["refs"].extend((s, c, ",".join(v)) for (s, c), v in agg.items())
         out.setdefault("concepts", []).extend(
             _concept_rows(defs_by_symbol, infos, out["anns"], lines))
-        # Labels given to a type where it is registered: new MenuEntry("label", X.class…).
+        # Labels given to a type where it is registered: new NavItem("label", X.class…).
         for sym, said in call_texts.items():
             out["concepts"].append((sym, "", "", "", "", "", " ".join(said)[:2000]))
     return out
@@ -338,7 +338,7 @@ def _label(s: str) -> bool:
 def _call_strings(line: str, col: int) -> str:
     """The labels a call gives the type at `col`: its arguments that are a whole string
     literal, when X.class (or X.class.getName()) is itself a whole argument of that call —
-    new MenuEntry("Label", X.class.getName()). "" otherwise."""
+    new NavItem("Label", X.class.getName()). "" otherwise."""
     depth, start = 0, -1
     for k in range(col - 1, -1, -1):
         c = line[k]
