@@ -17,6 +17,7 @@ was written against (see _since_written), and missing files are looked up among 
 
 from __future__ import annotations
 
+import bisect
 import difflib
 import fnmatch
 import os
@@ -954,8 +955,8 @@ def _since_written(root: str, problems: list[Problem]) -> None:
             return False
         text = old.split("\n")
         if p.kind == "quoted":          # the doc's version had the code quoted at the lines
-            return any(p.names[0] in re.sub(r"\s+", "", x)
-                       for x in text[max(0, p.lines[0] - 2):p.lines[1] + 1])
+            return p.names[0] in "".join(re.sub(r"\s+", "", x)
+                                         for x in text[max(0, p.lines[0] - 3):p.lines[1] + 2])
         if p.kind == "weak":            # the doc pointed at the declaration then
             return _at_declaration(text, *p.lines, p.names or (p.name,))
         return any(_holds(text, max(1, lo - slack), hi + slack, p.names or (p.name,))
@@ -1036,10 +1037,8 @@ def _since_written(root: str, problems: list[Problem]) -> None:
             span = f"line {n}" if n == end else f"lines {n}-{end}"
             if p.kind == "quoted":
                 old = (olds.get(f"{sha}:{top}{p.src}") or "").split("\n")
-                was = [k + 1 for k in range(max(0, n - 2), min(len(old), end + 1))
-                       if p.names[0] in re.sub(r"\s+", "", old[k])]
-                at = [k + 1 for k, y in enumerate(now_lines(p.src))
-                      if p.names[0] in re.sub(r"\s+", "", y)]
+                was = [k for k in _code_at(old, p.names[0]) if n - 2 <= k <= end + 1]
+                at = _code_at(now_lines(p.src), p.names[0])
                 if was and len(at) == 1 and abs(at[0] - was[0]) > 2:
                     d = at[0] - was[0]
                     # The doc's lines decide (intact: moved); the code quoted only places them.
@@ -1282,8 +1281,11 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
                                              for t in m.types_in.get(f, [])):
         return      # File.java:12 (main): another branch's (unless the file has a main)
     clause = line[_segment(line, mo.start(), mo.end(), parens=False)[0]:mo.start()]
-    if re.search(r"\b(?:en|in|on|de)\s+`?(?:main|master" + "".join(
-            "|" + re.escape(v) for v in other_versions) + r")\b(?!\.)", clause, re.I):
+    clause = re.split(r"[.;:]\s|\s[—–]\s", clause)[-1]     # "… en main no. — evidencia: `X`"
+    said = list(re.finditer(r"\b(?:en|in|on|de)\s+`?(?:(main|master" + "".join(
+        "|" + re.escape(v) for v in other_versions) + r")|HEAD|la rama|the branch|this branch|"
+        r"esta rama|el checkout|the checkout)\b(?!\.)", clause, re.I))
+    if said and said[-1].group(1):
         return      # "en main los sub-forms … (File.java:422 …)": that branch's code
     # What the mention's own part of the line names: the name glued to the path (`name
     # (File:N)`, `File:N — name`, `File:N (name)`), else the names of its parentheses, its
@@ -1298,6 +1300,8 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
                        for x, y in _neighbour_cells(line, mo.start())
                        if re.match(r"\s*(?:`|[A-Za-z_$][\w$.#]*\()", line[x:y])]  # code, not a remark
     glued = _glued_names(line[oa:ob], mo.group(0))
+    loose = {x[1:] for x in glued if x[:1] == "~"}      # glued, but not surely the line's
+    glued = {x for x in glued if x[:1] != "~"} | loose
     # `a()` + `b()` (File:N): a list of names, each of them at the lines
     need_all = {x[1:] for x in glued if x[:1] == "+"}
     glued = {x for x in glued if x[:1] != "+"} | need_all
@@ -1311,7 +1315,7 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
             owner = head.group(1).rstrip(".#").split(".")[-1] if head else ""
             return any(m.member_syms.get((t, x)) and (not owner or S.name_of(t) == owner)
                        for f in hits for t in m.types_in.get(f, []))
-        glued = {x for x in glued if declared_here(x) or not re.match(
+        loose |= {x for x in glued if not declared_here(x) and re.match(
             r"`?(?:[\w$]+[.#])*" + re.escape(x) + r"\b", line[oa:ob].lstrip())}
     if not any(x in m.by_member or x in m.types for x in glued):
         glued = set()       # glued words that name nothing in the code (`onClose`, a key)
@@ -1342,8 +1346,16 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
                         {g.group(1) for p, q in code if inside(p) for g in
                          re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q])
                          if ours(p + g.start())})
+    bare = not in_segment
+    if bare:                # "único llamador de `admitir`": a member written alone
+        in_segment = sorted({line[p + 1:q - 1] for p, q in code if inside(p) and ours(p) and
+                             re.fullmatch(r"[a-z_$][\w$]*", line[p + 1:q - 1]) and
+                             line[p + 1:q - 1] in m.by_member})
     in_segment = [x for x in in_segment if x not in others]
-    names: list[str] = sorted(glued) or in_segment
+    def distance(x: str) -> int:
+        at = line.rfind(x, oa, mo.start())
+        return mo.start() - at if at >= 0 else max(0, line.find(x, mo.end(), ob)) + 10_000
+    names: list[str] = sorted(glued, key=lambda x: (distance(x), x)) or in_segment
     # When the glued names cannot be checked in the file, those of the mention's clause.
     in_clause = {S.name_of(x) for x, at in named_here if oa <= at < ob and ours(at)} | \
         {g.group(1) for p, q in code if oa <= p < ob for g in
@@ -1353,7 +1365,8 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
                     if c not in names and c not in others)
     # Names written right at the mention: only then may git say the doc was wrong.
     flow_cell = any(re.search(r"→|->", line[x:y]) for x, y in extra_spans)  # a call chain
-    tight = bool(glued) or bool(extra_spans and names and not flow_cell) or bool(
+    tight = bool(glued - loose) or bool(extra_spans and names and not flow_cell and
+                                       not (bare and not glued)) or bool(
         {c[4:] if c.startswith("new ") else c for c in
          _glued_calls(line, mo, code, oa, ob, tight=True)} & set(names))
     if not names and re.fullmatch(r"\s*[(\[]?\s*`?", line[:mo.start()]):
@@ -1436,14 +1449,14 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         if not text_cache.get(fits[0]):
             _with_header(root, fits[0], 1, text_cache)      # reads the file into the cache
         flat = [re.sub(r"\s+", "", x) for x in text_cache.get(fits[0]) or []]
-        if not any(quote in y for y in flat[max(0, n - 3):end_n + 2]):
+        if quote not in "".join(flat[max(0, n - 3):end_n + 2]):      # over line breaks
             add(mo.group(0), "", "quoted", src=fits[0], lines=(n, end_n), names=(quote,),
                 recheck=lambda n2, m2, also=(): True)
     bad = verdict(n, end_n, fits, more)
     if bad is None:
         # It holds through a call or a comment while the file declares the name elsewhere:
         # git may show the doc pointed at the declaration (then the lines moved).
-        weak = verdict(n, end_n, fits, more, strict=True)
+        weak = verdict(n, end_n, fits, (), strict=True)     # its own lines start there?
         if weak is not None:
             x, where, src = weak
             add(mo.group(0), "", "weak", src=src, lines=(n, end_n), name=x,
@@ -1467,6 +1480,22 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
             "line-moved", **extra)
 
 
+def _code_at(lines: list[str], code: str) -> list[int]:
+    """The lines (1-based) where code, without spaces, starts; a statement over several lines
+    too."""
+    flat = [re.sub(r"\s+", "", x) for x in lines]
+    starts, k = [], 0
+    for x in flat:
+        starts.append(k)
+        k += len(x)
+    joined = "".join(flat)
+    out, at = [], joined.find(code)
+    while at >= 0:
+        out.append(bisect.bisect_right(starts, at))
+        at = joined.find(code, at + 1)
+    return sorted(set(out))
+
+
 def _quote_after(line: str, mo, code: list) -> str | None:
     """The statement a doc quotes right after a line number, without spaces: the code span
     that follows it (`File:N` `code`, `File:N — code`, `File:N navega `code``), the next table
@@ -1486,12 +1515,18 @@ def _quote_after(line: str, mo, code: list) -> str | None:
     if text is None:
         start = own[0] if own else mo.start()
         text = next((line[p + 1:q - 1] for p, q in reversed(code) if q <= start and
-                     re.fullmatch(r"\s*(?:en|in|at|de|of)?\s*`?", line[q:start])), None)
+                     re.fullmatch(r"\s*(?:en|in|at|de|of)?\s*\(?\s*`?", line[q:start])), None)
+    if text is None:
+        # "`a.b()` (A.java:12; idéntico en B.java:30)": the same code
+        opened = line.rfind("(", 0, mo.start())
+        if opened > 0 and re.search(r"\b(?:id[ée]ntic[oa]s?|igual|same|identical|también|also)\b",
+                                    line[opened:mo.start()], re.I):
+            text = next((line[p + 1:q - 1] for p, q in reversed(code) if q <= opened and
+                         re.fullmatch(r"\s*", line[q:opened])), None)
     if text is None:
         return None
-    x = re.sub(r"\s+|;$", "", text)
-    if len(x) < 12 or not re.search(r"[\w$)]\.[\w$]+\(|=", x) or "…" in x or "..." in x or \
-            _PATH.search(x):
+    x = re.sub(r"\s+|;$", "", re.split(r"…|\.\.\.", text)[0])      # up to an ellipsis
+    if len(x) < 12 or not re.search(r"[\w$)]\.[\w$]+\(|=", x) or _PATH.search(x):
         return None
     return x
 
@@ -1676,7 +1711,9 @@ def _glued_calls(line: str, mo, code: list, a: int, b: int, tight: bool = False)
         pieces.append(after[:40] if tight else after[:160])
     before = line[a:mo.start()]
     bm = re.search(r"(`[^`]+`)\s*\(\s*`?$", before)
-    if bm:
+    # "`code` (File:N lo deja en null…)": the parenthesis says what the line does
+    prose = re.search(r"[^\W\d_]{2,}\s+[^\W\d_]{2,}", line[mo.end():].split(")", 1)[0])
+    if bm and not (tight and prose):
         pieces.append(bm.group(1))
     if line.lstrip().startswith("|"):
         cells = line.split("|")
@@ -1745,14 +1782,21 @@ def _glued_names(segment: str, path_mention: str) -> set[str]:
                             + p)):
         for m_ in re.finditer(rx, segment):
             name = m_.group(2) if k < 2 else m_.group(1)
+            loose = False
             if k in (0, 3):
                 head = segment[:m_.start(2 if k == 0 else 1)]
-                if re.search(r"(?:→|->)\s*`?(?:[\w$]+[.#])*$|(?<![\w$])(?:sin|without|not?)"
-                             r"\s+(?:\w+\s+)?`?(?:[\w$]+[.#])*$", head, re.I):
-                    continue        # "→ X (File:N)", "sin filtrar X (…)": not X's line
-                # `a()` + `b()` + `c()` (File:N): the whole list
-                while (lm := re.search(r"`([^`]+)`\s*(?:\+|,|\by\b|\band\b)\s*`?(?:[\w$]+[.#])*$",
-                                       head)):
+                if re.search(r"(?<![\w$])(?:sin|without|not?)\s+(?:\w+\s+)?`?(?:[\w$]+[.#])*$",
+                             head, re.I):
+                    continue        # "sin filtrar X (…)": not X's line
+                # "→ X (File:N)", "de X (…)", "X (File:N fija …)": X may be what the line
+                # does or what it belongs to; a name, but no claim that the doc was wrong
+                rest = segment[m_.end():].split(")", 1)[0]
+                loose = bool(re.search(r"(?:→|->)\s*`?(?:[\w$]+[.#])*$|(?<![\w$])(?:de|del|of|"
+                                       r"por|by|from)\s+`?(?:[\w$]+[.#])*$", head, re.I) or
+                             re.search(r"[^\W\d_]{2,}\s+[^\W\d_]{2,}", rest))
+                # `a()` + `b()` + `c()` (File:N): the whole list ("y", "and" or a comma may
+                # join clauses: "devuelve `a()` y `B.c` (File:N) …")
+                while (lm := re.search(r"`([^`]+)`\s*\+\s*`?(?:[\w$]+[.#])*$", head)):
                     found = re.findall(r"([a-z_$][\w$]*)\s*\(", lm.group(1))
                     out.update("+" + x for x in found)
                     if found:
@@ -1772,7 +1816,7 @@ def _glued_names(segment: str, path_mention: str) -> set[str]:
                 continue
             if name[:1].islower() or name[:1] == "?" or name == "constructor" or \
                     (k == 0 and m_.group(1) == "`" and m_.group(4)):    # `Type` (File:N)
-                out.add(name)
+                out.add("~" + name if loose and name[:1] != "?" else name)
     return out - {"constructor", "el", "la", "the", "line", "linea", "líneas", "lines", "null",
                   "true", "false", "this", "super", "new", "return", "if", "for", "while"}
 

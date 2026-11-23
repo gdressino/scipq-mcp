@@ -3,6 +3,19 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Changed
+
+- `check_refs` binds names to line numbers more finely. A name after an arrow, a
+  preposition ("de X (File:N)") or before a parenthesis that goes on in prose still names
+  the line but never makes the doc "wrong in its own version"; a member written alone in
+  backticks (`` `admitir` ``) names the line when nothing else does; only `+` joins a list of
+  names that must all be there ("y"/"and" may join clauses); "en main … y en la rama" ends
+  in the branch; "en main" in an earlier clause ("… en main no. — evidencia: `X`") does not
+  count. Quoted code: before the path (`` `a.b()` (File:N) ``), up to an ellipsis, inherited
+  by "idéntico en File:N", and matched over line breaks.
+
 ## 0.7.0 — 2026-11-23
 
 ### Changed
