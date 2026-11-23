@@ -497,7 +497,11 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         there (with the closest names and where that name lives now), parameter lists no
         overload has, names none of the same-named types has, missing files, and line
         numbers that no longer fall in the symbol named next to them; counts by kind, then
-        by file, repeats merged. A folder in files means its Markdown files. Library types,
+        by file, repeats merged. In a git checkout, line numbers are followed from the version
+        the doc was written against: "line N is now M" when the code only moved (fix the
+        number), "changed since the doc named X (date, commit)" when it was edited (re-read
+        the claim); missing files say when they were deleted, or that the repository never
+        had them (planned). A folder in files means its Markdown files. Library types,
         placeholders (Foo, getX), Object/Class/enum members and mentions the line says are
         gone ("removed") are left alone."""
         return service.check_refs(project_root, files, exclude, offset, limit, format)

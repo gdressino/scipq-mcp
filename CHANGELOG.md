@@ -3,6 +3,25 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Changed
+
+- `check_refs` follows line numbers through git history. The version of the code a doc was
+  written against is the first commit, on any branch, whose copy of the doc has that line
+  (or the newest version of the file from the three weeks before it, merges included, whose
+  lines hold the name); the lines are mapped through the diff from it to the checkout. A
+  line that only moved says its new number ("line 120 is now 134"), a line edited since says
+  so with the date, the commit and where the name is now; a name the file never had is not
+  reported, and a missing file is told deleted (when, which commit) or never there since the
+  doc was written (planned, or another repository's file).
+- `check_refs` reads more of how docs write line numbers: lists (`:40,42-43`, `:12/20`,
+  `:12 + 80-84`, `:30→:35`) hold the name at any of their lines; a name written after
+  another path or after a bare `:N` belongs to that one; `getX` holds where the field `x` is
+  declared; implicit members (`toString`, `close`, `iterator`…) are never required at a
+  line; `main <sha> path` and `<sha> path` are another version; a table cell next to the
+  path counts only up to its first clause, and only when the path's cell holds nothing else.
+
 ## 0.6.0 — 2026-11-23
 
 ### Added

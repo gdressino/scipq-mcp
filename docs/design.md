@@ -213,6 +213,18 @@ section. Unknown keys are reported, not ignored silently.
    `File.java:N` mentioned in Markdown, resolved at once from the auxiliary index; missing types
    and members, wrong parameter lists, missing files, moved lines. Library types, placeholders,
    examples, negated mentions, other languages' snippets and archive folders are left alone.
+   A line number is checked against the names of its own part of the line (the name glued
+   to it, else its parentheses, clause or table cell; a name after another path or a bare
+   `:N` is that one's), at any of the lines listed with it (`:40,42-43`, `:12 + 80`);
+   `getX` holds where the field `x` is declared; implicit members (`toString`, `close`)
+   are never required. When it fails, git says why: the version of the code the doc was
+   written against is the first commit (any branch) whose copy of the doc has that line, or
+   the newest version of the file from the three weeks before it (merges included) whose
+   lines hold the name; the lines are mapped through the diff from it to the checkout.
+   Lines that only moved get their new number (when they still hold the name), lines edited
+   since say so (and where the name is now), a name the file never had is not reported, and
+   a missing file is told deleted (when, which commit) or never there since the doc was
+   written (a plan, another repository's).
 7. Entry points per profile on top of `impact` and `changed`, by kind, one row per type;
    rules may combine supertypes and name globs (both must hold), take classes from XML
    descriptors (`web.xml`, with URL patterns), and be `reached = false` (alive for

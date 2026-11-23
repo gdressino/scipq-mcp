@@ -648,6 +648,90 @@ def test_check_refs_library_types_only_in_old_versions(tmp_path):
     assert m.stale_library("Grid") == ""
 
 
+def _git(root, *args, date=None):
+    import os
+    import subprocess
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+    if date:
+        env.update(GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
+    subprocess.run(["git", "-C", root, *args], check=True, capture_output=True, env=env)
+
+
+def test_check_refs_follows_lines_through_git_history(sample_copy, tmp_path):
+    # The doc was written against an older Entity.java: without the class javadoc (3 lines
+    # fewer) and with a reset() that a later commit removed; a file it names was deleted.
+    import os
+    import shutil
+    import pytest
+    from scipq_mcp.service import Service
+    if shutil.which("git") is None:
+        pytest.skip("no git")
+    model = os.path.join(sample_copy, "core/src/main/java/com/example/model")
+    entity = os.path.join(model, "Entity.java")
+    with open(entity) as fh:
+        now = fh.read()
+    lines = now.split("\n")
+    old = lines[:2] + lines[5:-2] + ["", "    public void reset() {", "        setState(0);",
+                                       "    }"] + lines[-2:]
+    with open(entity, "w") as fh:
+        fh.write("\n".join(old))
+    with open(os.path.join(model, "Legacy.java"), "w") as fh:
+        fh.write("package com.example.model;\nclass Legacy {}\n")
+    e = "core/src/main/java/com/example/model/Entity.java"
+    with open(os.path.join(sample_copy, "NOTES.md"), "w") as fh:
+        fh.write(f"- `getState` ({e}:15) reads it.\n"
+                 f"- `setState(0)` ({e}:25) resets it.\n"
+                 f"- The old helper core/src/main/java/com/example/"
+                 f"model/Legacy.java; a planned core/src/main/java/com/example/model/Planned.java\n")
+    _git(sample_copy, "init", "-q")
+    _git(sample_copy, "add", "-A")
+    _git(sample_copy, "commit", "-qm", "a", date="2026-01-02T10:00:00Z")
+    with open(entity, "w") as fh:
+        fh.write(now)
+    os.remove(os.path.join(model, "Legacy.java"))
+    os.utime(entity, (1_700_000_000, 1_700_000_000))
+    _git(sample_copy, "add", "-A")
+    _git(sample_copy, "commit", "-qm", "b", date="2026-01-05T10:00:00Z")
+    with open(os.path.join(sample_copy, "NOTES.md"), "a") as fh:
+        fh.write(f"- Not committed: `getState` ({e}:12).\n")
+    out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
+    assert f"{e}:15  — line 15 is now 18 (moved since 2026-01-02)" in out, out
+    assert f"{e}:25  — line 25 changed since the doc named setState (2026-01-02, " in out
+    assert "Legacy.java  — no such file (deleted 2026-01-05, " in out
+    assert "Planned.java  — no such file, nor deleted since the doc was written" in out
+    assert "line 12 no longer mentions getState" in out          # an uncommitted doc line
+    assert "1 line numbers that only moved" in out and "1 lines changed since" in out
+
+
+def test_check_refs_reads_line_lists_getters_and_neighbouring_numbers(sample_copy, tmp_path):
+    import os
+    from scipq_mcp.service import Service
+    e = "core/src/main/java/com/example/model/Entity.java"
+    with open(os.path.join(sample_copy, "NOTES.md"), "w") as fh:
+        fh.write(f"- `{e}:3,14` — `setState(int)`; `{e}:3 + 14-16` — `setState(int)`.\n"
+                 f"- `getState()` ({e}:7) is the field's getter.\n"
+                 f"- `{e}:22` returns null, while `:15` is the body of `setState(…)`.\n"
+                 f"- `{e}:23` returns null, and `setState()` (`:15`) writes it.\n"
+                 f"- `main abc1234 {e}:3 — setState(int)` was elsewhere then.\n"
+                 f"- `{e}:3` — `setState(int)` is not there.\n")
+    out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
+    assert "1 problem: 1 lines no longer in the symbol named" in out, out
+    assert "line 6  " in out and "line 3 no longer mentions setState" in out
+
+
+def test_line_maps_through_diff_hunks():
+    from scipq_mcp.checkrefs import _edited_to, _hunks, _map_line
+    diff = ("diff --git a/A.java b/A.java\n--- a/A.java\n+++ b/A.java\n"
+            "@@ -2,0 +3,2 @@\n+x\n+y\n@@ -10,2 +12 @@\n-a\n-b\n+c\n"
+            "diff --git a/B.java b/B.java\nnew file mode 100644\n")
+    h = _hunks(diff)
+    assert h["B.java"] is None
+    assert [_map_line(h["A.java"], n) for n in (1, 2, 3, 9, 10, 11, 12)] == \
+        [1, 2, 5, 11, None, None, 13]
+    assert _edited_to(h["A.java"], 10, 10) == (12, 12)
+
+
 def test_path_goes_through_dispatch(refactor_root, tmp_path):
     # Gallery#show() calls View#measure() → render(), which SalesPage's chain overrides.
     from scipq_mcp.service import Service
