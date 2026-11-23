@@ -317,13 +317,19 @@ def field_sections(nav: Navigator, d: Definition, short: str
                    ) -> tuple[list[Section], list[Reference], list[str]]:
     name = S.name_of(d.symbol)
     accessors = nav._definitions_of(set(accessor_symbols(d.symbol)))
+    # A record component's accessor is implicit: scip-javac gives it no definition.
+    implicit = X.record_accessor(nav, d.symbol, [d])
+    implicit = implicit if implicit and implicit not in accessors else ""
     sections = []
-    if accessors:
+    if accessors or implicit:
         lines = [f"  {S.short(a.symbol)}  {render.loc(a)}" + ("  (generated)" if a.generated
                                                                else "")
                  for a in sorted(accessors.values(), key=lambda a: a.symbol)]
-        sections.append(Section("accessors", f"accessors ({len(accessors)}):", lines))
-    refs_by = nav._references_many({d.symbol} | set(accessors))
+        if implicit:
+            lines.append(f"  {S.short(implicit)}  (implicit: a record component)")
+        sections.append(Section("accessors", f"accessors ({len(lines)}):", lines))
+    refs_by = nav._references_many({d.symbol} | set(accessors) | ({implicit} if implicit
+                                                                   else set()))
     refs = [r for rs in refs_by.values() for r in rs]
     wanted: dict[str, set[int]] = {}
     for r in refs:

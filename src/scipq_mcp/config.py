@@ -298,9 +298,18 @@ def _relative_glob(g, where: str, warnings: list[str]) -> bool:
     return True
 
 
-def repo_template(profiles: list[str], detected: bool) -> str:
+def repo_template(profiles: list[str], detected: bool, generated: list[str] = ()) -> str:
     """A `.scipq.toml` to start from (printed by `scipq-mcp init-config`)."""
     names = ", ".join(f'"{p}"' for p in profiles)
+    if generated:
+        by_name = ("[by_name]\n# Directories that look generated (by name, or by a \"generated\" "
+                   "header): names there\n# would hide dead code. Check the list.\nexclude = ["
+                   + ", ".join(f'"{d}/*"' for d in generated) + "]\n"
+                   "# globs = [\"*.xml\", \"*.jrxml\"]      # files where names are used as "
+                   "text")
+    else:
+        by_name = ("# [by_name]\n# globs = [\"*.xml\", \"*.jrxml\"]      # files where names are "
+                   "used as text (reflection, reports)\n# exclude = [\"generated/*\"]")
     why = ("detected from the annotations this checkout uses" if detected else
            "no shards yet: compile with the init script (scipq-mcp gradle-init), then run "
            "init-config again to detect them")
@@ -315,9 +324,7 @@ profiles = [{names}]   # {why}
 # filter = "./gradlew {{module}}:test --tests '{{fqcn}}'"
 #   placeholders: {{module}} {{task}} {{fqcn}} {{simple}} {{classes}} {{tests}}
 
-# [by_name]
-# globs = ["*.xml", "*.jrxml"]      # files where names are used as text (reflection, reports)
-# exclude = ["generated/*"]
+{by_name}
 
 # [[entry_points]]                  # framework entry points beyond the profiles
 # kind = "screen"

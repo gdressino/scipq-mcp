@@ -468,6 +468,11 @@ class Index:
                 con.execute("INSERT OR REPLACE INTO meta VALUES ('last_used_at', ?)",
                             (str(int(time.time())),))
                 con.commit()
+                if building:
+                    # Switch to WAL here, without fsync: done by the first normal connection
+                    # instead, it would force the whole new file to disk (tens of seconds of
+                    # I/O wait with several builds at once). The kernel writes it back lazily.
+                    con.execute("PRAGMA journal_mode=WAL")
             finally:
                 con.close()
             if building:

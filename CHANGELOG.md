@@ -24,7 +24,9 @@ version and date when releasing.
   links out of it ignored, nothing executed. `setup` and `index_status` show which files apply
   and where the tests filter came from.
 - `scipq-mcp init-config`: prints a `.scipq.toml` template with the profiles detected from the
-  checkout's shards; writes nothing. README: "Team setup".
+  checkout's shards, and a `[by_name] exclude` for directories that look generated (by name,
+  e.g. `*-out`, `generated`, `dist`, or by a "generated / do not edit" header), whose names
+  would hide dead code; writes nothing. README: "Team setup".
 
 ### Changed
 
@@ -41,10 +43,13 @@ version and date when releasing.
 - README: one server process per agent session, `uv cache clean` waits for them, and pin the
   version when several worktrees share a machine.
 - The auxiliary index is built from scratch into a temporary file, without journal or fsync
-  (it is a disposable cache), and moved into place when complete: half the writes of WAL.
-  Three checkouts building at once on a 10,000-file project: ~50 s instead of ~120 s.
-- dead_code and by-name searches skip documentation (`docs/`, `doc/`, `*.md`, `*.adoc`):
-  notes and data dumps there mention names without using them.
+  (it is a disposable cache), switched to WAL there and moved into place when complete: half
+  the writes, and no fsync of the whole new file by the first query. Three checkouts building
+  at once on a 10,000-file project: ~26 s each, build and first answer, instead of ~110 s.
+- dead_code and by-name searches skip documentation (`docs/`, `doc/`, `*.md`, `*.adoc`),
+  hidden directories (`.github/`, `.idea/`, tools' settings…) and lockfiles
+  (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `*.lock`): they mention names without
+  using them.
 - dead_code says how its list splits (`N candidates + M low confidence = T`); `impact` and
   `callers` say which line they show (where each caller is defined, or the call).
 - Shards written in the last minute: on Linux, the answer tells a build still running in this
@@ -61,7 +66,9 @@ version and date when releasing.
 - `context` and `index_status` never open an auxiliary index of another schema or mode (that
   would discard it); `context` says it needs one instead.
 - `context` on a field: the accessors of a `boolean isX` field (`isX()`, `setX()`) and of a
-  record component (`x()`); callers counted once each, and marked when truncated.
+  record component (its implicit `x()`, which has no definition in the shards, and its uses);
+  callers counted once each, and marked when truncated; no per-module tally in a single
+  module.
 - Build detection: Maven Wrapper, `-p`/`--project-dir`/`-f`/`--file`, and builds run from a
   parent directory count as a build running in the checkout.
 - `changed` when the build is a subdirectory of its git repository (a monorepo): diff paths are

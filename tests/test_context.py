@@ -84,3 +84,9 @@ def test_context_never_touches_an_index_of_another_schema(sample_copy, tmp_path)
     assert con.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0] == "old"
     assert con.execute("SELECT count(*) FROM shards").fetchone()[0] > 0
     con.close()
+
+
+def test_record_component_context_includes_its_implicit_accessor(sample_copy, tmp_path):
+    out = Service(sample_copy, cache_dir=str(tmp_path / "cache")).context("Point#x")
+    assert "Point#x()  (implicit: a record component)" in out
+    assert "return new Point(x() * k, y * k);  (x)" in out

@@ -433,3 +433,14 @@ def test_external_pruning_waits_for_unreadable_shards(sample_copy, cache):
         fh.write(data)
     ix.update()
     assert entity_refs(ix) >= kept       # defined again (plus its own): none lost
+
+
+def test_by_name_skips_hidden_directories_and_lockfiles(tmp_path):
+    from scipq_mcp.graph import candidate_files
+    for p in (".github/workflows/ci.yaml", "web/.config/package-lock.json", "yarn.lock",
+              "app/src/main/resources/app.yaml", "web/package-lock.json"):
+        os.makedirs(os.path.dirname(os.path.join(tmp_path, p)) or str(tmp_path), exist_ok=True)
+        with open(os.path.join(tmp_path, p), "w") as fh:
+            fh.write("x\n")
+    assert candidate_files(str(tmp_path), ["*.yaml", "*.json", "*.lock"]) == [
+        "app/src/main/resources/app.yaml"]

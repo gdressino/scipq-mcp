@@ -681,9 +681,9 @@ class Service:
             by_module[n.module or "(root)"] = by_module.get(n.module or "(root)", 0) + 1
         top = sorted(by_module.items(), key=lambda kv: -kv[1])[:6]
         tests = sum(1 for n in nodes if n.test)
+        modules = ("; " + ", ".join(f"{m} {c}" for m, c in top)) if len(by_module) > 1 else ""
         return (f"impact (depth 3): {len(nodes)} definitions ({tests} in tests"
-                + ("; truncated" if truncated else "") + "); "
-                + ", ".join(f"{m} {c}" for m, c in top) + f" → impact({short})")
+                + ("; truncated" if truncated else "") + ")" + modules + f" → impact({short})")
 
     # --- v2: queries over the auxiliary index -----------------------------------------------
 

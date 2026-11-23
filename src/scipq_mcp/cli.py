@@ -168,11 +168,14 @@ def _init_config(root: str | None) -> str:
     from .workspace import Workspace, WorkspaceError, find_project_root
 
     root = find_project_root(root or os.getcwd())
+    from .graph import generated_dirs
+
+    generated = generated_dirs(root)
     try:
         ws = Workspace(root)
         ws.files()
     except WorkspaceError:
-        return CFG.repo_template([], detected=False)
+        return CFG.repo_template([], detected=False, generated=generated)
     profiles, _warnings = CFG.load_profiles()
     found = []
     for name, data in profiles.items():
@@ -180,7 +183,7 @@ def _init_config(root: str | None) -> str:
                 for x in ep.get("annotations", [])}
         if anns and ws.grep(x.encode() for x in anns):
             found.append(name)
-    return CFG.repo_template(found, detected=True)
+    return CFG.repo_template(found, detected=True, generated=generated)
 
 
 def _cache(a) -> str:
