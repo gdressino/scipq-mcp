@@ -117,6 +117,17 @@ public abstract class Base implements Marker {
     /** Base version. */
     public Column<String> addColumn(Provider<String> p) { return null; }
     public void reset() {}
+    public void resize(String size) {}
+    public void resize(int width) {}
+}
+'''
+PANEL = '''package org.acme.ui;
+
+public class Panel extends Base {
+    @Override
+    public void resize(int width) {}
+    private void resize(long width) {}
+    public void resize(double width) {}
 }
 '''
 MARKER = '''package org.acme.core;
@@ -134,6 +145,7 @@ def hierarchy_root(tmp_path):
     with zipfile.ZipFile(jar_dir / "acme-all-2.0.0-sources.jar", "w") as z:
         z.writestr("org/acme/ui/Widget.java", WIDGET)
         z.writestr("org/acme/ui/Base.java", BASE)
+        z.writestr("org/acme/ui/Panel.java", PANEL)
         z.writestr("org/acme/core/Marker.java", MARKER)
     return str(tmp_path / "gradle" / "files-2.1")
 
@@ -148,10 +160,10 @@ def test_library_hierarchy_and_members(hierarchy_root, tmp_path, sample_root):
     groups = L.ordered_members(ix, ["org/acme/ui/Widget#", "org/acme/ui/Base#",
                                     "org/acme/core/Marker#"])
     base = [g for g in groups if g[0] == "org/acme/ui/Base#"][0]
-    assert [m.name for m in base[2]] == ["reset"] and base[3] == 1  # addColumn overridden
+    assert [m.name for m in base[2]] == ["reset", "resize", "resize"] and base[3] == 1
     svc = Service(sample_root, cache_dir=str(tmp_path / "cache"), library_roots=[hierarchy_root])
     out = svc.members("org/acme/ui/Widget#")
-    assert "Widget (library)" in out and "from Base (1, 1 overridden by nearer types" in out
+    assert "Widget (library)" in out and "from Base (3, 1 overridden by nearer types" in out
     assert "from Marker (1" in out and "default String tag()" in out
 
 
@@ -201,3 +213,48 @@ def test_library_map_waits_for_another_builder(libroot, tmp_path, monkeypatch):
     release.set()
     t.join()
     assert ix.find_class("org/acme/ui/Widget").coordinates == "org.acme:acme-ui:1.10.0"
+
+
+def test_another_jdk_in_the_shared_map_does_not_hide_this_one(tmp_path):
+    """A map built with one JDK's src.zip (an older version, another checkout) must still
+    index this project's JDK when it asks for a JDK class."""
+    def jdk(name, doc):
+        home = tmp_path / name / "lib"
+        home.mkdir(parents=True)
+        with zipfile.ZipFile(home / "src.zip", "w") as z:
+            z.writestr("java.base/java/util/Map.java",
+                       f"package java.util;\n/** {doc} */\npublic interface Map<K, V> {{\n"
+                       "    V get(Object key);\n}\n")
+        return str(home / "src.zip")
+
+    old, new = jdk("jdk-old", "Old map."), jdk("jdk-new", "New map.")
+    cache = str(tmp_path / "cache")
+    assert L.LibraryIndex(cache, [old]).find_class("java/util/Map").jar == old
+    found = L.LibraryIndex(cache, [old], jdk_zip=new).find_class("java/util/Map")
+    assert found is not None and found.jar == new
+
+
+def test_overrides_need_the_same_parameter_types(hierarchy_root, tmp_path):
+    ix = L.LibraryIndex(str(tmp_path / "cache"), [hierarchy_root])
+    (_t, _l, panel, _h), (_t2, _l2, base, hidden) = L.ordered_members(
+        ix, ["org/acme/ui/Panel#", "org/acme/ui/Base#"])
+    # resize(int) is overridden by Panel; resize(String) is not
+    assert [m.declaration for m in base if m.name == "resize"] == [
+        "public void resize(String size)"]
+    assert hidden == 1
+    first = panel[0]
+    assert (first.start_line, first.line) == (4, 5)  # reported at the name, not @Override
+    assert L.member_symbol("org/acme/ui/Panel#", panel[-1]) == "org/acme/ui/Panel#resize(+2)."
+    # Overridden in the project (SCIP symbols): hidden too.
+    *_rest, (_t3, _l3, base2, hidden2) = L.ordered_members(
+        ix, ["org/acme/ui/Panel#", "org/acme/ui/Base#"], {"org/acme/ui/Base#reset()."})
+    assert "reset" not in {m.name for m in base2} and hidden2 == 2
+
+
+def test_param_types():
+    assert L.param_types("public void f(final java.util.List<String> a, int[] b, "
+                         "Object... c)") == ("List", "int[]", "Object[]")
+    assert L.param_types("public <C extends Component> C add(C c, Map.Entry<K, V> e)") == (
+        None, "Entry")
+    assert L.param_types("void g(@Nullable T t, String s)", {"T"}) == (None, "String")
+    assert L.param_types("int count") is None

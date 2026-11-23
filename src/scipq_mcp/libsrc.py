@@ -383,9 +383,13 @@ class LibraryIndex:
         return out
 
     def _query(self, con: sqlite3.Connection, class_path: str):
-        return list(con.execute(
+        """Rows for the class; among the JDK source zips the shared map knows, only this
+        project's (another JDK's zip, e.g. one indexed by an older version or another
+        checkout, must not hide that this one is still to be indexed)."""
+        rows = con.execute(
             "SELECT j.path, c.entry, j.coordinates FROM classes c JOIN jars j "
-            "ON j.id = c.jar_id WHERE c.name = ?", (class_path,)))
+            "ON j.id = c.jar_id WHERE c.name = ?", (class_path,))
+        return [r for r in rows if not r[0].endswith("src.zip") or r[0] == self.jdk_zip]
 
     def find_class(self, class_path: str) -> LibClass | None:
         """The jar holding `com/example/Foo` (highest version first). Looks at the likely jars
@@ -414,8 +418,6 @@ class LibraryIndex:
                         rows = self._query(con, class_path)
                     finally:
                         con.close()
-        # Only this project's JDK among the JDK source zips the shared map knows.
-        rows = [r for r in rows if not r[0].endswith("src.zip") or r[0] == self.jdk_zip]
         if not rows:
             return None
         rows.sort(key=lambda r: (not r[0].endswith("src.zip"), _version_key(r[2])), reverse=True)
@@ -519,6 +521,13 @@ def lookup(index: LibraryIndex, symbol: str) -> LibDefinition | None:
 
 def type_members(index: LibraryIndex, type_symbol: str) -> tuple[LibClass, list[Member]] | None:
     """Non-private members of a library type."""
+    got = _type_members(index, type_symbol)
+    return None if got is None else got[:2]
+
+
+def _type_members(index: LibraryIndex, type_symbol: str
+                  ) -> tuple[LibClass, list[Member], set[str]] | None:
+    """(jar, visible members, the type's own type variables)."""
     class_path, types = class_path_of(type_symbol)
     lib = index.find_class(class_path) if class_path else None
     if lib is None:
@@ -536,14 +545,48 @@ def type_members(index: LibraryIndex, type_symbol: str) -> tuple[LibClass, list[
     head = src.text[start:body_open]
     is_interface = re.search(r"\binterface\b", head) is not None
     out = []
+    count: dict[str, int] = {}
     for m in src.members(body_open, body_close, is_enum=re.search(r"\benum\b", head) is not None,
                          type_name=types[-1]):
+        if m.kind in ("method", "constructor"):  # SCIP's +N counts private ones too
+            key = S.CONSTRUCTOR if m.kind == "constructor" else m.name
+            m.overload = count.get(key, 0)
+            count[key] = m.overload + 1
         if m.kind == "enum constants" or "private" in m.modifiers:
             continue
         if not is_interface and not ({"public", "protected"} & set(m.modifiers)):
             continue  # package-private: not visible to a subclass elsewhere
         out.append(m)
-    return lib, out
+    return lib, out, _type_variables(" ".join(src.masked[start:body_open].split()), types[-1])
+
+
+def _type_variables(header: str, name: str) -> set[str]:
+    """Names declared in `<…>` right after `name` (a type) or before a method's return type."""
+    k = re.search(r"(?:\b" + re.escape(name) + r"\s*|^\s*)<", header) if name else \
+        re.search(r"^[^(]*?<", header)
+    if not k:
+        return set()
+    depth, cur, out = 0, "", set()
+    for ch in header[k.end() - 1:]:
+        if ch == "<":
+            depth += 1
+            if depth == 1:
+                continue
+        elif ch == ">":
+            depth -= 1
+            if depth == 0:
+                break
+        if depth == 1 and ch == ",":
+            cur = cur.strip()
+            if cur:
+                out.add(cur.split(None, 1)[0])
+            cur = ""
+        elif depth >= 1:
+            cur += ch
+    cur = cur.strip()
+    if cur:
+        out.add(cur.split(None, 1)[0])
+    return {t for t in out if re.fullmatch(r"[A-Za-z_$][\w$]*", t)}
 
 
 def _javadoc_before(src: JavaSource, pos: int) -> str:
@@ -694,47 +737,119 @@ def library_ancestors(index: LibraryIndex, type_symbol: str, limit: int = 200) -
     return out
 
 
-def param_count(declaration: str) -> int:
-    """Number of parameters of a method/constructor declaration (0 for fields)."""
-    k = declaration.find("(")
+_ANNOT = re.compile(r"@\s*[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?")
+
+
+def param_types(declaration: str, type_vars: set[str] = frozenset()) -> tuple | None:
+    """Erased simple parameter types of a method/constructor declaration, None for a type
+    variable (it matches anything: `setValue(T)` overrides `setValue(V)` and `setValue(String)`);
+    None when the declaration has no parameter list."""
+    decl = _ANNOT.sub(" ", declaration)
+    tvars = set(type_vars)
+    method_tv = re.match(r"\s*(?:(?:public|protected|private|static|final|abstract|default|"
+                         r"synchronized|native|strictfp)\s+)*<", decl)
+    if method_tv:
+        tvars |= _type_variables(decl, "")
+    # The parameter list: the first "(" outside the method's type parameters.
+    depth, k = 0, -1
+    for i, ch in enumerate(decl):
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth -= 1
+        elif ch == "(" and depth <= 0:
+            k = i
+            break
     if k < 0:
-        return -1
-    depth, count, seen = 0, 0, False
-    for ch in declaration[k + 1:]:
+        return None
+    params, cur, depth = [], "", 0
+    for ch in decl[k + 1:]:
         if ch in "(<[":
             depth += 1
         elif ch in ")>]":
             if depth == 0 and ch == ")":
                 break
             depth -= 1
-        elif ch == "," and depth == 0:
-            count += 1
-        elif not ch.isspace():
-            seen = True
-    return count + 1 if seen else 0
+        if ch == "," and depth == 0:
+            params.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        params.append(cur)
+    out = []
+    for p in params:
+        p = re.sub(r"<[^<>]*>", "", p)
+        while "<" in p:  # nested generics
+            q = re.sub(r"<[^<>]*>", "", p)
+            if q == p:
+                break
+            p = q
+        p = p.replace("...", "[] ")
+        words = [w for w in p.replace("[", " [").split() if w not in ("final",)]
+        if not words:
+            continue
+        name = words.pop()  # the parameter name (with `a[]` dims in old style)
+        dims = name.count("[")
+        if name.startswith("["):  # `int a []`: dims after the name were split off it
+            dims, name = name.count("["), words.pop() if words else name
+        typ = "".join(words)
+        dims += typ.count("[")
+        simple = typ.replace("[]", "").replace("[", "").replace("]", "").rsplit(".", 1)[-1]
+        if simple in tvars or re.fullmatch(r"[A-Z][0-9]?", simple):
+            out.append(None)
+        else:
+            out.append(simple + "[]" * dims)
+    return tuple(out)
 
 
-def ordered_members(index: LibraryIndex, types: list[str], skip_names: set[str] = frozenset()
+def _same_signature(a: tuple, b: tuple) -> bool:
+    return len(a) == len(b) and all(x is None or y is None or x == y for x, y in zip(a, b))
+
+
+def member_symbol(type_symbol: str, m: Member) -> str:
+    """The SCIP symbol of a library member (methods numbered as SCIP does)."""
+    if m.kind in ("method", "constructor"):
+        name = S.CONSTRUCTOR if m.kind == "constructor" else m.name
+        return f"{type_symbol}{name}({'+' + str(m.overload) if m.overload else ''})."
+    if m.kind == "type":
+        return f"{type_symbol}{m.name}#"
+    return f"{type_symbol}{m.name}."
+
+
+def ordered_members(index: LibraryIndex, types: list[str], skip: set[str] = frozenset()
                     ) -> list[tuple[str, LibClass | None, list[Member], int]]:
     """[(type, lib, members, hidden)] for library types in order (nearest first), keeping a
-    member only in the most specific type that declares it (same name and parameter count);
-    `hidden` counts those left out because a nearer type overrides them."""
-    seen: set[tuple[str, int]] = set()
+    member only in the most specific type that declares it (a method with the same name and
+    parameter types, a field or nested type with the same name); `skip` holds the SCIP
+    symbols of library members overridden in the project. `hidden` counts those left out."""
+    methods: dict[str, list[tuple]] = {}
+    others: set[tuple[str, str]] = set()
     out = []
     for t in types:
-        got = type_members(index, t)
+        got = _type_members(index, t)
         if got is None:
             out.append((t, None, [], 0))
             continue
-        lib, mems = got
+        lib, mems, tvars = got
         kept, hidden = [], 0
         for m in mems:
-            key = (m.name, param_count(m.declaration))
-            if m.name in skip_names or (m.kind != "constructor" and key in seen):
-                hidden += 1
+            if m.kind == "constructor":
+                kept.append(m)
                 continue
-            if m.kind != "constructor":
-                seen.add(key)
-            kept.append(m)
+            if m.kind == "method":
+                sig = param_types(m.declaration, tvars) or ()
+                same = methods.setdefault(m.name, [])
+                covered = member_symbol(t, m) in skip or any(_same_signature(sig, o)
+                                                              for o in same)
+                same.append(sig)
+            else:
+                key = ("type" if m.kind == "type" else "field", m.name)
+                covered = key in others
+                others.add(key)
+            if covered:
+                hidden += 1
+            else:
+                kept.append(m)
         out.append((t, lib, kept, hidden))
     return out

@@ -16,10 +16,14 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
 from typing import Iterable
 
 DEFAULT_SHARDS_DIR = os.path.join("build", "scip-targetroot")
+# Shards written this recently suggest a compilation in progress: a shard cut short loses its
+# relationships and references without failing, and old and new shards are mixed.
+RECENT_SECONDS = 60
 SUFFIX = ".scip"
 MARKER = ("META-INF", "scip")
 
@@ -50,9 +54,10 @@ class Freshness:
     stale: list[str] = field(default_factory=list)       # source newer than its shard
     uncompiled: list[str] = field(default_factory=list)  # .java with no shard, newer than its module's shards
     tasks: set[str] = field(default_factory=set)         # compile tasks that would refresh them
+    recent: int = 0                                      # shards written in the last RECENT_SECONDS
 
     def __bool__(self) -> bool:
-        return bool(self.stale or self.uncompiled)
+        return bool(self.stale or self.uncompiled or self.recent)
 
 
 def find_project_root(start: str) -> str:
@@ -278,6 +283,8 @@ class Workspace:
         shard_of: dict[str, float] = {}
         task_of_source: dict[str, int] = {}
         task_of_dir: dict[str, int] = {}
+        since = time.time() - RECENT_SECONDS
+        result.recent = sum(1 for mt in shard_mtimes.values() if mt > since)
         for rel, mt in shard_mtimes.items():
             split = split_shard_path(rel)
             if split is None:
@@ -312,12 +319,14 @@ class Workspace:
         want = set(sources)
         if not want:
             return result
+        since = time.time() - RECENT_SECONDS
         for k, rel in self.files():
             source = rel[:-len(SUFFIX)]
             if source not in want:
                 continue
             try:
                 sm = os.stat(os.path.join(self.scip_roots()[k][0], rel)).st_mtime
+                result.recent += sm > since
                 if os.stat(os.path.join(self.root, source)).st_mtime > sm:
                     result.stale.append(source)
                     result.tasks.add(build_task(self.scip_roots()[k][1]))

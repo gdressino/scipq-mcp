@@ -30,7 +30,7 @@ def graph(sample_root, cache):
 def test_build_and_incremental_update(sample_copy, cache):
     ix = Index(Workspace(sample_copy), cache)
     first = ix.update()
-    assert first.built_from_scratch and first.processed == 17 and first.shards == 18
+    assert first.built_from_scratch and first.processed == 18 and first.shards == 19
     assert ix.update().processed == 0
     shard = os.path.join(sample_copy, "build/scip-targetroot/core/compileJava/META-INF/scip/"
                                       "core/src/main/java/com/example/model/Group.java.scip")
@@ -41,7 +41,7 @@ def test_build_and_incremental_update(sample_copy, cache):
     gone = Index(Workspace(sample_copy), cache).update()
     assert gone.removed == 1
     st = ix.status()
-    assert st["shards"] == 17 and st["refs"] > 0
+    assert st["shards"] == 18 and st["refs"] > 0
 
 
 def test_index_recreated_when_deleted(sample_root, cache):
@@ -278,10 +278,57 @@ def test_truncated_shard_is_skipped_and_retried(sample_copy, cache):
     assert "Group.java" in Service(sample_copy, cache_dir=cache).references("Entity#setState")
 
 
+def test_recently_written_shards_are_reported(sample_copy, cache):
+    """A shard cut short can drop subtypes and references without any error (the query never
+    reads it): shards written in the last minute make the answer say so."""
+    shard = os.path.join(sample_copy, "build/scip-targetroot/core/compileJava/META-INF/scip/"
+                                      "core/src/main/java/com/example/model/Account.java.scip")
+    data = open(shard, "rb").read()
+    with open(shard, "wb") as fh:  # being written now: its mtime is now
+        fh.write(data[: len(data) // 3])
+    out = Service(sample_copy, cache_dir=cache).implementations("Entity")
+    assert "1 shard written in the last 60 s" in out
+    os.utime(shard, (1_700_000_100, 1_700_000_100))
+    assert "written in the last" not in Service(sample_copy, cache_dir=cache).implementations(
+        "Entity")
+
+
 def test_low_priority_commands():
     from scipq_mcp.index import default_workers, low_priority
     cmd = low_priority(["grep", "x"])
     assert cmd[-2:] == ["grep", "x"]
-    if shutil.which("nice"):
-        assert cmd[:3] == [shutil.which("nice"), "-n", "10"]
+    step = 10 - os.getpriority(os.PRIO_PROCESS, 0)
+    if shutil.which("nice") and step > 0:
+        assert cmd[:3] == [shutil.which("nice"), "-n", str(step)]
     assert 1 <= default_workers() <= 4
+
+
+def test_whole_process_runs_at_low_priority(tmp_path):
+    """serve and query lower their own priority at startup; children are not niced again."""
+    import subprocess
+    import sys
+    script = tmp_path / "prio.py"
+    script.write_text(
+        "import os, shutil\n"
+        "from scipq_mcp.index import lower_own_priority, low_priority\n"
+        "lower_own_priority()\n"
+        "print(os.getpriority(os.PRIO_PROCESS, 0))\n"
+        "print(shutil.which('nice') in low_priority(['true']))\n")
+    out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
+                         check=True).stdout.split()
+    assert int(out[0]) >= 10 and out[1] == "False"
+
+
+def test_dead_code_pages_low_confidence_too():
+    from scipq_mcp import render
+    rows = [(f"a/B#m{i}().", "method", "B.java", i, f"void m{i}()") for i in range(3)]
+    weak = [(f"a/B#getP{i}().", "method", "B.java", 10 + i, "", "x.json", f"p{i}")
+            for i in range(40)]
+    first = render.dead_code(rows, 0, 5, weak=weak)
+    assert "showing 1–5 of 43" in first and "next offset 5" in first
+    assert "B#getP1()" in first and "B#getP2()" not in first
+    rest = render.dead_code(rows, 5, 5000, weak=weak)
+    assert "B#m0()" not in rest and "B#getP2()" in rest and "B#getP39()" in rest
+    assert "next offset" not in rest
+    later = render.dead_code(rows, 0, 2, weak=weak)
+    assert "follow at offset 3" in later

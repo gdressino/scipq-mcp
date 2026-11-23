@@ -110,16 +110,48 @@ def default_workers() -> int:
     return max(1, min(4, (os.cpu_count() or 1) // 4))
 
 
+NICE = 10
+
+
+def _current_nice() -> int:
+    try:
+        return os.getpriority(os.PRIO_PROCESS, 0)
+    except (OSError, AttributeError):
+        return 0
+
+
+def lower_own_priority() -> None:
+    """The whole process yields to builds and tests: CPU nice NICE and, on Linux, best-effort
+    I/O at the lowest level. Called once at startup, before any thread or child process exists:
+    they inherit it (decoding, the freshness check and library indexing run in this process)."""
+    cur = _current_nice()
+    if cur < NICE:
+        try:
+            os.nice(NICE - cur)
+        except OSError:
+            pass
+    ionice = shutil.which("ionice") if sys.platform.startswith("linux") else None
+    if ionice:
+        try:
+            subprocess.run([ionice, "-c2", "-n7", "-p", str(os.getpid())], timeout=5,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, check=False)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
 def low_priority(cmd: list) -> list:
-    """`cmd` under `nice -n 10` and, on Linux, `ionice -c2 -n7` (best effort, lowest), when the
-    tools exist: background work must not compete with builds and tests."""
+    """`cmd` at nice NICE (no further when this process already runs there) and, on Linux,
+    under `ionice -c2 -n7` (best effort, lowest), when the tools exist: background work must
+    not compete with builds and tests."""
     out = list(cmd)
     ionice = shutil.which("ionice")
     if ionice and sys.platform.startswith("linux"):
         out = [ionice, "-c2", "-n7"] + out
     nice = shutil.which("nice")
-    if nice:
-        out = [nice, "-n", "10"] + out
+    step = NICE - _current_nice()
+    if nice and step > 0:
+        out = [nice, "-n", str(step)] + out
     return out
 
 

@@ -19,17 +19,35 @@ version and date when releasing.
 
 ### Changed
 
-- Background work yields to builds and tests: the index build (in its child process), grep and
-  find run under `nice -n 10` and, on Linux, `ionice -c2 -n7`; the build uses min(4, CPUs/4)
-  workers by default (`--build-workers`).
+- The server and `query` yield to builds and tests: the whole process (decoding and library
+  indexing included) and everything it starts (index build, grep, find) run at nice 10 and, on
+  Linux, best-effort I/O priority 7; the index build uses min(4, CPUs/4) workers by default
+  (`--build-workers`).
 - The shared library map is built under a lock: other sessions wait for it (up to 45 s) and
   then say it is being built, instead of answering without sources.
 - Shards cut short by a compilation in progress are skipped with a warning (and retried by the
-  index), instead of failing or vanishing silently.
+  index), instead of failing or vanishing silently. A shard cut short that a query never reads
+  (its relationships were lost, so the prefilter skips it) cannot be detected, so answers also
+  warn when shards were written in the last 60 s.
 - dead_code: candidates whose only trace is their bean property name (`getDescription` and
-  "description") are listed apart as low confidence instead of being dropped.
+  "description") are listed apart as low confidence instead of being dropped; `offset` and
+  `limit` page through them after the other candidates.
 - dead_code: names in other files come from a text index (FTS5) in the auxiliary database,
-  updated by file mtime: ~0.4 s instead of ~7 s on a whole project.
+  updated by file mtime: that check takes ~0.4 s instead of ~7 s. A whole-project run takes
+  ~0.6 s on a 1,400-file project and ~4 s on a 10,000-file one (~7 s the first time).
+- `typed`: a field's type is the declared one: an initializer such as
+  `ConcurrentHashMap.newKeySet()` counts as an initializer, and `Map` in `Map.Entry` is a new
+  `qualifier` category.
+- Library members and definitions are reported at the line of their name, as project symbols
+  are, not at their first annotation.
+
+### Fixed
+
+- JDK sources: when the shared library map already knew another JDK's `src.zip` (another
+  checkout's toolchain), this project's JDK was not indexed and its symbols had no sources.
+- `members`: an inherited library method is hidden only by one with the same parameter types
+  (`setSpacing(boolean)` no longer hides `setSpacing(String)`), and a project override hides
+  only the overload it overrides.
 
 ## 0.2.0 — 2026-11-22
 

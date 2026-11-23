@@ -233,6 +233,10 @@ def main(argv: list[str] | None = None) -> None:
     _query_parser(sub)
 
     a = parser.parse_args(argv)
+    if a.command in (None, "serve", "query"):
+        from .index import lower_own_priority
+
+        lower_own_priority()
     if a.command in (None, "serve"):
         from .server import serve
 

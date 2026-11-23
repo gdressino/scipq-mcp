@@ -66,7 +66,8 @@ READ_ONLY = ToolAnnotations.model_validate(
      "openWorldHint": False})
 
 TYPED_CATEGORIES = Literal["field", "parameter", "return type", "local variable", "resource",
-                           "supertype", "method body", "initializer", "import", "other"]
+                           "supertype", "method body", "initializer", "qualifier", "import",
+                           "other"]
 
 
 INACTIVE_INSTRUCTIONS = ("scipq (Java code navigation) is idle: this is not a Java project, so it "
@@ -300,7 +301,8 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         categories: Annotated[list[TYPED_CATEGORIES] | None, Field(
             description="Only these kinds of use: field, parameter, return type, local "
                         "variable, resource (try-with-resources), supertype, method body, "
-                        "initializer, import, other")] = None,
+                        "initializer, qualifier (`Map` in `Map.Entry`), import, other")]
+        = None,
         offset: Offset = 0,
         limit: Limit(100) = 100,
         scope: Annotated[str, Field(description="Only results in this package (prefix or glob) "

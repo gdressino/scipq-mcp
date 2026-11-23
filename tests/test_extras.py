@@ -99,10 +99,10 @@ def test_tests_and_tasks(nav):
 
 def test_index_status(nav):
     st = X.index_status(nav)
-    assert st.shards == 18
+    assert st.shards == 19
     assert st.orphans == ["core/src/main/java/com/example/model/Gone.java"]
     assert dict(st.tasks) == {"app/compileJava": 3, "app/compileTestJava": 1,
-                              "core/compileJava": 14}
+                              "core/compileJava": 15}
 
 
 def test_generated_member_located_at_generating_node(nav):
@@ -254,3 +254,20 @@ def test_javadoc_mentions(nav):
     hits = X.javadoc_mentions(nav.ws.root, "com/example/model/Session#")
     assert [(os.path.basename(h.source), h.line) for h in hits] == [("Store.java", 4)]
     assert "javadoc mentions" in Service(nav.ws.root).references("Session", by_name=True)
+
+
+def test_typed_declared_type_only(nav):
+    """A field's type is what is declared before its name: not its initializer, and not a
+    type that only qualifies a nested type's name (`Map` in `Map.Entry`)."""
+    def cats(symbol):
+        out = {}
+        for u in X.typed(nav, symbol):
+            if os.path.basename(u.location.source) == "Registry.java":
+                out.setdefault(u.category, set()).add(u.location.line)
+        return out
+
+    assert cats("java/util/Map#") == {"field": {10}, "qualifier": {12}, "import": {4}}
+    # (`new ConcurrentHashMap<>()` on line 10 references the constructor, not the type)
+    assert cats("java/util/concurrent/ConcurrentHashMap#") == {"initializer": {11},
+                                                              "import": {6}}
+    assert cats("java/util/Set#")["field"] == {11}

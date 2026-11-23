@@ -1,0 +1,18 @@
+ì
+2core/src/main/java/com/example/model/Registry.javajava/B
+java/util/Bjava/util/List#Bjava/B
+java/util/Bjava/util/Map#Bjava/B
+java/util/Bjava/util/Set#Bjava/B
+java/util/Bjava/util/concurrent/B1'java/util/concurrent/ConcurrentHashMap#B-/com/example/model/Registry#BZ 2&com/example/model/Registry#`<init>`().Bjava/util/Map#B	java/lang/String#B	$com/example/model/Account#B	%4 com/example/model/Registry#byId.B	'+R	H<2java/util/concurrent/ConcurrentHashMap#`<init>`().B	2Cjava/util/Set#B
+java/lang/String#B
+5!com/example/model/Registry#names.B
+#R
+D1'java/util/concurrent/ConcurrentHashMap#B
+&7=3java/util/concurrent/ConcurrentHashMap#newKeySet().B
+8Ajava/util/List#Bjava/util/Map#Bjava/util/Map#Entry#B java/lang/String#B!'java/lang/String#B)/7#com/example/model/Registry#entries.B29RFjava/util/List#B<@java/util/List#of().BAC8"com/example/model/Registry#size().BZ * com/example/model/Registry#byId.Bjava/util/Map#size().B+!com/example/model/Registry#names.B"java/util/Set#size().B#'-#com/example/model/Registry#entries.B,3 java/util/List#size().B48y
+com/example/model/Registry#/Holds a map, and two fields that are not maps. (2Registry:"java*public class RegistryM
+&com/example/model/Registry#`<init>`().(	2<init>:"java*public Registry()[
+ com/example/model/Registry#byId.(2byId:/"java*'private final Map<String, Account> byIdU
+!com/example/model/Registry#names.(2names:'"java*private final Set<String> namesk
+#com/example/model/Registry#entries.(2entries:9"java*1private final List<Entry<String, String>> entriesG
+"com/example/model/Registry#size().(2size:"java*public int size()"java

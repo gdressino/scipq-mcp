@@ -27,6 +27,13 @@ class Member:
     end_line: int       # 1-based, last line of the body or of the declaration
     javadoc: str        # cleaned text, "" when none
     modifiers: tuple[str, ...] = ()
+    name_line: int = 0  # 1-based line of the member's name (after its annotations)
+    overload: int = 0   # among same-name methods of the type, in declaration order (SCIP +N)
+
+    @property
+    def line(self) -> int:
+        """Where the member is reported: its name, as for project symbols."""
+        return self.name_line or self.start_line
 
 
 def mask(text: str) -> str:
@@ -178,7 +185,8 @@ class JavaSource:
         header_masked = m[start:header_end]
         javadoc = _javadoc(t[seg:start])
         declaration = " ".join(t[start:header_end].split())
-        bare = _ANNOTATION.sub(" ", header_masked)
+        # Annotations blanked keeping offsets, so positions in `bare` are positions in the file.
+        bare = _ANNOTATION.sub(lambda a: re.sub(r"[^\n]", " ", a.group()), header_masked)
         words = bare.split()
         mods = tuple(w for w in words if w in _MODIFIERS)
         if not words or words == ["static"]:
@@ -187,24 +195,24 @@ class JavaSource:
         if td and bare.find("(") in (-1,) or (td and td.start() < (bare.find("(") if "(" in bare
                                                                    else len(bare))):
             return Member("type", td.group(2), declaration, self.line_of(start),
-                          self.line_of(end), javadoc, mods)
+                          self.line_of(end), javadoc, mods, self.line_of(start + td.start(2)))
         paren = _top_level_paren(bare)
         if paren >= 0 and _top_level_equals(bare[:paren]):
             paren = -1  # `Type name = new Foo(…)`: a field with an initializer
         if paren >= 0:
-            names = _IDENT_BEFORE_PAREN.findall(bare[:paren + 1])
-            name = names[-1] if names else ""
+            names = list(_IDENT_BEFORE_PAREN.finditer(bare[:paren + 1]))
+            name = names[-1].group(1) if names else ""
             if not name or name in _CONTROL:
                 return None
             kind = "constructor" if name == getattr(self, "_type_name", "") else "method"
             return Member(kind, name, declaration, self.line_of(start), self.line_of(end),
-                          javadoc, mods)
+                          javadoc, mods, self.line_of(start + names[-1].start(1)))
         lhs = _split_top_level_equals(bare)
-        idents = re.findall(r"[A-Za-z_$][\w$]*", lhs)
+        idents = list(re.finditer(r"[A-Za-z_$][\w$]*", lhs))
         if not idents:
             return None
-        return Member("field", idents[-1], declaration, self.line_of(start), self.line_of(end),
-                      javadoc, mods)
+        return Member("field", idents[-1].group(), declaration, self.line_of(start),
+                      self.line_of(end), javadoc, mods, self.line_of(start + idents[-1].start()))
 
 
 _MODIFIERS = {"public", "protected", "private", "static", "final", "abstract", "default",

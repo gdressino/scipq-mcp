@@ -314,7 +314,7 @@ class Service:
                 overridden = {o for g in groups for over in g.overrides.values() for o in over}
                 if index is not None:
                     order = self._nearest_first(index, nav, sym, external)
-                    hidden = {S.name_of(o) for o in overridden if S.parent(o) in external}
+                    hidden = {o for o in overridden if S.parent(o) in external}
                     for ext, lib, mems, nhidden in L.ordered_members(index, order, hidden):
                         libs.append((ext, lib, mems, nhidden))
                 else:

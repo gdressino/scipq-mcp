@@ -264,7 +264,15 @@ def _raw_lines(root: str, source: str, lines) -> dict[int, str]:
 # --- typed ------------------------------------------------------------------------------------
 
 TYPED_ORDER = ("field", "parameter", "return type", "local variable", "resource", "supertype",
-               "method body", "initializer", "import", "other")
+               "method body", "initializer", "qualifier", "import", "other")
+
+# `Map.Entry`: the type only qualifies a nested type's name (not `Map.of(` nor `Integer.MAX`).
+_QUALIFIER = re.compile(r"\s*\.\s*([A-Z][\w$]*)(?!\s*\()")
+
+
+def _is_qualifier(line: str, end_char: int) -> bool:
+    m = _QUALIFIER.match(line, end_char)
+    return m is not None and not re.fullmatch(r"[A-Z0-9_$]+", m.group(1))
 
 
 @dataclass
@@ -280,7 +288,8 @@ def typed(nav: Navigator, type_symbol: str) -> list[TypedUse]:
     supertype clauses, method bodies (new, casts, static calls, generics) and imports."""
     out: list[TypedUse] = []
     for v, occs in nav.scan({type_symbol}):
-        texts = nav.ws.source_lines(v.source, {o.range.start_line for o in occs})
+        raw = _raw_lines(nav.ws.root, v.source, {o.range.start_line for o in occs})
+        texts = {k: t.strip() for k, t in raw.items()}
         defs = {o.symbol: o for o in v.doc.definitions()}
         for o in occs:
             if o.is_definition:
@@ -288,6 +297,12 @@ def typed(nav: Navigator, type_symbol: str) -> list[TypedUse]:
             line = texts.get(o.range.start_line, "")
             loc = Location(v.source, o.range)
             inner = v.innermost(o.range)
+            if o.range.start_line == o.range.end_line and \
+                    _is_qualifier(raw.get(o.range.start_line, ""), o.range.end_char):
+                owner = inner[1] if inner is not None and not inner[2] else \
+                    (v.container_of(o.range)[0] if inner is not None else "")
+                out.append(TypedUse("qualifier", owner, loc, line))
+                continue
             if inner is None:
                 cat = "import" if line.startswith("import ") else "other"
                 out.append(TypedUse(cat, "", loc, line))
@@ -319,7 +334,10 @@ def typed(nav: Navigator, type_symbol: str) -> list[TypedUse]:
             before_name = name_occ is not None and (o.range.start_line, o.range.start_char) < \
                 (name_occ.range.start_line, name_occ.range.start_char)
             if k == "term":
-                cat = "field" if before_name or o.range.start_line == enc.start_line \
+                # The declared type comes before the name; after it is the initializer
+                # (`Set<String> s = ConcurrentHashMap.newKeySet()` is not a ConcurrentHashMap).
+                cat = "field" if before_name or (name_occ is None and
+                                                 o.range.start_line == enc.start_line) \
                     else "initializer"
             elif k in ("method", "constructor"):
                 cat = "return type" if before_name else "method body"

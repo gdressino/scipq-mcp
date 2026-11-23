@@ -307,6 +307,12 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None) -> st
     if not f:
         return ""
     lines = []
+    if f.recent:
+        from .workspace import RECENT_SECONDS
+        lines.append(f"WARNING: {f.recent} shard{'s' if f.recent != 1 else ''} written in the "
+                     f"last {RECENT_SECONDS} s: if a compilation is running in this checkout, "
+                     "results may be incomplete (shards being written lose references and "
+                     "subtypes without an error); retry when it finishes")
     if f.stale:
         hit = sorted(set(f.stale) & result_sources) if result_sources else []
         lines.append(f"WARNING: {len(f.stale)} source{'s' if len(f.stale) != 1 else ''} changed "
@@ -382,7 +388,7 @@ def members(type_symbol: str, groups, external: list[str], offset: int, limit: i
         rows.append(f"from {S.short(ext)} ({len(mems)}{hidden}, library sources: "
                     f"{lib.coordinates}):")
         for m in mems:
-            rows.append(f"  {m.start_line:>5}  {m.kind}: {_decl(m.declaration)}")
+            rows.append(f"  {m.line:>5}  {m.kind}: {_decl(m.declaration)}")
     if libs is None:
         no_sources = list(external)
     shown, suffix = page(rows, offset, limit)
@@ -406,7 +412,8 @@ def library_definition(lib) -> str:
     where = f"{lib.lib.coordinates}" + (f" (+{lib.lib.others} other versions cached)"
                                          if lib.lib.others else "")
     lines = [f"{lib.symbol}", f"external — {where}",
-             f"source: {lib.lib.jar}!/{lib.lib.entry}:{lib.body[0]} (read it with `source`)"]
+             f"source: {lib.lib.jar}!/{lib.lib.entry}:{m.line if m else lib.body[0]} "
+             "(read it with `source`)"]
     if getattr(lib, "note", ""):
         lines.append(f"note: {lib.note}")
     if m is None:
@@ -421,7 +428,7 @@ def library_definition(lib) -> str:
                          "order, which this one assumes):")
             for o in lib.overloads:
                 mark = "→" if o is m else " "
-                lines.append(f"  {mark} {o.start_line}: {_decl(o.declaration)}")
+                lines.append(f"  {mark} {o.line}: {_decl(o.declaration)}")
     if doc:
         lines.append("")
         lines.append(doc)
@@ -782,6 +789,8 @@ def uses_between(scope: str, target: str, rows, total: int) -> str:
 
 def dead_code(rows, offset: int, limit: int, suppressed: dict | None = None,
               weak=None) -> str:
+    """Candidates, then the low-confidence ones, paged as one list (offset/limit cover both)."""
+    weak = weak or []
     omitted = ""
     if suppressed:
         top = sorted(suppressed.items(), key=lambda kv: -kv[1])[:5]
@@ -789,18 +798,31 @@ def dead_code(rows, offset: int, limit: int, suppressed: dict | None = None,
                    f"{sum(suppressed.values())} — " + ", ".join(f"{p} {n}" for p, n in top)
                    + (" … (exclude generated files with [project.by_name] exclude)"
                       if len(suppressed) > 5 else ""))
+    offset, limit = max(0, offset), max(1, limit)
+    total = len(rows) + len(weak)
+    shown = rows[offset:offset + limit]
+    weak_shown = weak[max(0, offset - len(rows)):max(0, offset + limit - len(rows))]
+    end = offset + len(shown) + len(weak_shown)
+    if not offset and end == total:
+        suffix = ""
+    elif end == offset:
+        suffix = f" (offset {offset} is past the end of {total})"
+    else:
+        suffix = (f" (showing {offset + 1}–{end} of {total}, low confidence included"
+                  + (f"; next offset {end})" if end < total else ")"))
     weak_lines = []
-    if weak:
+    if weak_shown:
         weak_lines.append(f"{len(weak)} more candidates whose bean property name appears "
-                          "elsewhere (low confidence: e.g. getDescription and \"description\"):")
-        for sym, kind, src, line, sig, where, prop in weak[:30]:
+                          "elsewhere (low confidence: e.g. getDescription and \"description\")"
+                          + (suffix if not rows else "") + ":")
+        for sym, kind, src, line, sig, where, prop in weak_shown:
             weak_lines.append(f"  {src}:{line}  {S.short(sym)}  (\"{prop}\" in {where})")
-        if len(weak) > 30:
-            weak_lines.append(f"  … and {len(weak) - 30} more")
+    elif weak:
+        weak_lines.append(f"{len(weak)} more candidates whose bean property name appears "
+                          f"elsewhere (low confidence) follow at offset {len(rows)}")
     if not rows:
-        return "\n".join(["no dead-code candidates in scope"] + ([omitted] if omitted else [])
-                         + weak_lines)
-    shown, suffix = page(rows, offset, limit)
+        head = "no dead-code candidates in scope" + ("" if weak_shown else suffix)
+        return "\n".join([head] + ([omitted] if omitted else []) + weak_lines)
     lines = [f"{len(rows)} dead-code candidates (no references; framework entry points, "
              f"overrides and names used in strings left out — check before deleting){suffix}"]
     if omitted:
@@ -887,7 +909,7 @@ def library_members(type_symbol: str, groups, offset: int, limit: int) -> str:
         label = "own" if t == type_symbol else f"from {S.short(t)}"
         rows.append(f"{label} ({len(mems)}{extra}, {lib.coordinates}):")
         for m in mems:
-            rows.append(f"  {m.start_line:>5}  {m.kind}: {_decl(m.declaration)}")
+            rows.append(f"  {m.line:>5}  {m.kind}: {_decl(m.declaration)}")
     shown, suffix = page(rows, offset, limit)
     return "\n".join([f"{S.short(type_symbol)} (library) — {total} members{suffix}"]
                      + list(shown))
