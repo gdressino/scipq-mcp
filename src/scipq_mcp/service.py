@@ -1241,8 +1241,10 @@ class Service:
                 st = self.settings(nav.ws.root, g)
                 rows = g.concepts(query, "" if kind == "any" else kind, scope, include_tests,
                                   offset + limit + 1, include_generated, st.concepts_exclude)
-            terms = G.concept_terms(query)
-            page_rows = rows[offset:offset + limit]
+                terms = G.concept_terms(query)
+                page_rows = rows[offset:offset + limit]
+                hints = {r[0]: g.member_hints(r[0], terms) for r in page_rows[:10]
+                         if S.is_type(r[0])}
             # The first sentence of each one's javadoc, from its shard (one search for all).
             docs = {}
             try:
@@ -1254,7 +1256,8 @@ class Service:
             except (QueryError, OSError):
                 pass
             return render.index_note(stats) + render.concepts(
-                query, terms, page_rows, docs, offset, limit, len(rows) > offset + limit), \
+                query, terms, page_rows, docs, offset, limit, len(rows) > offset + limit,
+                hints), \
                 {r[2][0] for r in page_rows}
         return body
 

@@ -1261,15 +1261,15 @@ def step_text(query: str, found) -> str:
 
 
 def concepts(query: str, terms: list[str], rows, docs: dict, offset: int, limit: int,
-             more: bool) -> str:
+             more: bool, hints: dict | None = None) -> str:
     if not terms:
         return f"no words to search in {query!r}"
     if not rows:
         return (f"no definition mentions {', '.join(terms)} (in names, owners, annotations, "
                 "signatures or javadoc; tests left out unless include_tests)")
-    lines = [f"definitions about {' '.join(terms)} (best first: name, annotations and call "
-             f"labels, owner, signature, javadoc; words also as prefixes and singular; tests and "
-             f"generated files left out unless asked):"]
+    lines = [f"definitions about {' '.join(t + '*' for t in terms)} (best first: their own "
+             f"name, annotations and labels, signature, javadoc, then the owner's name; words as "
+             f"stems; tests and generated files left out unless asked):"]
     for k, (sym, score, d) in enumerate(rows, offset + 1):
         src, line, _mod, test, sig = d
         kind = {"term": "field"}.get(S.kind_of(sym), S.kind_of(sym) or "symbol")
@@ -1279,6 +1279,8 @@ def concepts(query: str, terms: list[str], rows, docs: dict, offset: int, limit:
             lines.append(f"       {' '.join(sig.split())[:150]}")
         if docs.get(sym):
             lines.append(f"       — {docs[sym]}")
+        if hints and hints.get(sym):
+            lines.append(f"       members about the other words: {', '.join(hints[sym])}")
     if more:
         lines.append(f"next offset {offset + limit}")
     return "\n".join(lines)

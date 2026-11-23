@@ -29,7 +29,7 @@ from .cachedir import default_base, entry_dir
 from .scip import DEFINITION, KIND_NAMES, read_documents
 from .workspace import SUFFIX, Workspace
 
-SCHEMA_VERSION = "8"
+SCHEMA_VERSION = "10"
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
@@ -74,8 +74,16 @@ CREATE TABLE IF NOT EXISTS concept_map (
 # the words too.
 _FTS_OPTIONS = ("content='', contentless_delete=1, " if sqlite3.sqlite_version_info >= (3, 43)
                 else "")
-CONCEPTS = (f"CREATE VIRTUAL TABLE IF NOT EXISTS concepts USING fts5(name, owner, ann, sig, doc, "
-            f"calls, {_FTS_OPTIONS}tokenize='unicode61 remove_diacritics 2');")
+# Three tables, because FTS5 normalizes bm25 by the length of the whole row: a long signature or
+# javadoc must not weaken a match in the name. The owner is not searched (it only adds to a
+# member that matches by itself, computed from the symbol).
+_TOK = "tokenize='unicode61 remove_diacritics 2'"
+CONCEPT_TABLES = ("concept_names", "concepts", "concept_docs")
+CONCEPTS = (f"CREATE VIRTUAL TABLE IF NOT EXISTS concept_names USING fts5(name, "
+            f"{_FTS_OPTIONS}{_TOK});"
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS concepts USING fts5(ann, sig, calls, "
+            f"{_FTS_OPTIONS}{_TOK});"
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS concept_docs USING fts5(doc, {_FTS_OPTIONS}{_TOK});")
 
 INDEXES = """
 CREATE INDEX IF NOT EXISTS shards_source ON shards(source);
@@ -315,9 +323,22 @@ def extract(path: str, source: str, root: str) -> dict:
     return out
 
 
+_QUERY_LIKE = re.compile(r"==|!=|&&|\|\||\binstanceof\b|:\w|\.matches\(|\bselect\b|\bwhere\b",
+                         re.I)
+_IDENT_LIST = re.compile(r"[\w$.:]+(?:\s*[,;]\s*[\w$.:]+)+")
+
+
+def _label(s: str) -> bool:
+    """A string that reads as a label, not code: words, no query operators, not a list of
+    identifiers (a field layout such as "fecha,cuenta;monto")."""
+    return bool(re.search(r"[^\W\d_]{2}", s)) and not _QUERY_LIKE.search(s) and \
+        not _IDENT_LIST.fullmatch(s.strip())
+
+
 def _call_strings(line: str, col: int) -> str:
-    """The string literals of the call around `col` on this line (the argument list that
-    holds X.class), as words; "" when there are none."""
+    """The labels a call gives the type at `col`: its arguments that are a whole string
+    literal, when X.class (or X.class.getName()) is itself a whole argument of that call —
+    new MenuEntry("Label", X.class.getName()). "" otherwise."""
     depth, start = 0, -1
     for k in range(col - 1, -1, -1):
         c = line[k]
@@ -340,7 +361,26 @@ def _call_strings(line: str, col: int) -> str:
             if depth == 0:
                 end = k
                 break
-    found = [s for s in _STRING.findall(line[start:end]) if re.search(r"[^\W\d_]", s)]
+    inner = line[start + 1:end]
+    args, depth, a0 = [], 0, 0
+    for k, c in enumerate(inner):
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            args.append((a0, inner[a0:k]))
+            a0 = k + 1
+    args.append((a0, inner[a0:]))
+    rel = col - start - 1
+    mine = next((a for off, a in args if off <= rel <= off + len(a)), "")
+    if not re.fullmatch(r"\s*[\w$.]+\.class(?:\.get(?:Simple|Canonical)?Name\(\))?\s*", mine):
+        return ""
+    found = []
+    for _off, a in args:
+        m = re.fullmatch(r'\s*"((?:[^"\\]|\\.)*)"\s*', a)
+        if m and _label(m.group(1)):
+            found.append(m.group(1))
     return " ".join(found)[:500]
 
 
@@ -401,8 +441,19 @@ def _annotation_strings(lines: list[str], line: int, name: str) -> str:
                     break
             k += 1
         for s in _STRING.findall(chunk[m.end():end])[:20]:
-            out.append(s[:300])
+            if not _IDENT_LIST.fullmatch(s.strip()):   # a layout of fields, not words
+                out.append(s[:300])
     return " ".join(out)
+
+
+def _constant_value(lines: list[str], line: int) -> str:
+    """The string literals a constant is initialized with (static final String X = "…")."""
+    chunk = "\n".join(lines[line:line + 6])
+    eq = chunk.find("=")
+    semi = chunk.find(";", eq if eq >= 0 else 0)
+    if eq < 0 or semi < 0:
+        return ""
+    return " ".join(s for s in _STRING.findall(chunk[eq:semi]) if _label(s))[:600]
 
 
 def _concept_rows(defs_by_symbol: dict, infos: dict, anns: list, lines) -> list[tuple]:
@@ -424,12 +475,15 @@ def _concept_rows(defs_by_symbol: dict, infos: dict, anns: list, lines) -> list[
             ls = lines()
             for ann, line in by_def[sym][:12]:
                 ann_words.append(_annotation_strings(ls, line, S.name_of(ann)))
+        if S.kind_of(sym) == "term" and re.search(r"\bfinal\b", sig) and \
+                re.search(r"\bString\b", sig):
+            ann_words.append(_constant_value(lines(), row[1]))   # its text, like a label
         info = infos.get(sym)
         doc = ""
         if info is not None and info.documentation:
             doc = re.sub(r"<[^>]+>|\{@\w+\s*|[{}]", " ", " ".join(info.documentation))[:4000]
-        out.append((sym, words_of(name), owner, " ".join(ann_words),
-                    _identifier_words(sig.split("{")[0])[:2000], doc, ""))
+        out.append((sym, words_of(name), owner, " ".join(x for x in ann_words if x),
+                    _identifier_words(sig.split("{")[0])[:600], doc, ""))
     return out
 
 
@@ -818,8 +872,9 @@ class Index:
     def _delete_shard_rows(con: sqlite3.Connection, sid: int) -> None:
         for table in ("defs", "refs", "rels", "annotations"):
             con.execute(f"DELETE FROM {table} WHERE shard_id = ?", (sid,))
-        con.execute("DELETE FROM concepts WHERE rowid IN (SELECT rowid FROM concept_map "
-                    "WHERE shard_id = ?)", (sid,))
+        for table in CONCEPT_TABLES:
+            con.execute(f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM concept_map "
+                        "WHERE shard_id = ?)", (sid,))
         con.execute("DELETE FROM concept_map WHERE shard_id = ?", (sid,))
 
     @staticmethod
@@ -869,8 +924,14 @@ class Index:
                 continue
             rid = con.execute("INSERT INTO concept_map (symbol_id, shard_id, generated) "
                               "VALUES (?, ?, ?)", (ids[sym], sid, gen)).lastrowid
-            con.execute("INSERT INTO concepts (rowid, name, owner, ann, sig, doc, calls) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)", (rid, *words))
+            name, _owner, ann, sig, doc, calls = words
+            if name:
+                con.execute("INSERT INTO concept_names (rowid, name) VALUES (?, ?)", (rid, name))
+            if ann or sig or calls:
+                con.execute("INSERT INTO concepts (rowid, ann, sig, calls) VALUES (?, ?, ?, ?)",
+                            (rid, ann, sig, calls))
+            if doc:
+                con.execute("INSERT INTO concept_docs (rowid, doc) VALUES (?, ?)", (rid, doc))
 
     def _prune_external(self, con: sqlite3.Connection, stats: UpdateStats) -> None:
         """index.external=methods|none: prune references to symbols the project does not

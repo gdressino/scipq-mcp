@@ -6,6 +6,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import unicodedata
 import shutil
 import sqlite3
 import subprocess
@@ -130,54 +131,108 @@ class Graph:
                  limit: int = 30, include_generated: bool = False,
                  exclude: list[str] | None = None) -> list[tuple[str, float, tuple]]:
         """[(symbol, score, (source, line, module, test, signature))], best first: definitions
-        whose name, owner, annotation texts, signature or javadoc hold the query's words
-        (prefixes, accents ignored), ranked by bm25 with the name weighing most."""
-        terms = concept_terms(query)
-        if not terms:
+        whose own name, annotation texts, signature, labels (strings registering a type) or
+        javadoc hold the query's words (as stems: prefixes, accents and plurals ignored). Every
+        match counts, so the order does not depend on `limit`; the owner's name only adds to a
+        member that matches by itself."""
+        stems = concept_terms(query)
+        if not stems:
             return []
-        match = " OR ".join("(" + " OR ".join(f'"{v}"*' for v in _variants(t)) + ")"
-                            for t in terms)
-        gen = "" if include_generated else " AND m.generated = 0"
+        q = " OR ".join(f'"{t}"*' for t in stems)
+        cond = ("" if include_tests else " AND s.test = 0") + \
+            ("" if include_generated else " AND m.generated = 0")
+        join = ("JOIN concept_map m ON m.rowid = {t}.rowid JOIN shards s ON s.id = m.shard_id "
+                "AND s.orphan = 0")
+        def scores(table: str, weights: str) -> list:
+            return list(self.con.execute(
+                f"SELECT m.symbol_id, bm25({table}{weights}) FROM {table} "
+                f"{join.format(t=table)} WHERE {table} MATCH ?{cond}", (q,)))
         try:
-            rows = self.con.execute(
-                "SELECT m.symbol_id, bm25(concepts, 10.0, 3.0, 5.0, 2.0, 1.0, 4.0) AS score "
-                "FROM concepts JOIN concept_map m ON m.rowid = concepts.rowid "
-                f"WHERE concepts MATCH ?{gen} ORDER BY score LIMIT ?",
-                (match, max(300, limit * 20)))
-            rows = list(rows)
+            by_name = scores("concept_names", "")
+            by_text = scores("concepts", ", 5.0, 2.0, 4.0")       # ann, sig, calls
+            by_doc = scores("concept_docs", "")
         except sqlite3.OperationalError:
             return []
+        name_of: dict[int, float] = {}
+        for sid, score in by_name:
+            name_of[sid] = max(name_of.get(sid, 0.0), -score)
+        text_of: dict[int, list[float]] = {}
+        for sid, score in by_text:
+            text_of.setdefault(sid, []).append(-score)
+        doc_of: dict[int, float] = {}
+        for sid, score in by_doc:
+            doc_of[sid] = max(doc_of.get(sid, 0.0), -score)
+        total: dict[int, float] = {}
+        for sid in set(name_of) | set(text_of) | set(doc_of):
+            v = sorted(text_of.get(sid, []), reverse=True)
+            # The name weighs most; then the best text row and a capped share of the others
+            # (labels from many call sites); then the javadoc.
+            total[sid] = (3.0 * name_of.get(sid, 0.0) + (v[0] if v else 0.0)
+                          + 0.2 * sum(v[1:4]) + 0.5 * doc_of.get(sid, 0.0))
+        names = self.names(total)
         excl = [x.replace("**", "*") for x in exclude or []]
-        per: dict[int, list[float]] = {}
-        for sid, score in rows:   # rows of one symbol: its words, its labels elsewhere
-            per.setdefault(sid, []).append(-score)
-        # The best row, plus a little of the others (many query strings naming a type must
-        # not outweigh one definition that is about the words).
-        best = {sid: max(v) + 0.2 * (sum(v) - max(v)) for sid, v in per.items()}
-        names = self.names(best)
-        defs = self.definitions(best)
-        for sid in best:          # what a concept usually is: a type, then a method
-            sym = names.get(sid, "")
-            k = S.kind_of(sym)
-            best[sid] *= (1.6 if k == "type" else 1.25 if k == "method" else
-                          0.5 if re.fullmatch(r"[A-Z0-9_$]+", S.name_of(sym) or "") else 1.0)
-        out = []
-        for sid, score in sorted(best.items(), key=lambda kv: -kv[1]):
-            sym, d = names.get(sid), defs.get(sid)
-            if sym is None or d is None:
-                continue
-            if d[3] and not include_tests:
+        scored = []
+        for sid, score in total.items():
+            sym = names.get(sid)
+            if sym is None:
                 continue
             k = S.kind_of(sym)
             if kind and {"field": "term"}.get(kind, kind) != k:
                 continue
-            if scope and not scope_matches(scope, S.package_of(sym), d[0]):
-                continue
-            if excl and any(fnmatch.fnmatch(d[0], x) for x in excl):
-                continue
-            out.append((sym, score, d))
+            owner = " ".join(words_of_symbol_owner(sym))
+            in_owner = sum(1 for t in stems if re.search(r"(?:^|\s)" + re.escape(t), owner))
+            score *= 1 + 0.4 * in_owner / len(stems)
+            score *= (1.6 if k == "type" else 1.25 if k == "method" else
+                      0.7 if re.fullmatch(r"[A-Z0-9_$]+", S.name_of(sym) or "") else 1.0)
+            scored.append((score, sid, sym))
+        scored.sort(key=lambda x: (-x[0], x[2]))
+        out = []
+        defs: dict[int, tuple] = {}
+        for i in range(0, len(scored), 400):
             if len(out) >= limit:
                 break
+            chunk = scored[i:i + 400]
+            defs.update(self.definitions([sid for _s, sid, _y in chunk]))
+            for score, sid, sym in chunk:
+                d = defs.get(sid)
+                if d is None:
+                    continue
+                if scope and not scope_matches(scope, S.package_of(sym), d[0]):
+                    continue
+                if excl and any(fnmatch.fnmatch(d[0], x) for x in excl):
+                    continue
+                out.append((sym, score, d))
+                if len(out) >= limit:
+                    break
+        return out
+
+    def member_hints(self, type_symbol: str, stems: list[str], limit: int = 3) -> list[str]:
+        """Members of a type or its supertypes whose names hold query words the type's own
+        name does not: what a query like "the account's name" means (an inherited field)."""
+        own = " ".join(words_of_symbol_owner(type_symbol + "x."))
+        missing = [t for t in stems if not re.search(r"(?:^|\s)" + re.escape(t), own)]
+        if not missing:
+            return []
+        sid = self.ids([type_symbol]).get(type_symbol)
+        types = [type_symbol] + ([x for x in self.names(self.ancestors(sid)).values()
+                                  if S.is_type(x)] if sid is not None else [])
+        from .index import words_of
+        out = []
+        for t in types:
+            hi = t[:-1] + chr(ord(t[-1]) + 1)
+            for (member,) in self.con.execute(
+                    "SELECT s.symbol FROM symbols s JOIN defs d ON d.symbol_id = s.id "
+                    "WHERE s.symbol >= ? AND s.symbol < ?", (t, hi)):
+                if S.parent(member) != t or S.kind_of(member) not in ("term", "method"):
+                    continue
+                words = words_of(S.name_of(member))
+                if any(re.search(r"(?:^|\s)" + re.escape(x), words) for x in missing):
+                    label = S.name_of(member) + ("()" if S.is_method(member) else "")
+                    label += f" (in {S.name_of(t)})" if t != type_symbol else ""
+                    if label not in out:
+                        out.append(label)
+                if len(out) >= limit:
+                    return out
         return out
 
     # lookups ---------------------------------------------------------------------------------
@@ -853,25 +908,44 @@ que se su sus es son como entre sobre the of a an to in for on and or with is ar
 from as into via""".split())
 
 
-def _variants(term: str) -> list[str]:
-    """A word and its light singular (Spanish and English): facturas -> factura,
-    invoices -> invoice, classes -> class (prefix covers the rest)."""
-    out = [term]
-    if len(term) > 4 and term.endswith("es"):
-        out.append(term[:-2])
-    elif len(term) > 3 and term.endswith("s") and not term.endswith("ss"):
-        out.append(term[:-1])
-    return out
+_SUFFIXES = ("aciones", "iciones", "acion", "icion", "ciones", "cion", "adores", "adoras",
+             "ador", "adora", "adas", "ados", "ada", "ado", "ando", "iendo", "ings", "ing",
+             "ions", "ion", "ers", "er", "ed", "ar", "ir")
+
+
+def stem(word: str) -> str:
+    """A light stem for prefix search (Spanish and English): accents and plurals off, then a
+    verb or noun ending: importar/importación/importer -> import, tareas -> tarea,
+    programadas -> program."""
+    w = "".join(c for c in unicodedata.normalize("NFD", word.lower())
+                if unicodedata.category(c) != "Mn")
+    if len(w) > 4 and w.endswith("es"):
+        w = w[:-2]
+    elif len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+        w = w[:-1]
+    for suf in _SUFFIXES:
+        if w.endswith(suf) and len(w) - len(suf) >= 4:
+            return w[:-len(suf)]
+    return w
+
+
+def words_of_symbol_owner(symbol: str) -> list[str]:
+    from .index import words_of
+    return [w for d in S.parse(symbol)[:-1] if d.suffix == S.TYPE for w in words_of(d.name)
+            .split()]
 
 
 def concept_terms(query: str) -> list[str]:
-    """The words a concept query searches: lowercased, no stopwords, identifiers split."""
+    """The stems a concept query searches (one per word: no stopwords, identifiers split)."""
     from .index import words_of
     out: list[str] = []
     for tok in re.findall(r"[^\W_]+", query, re.UNICODE):
         for w in (words_of(tok).split() if any(c.isupper() for c in tok[1:]) else [tok.lower()]):
-            if len(w) >= 2 and w not in _STOPWORDS and w not in out:
-                out.append(w)
+            if len(w) < 2 or w in _STOPWORDS:
+                continue
+            st = stem(w)
+            if st not in out:
+                out.append(st)
     return out[:12]
 
 
