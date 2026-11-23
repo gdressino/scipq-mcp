@@ -40,7 +40,7 @@ ACTIONS = ("rename", "replace", "wrap", "remove", "insert_before", "insert_after
            "set_modifiers", "add_member", "add_import", "remove_import")
 MACRO_KEYS = {
     "rename": {"symbol", "to", "family", "accessors", "keep_column", "migration"},
-    "change_signature": {"symbol", "parameters", "family", "imports"},
+    "change_signature": {"symbol", "parameters", "family", "imports", "no_calls"},
     "replace_calls": {"symbol", "symbols", "overloads", "template", "imports", "family"},
     "move": {"symbol", "package", "to", "migration"},
     "annotate": {"symbols", "symbol", "add", "remove", "imports"},
@@ -607,9 +607,16 @@ class Planner:
                     sites += self.local_sites(m.symbol, m.definition.location.source, old)
                 continue
             # family() already found each member's definition and uses: no grep again.
-            if m.definition is not None and not m.definition.generated:
-                r = m.definition.location.range
-                sites.append(Site(m.definition.location.source, r.start_line, r.start_char,
+            defs = [m.definition] if m.definition is not None else []
+            try:        # the same class in several modules or source sets: each copy
+                defs = self.nav.references(m.symbol)[1] or defs
+            except QueryError:
+                pass
+            for dd in defs:
+                if dd.generated:
+                    continue
+                r = dd.location.range
+                sites.append(Site(dd.location.source, r.start_line, r.start_char,
                                   old, m.symbol, "definition", why=why))
             for ref in m.uses:
                 r = ref.location.range
@@ -901,7 +908,8 @@ class Planner:
             if "from" in p_ and not 0 <= p_["from"] < len(types):
                 raise PlanError(f"change_signature: {S.short(sym)} has {len(types)} "
                                 f"parameters, no {p_['from']}")
-        if varargs and not ("from" in params[-1] and params[-1]["from"] == len(types) - 1) \
+        if varargs and params and \
+                not ("from" in params[-1] and params[-1]["from"] == len(types) - 1) \
                 and any(x.get("from") == len(types) - 1 for x in params):
             raise PlanError("change_signature: the varargs parameter must stay last")
         try:
@@ -1599,8 +1607,9 @@ def _package_private(p: Planner, op: Op, move_to: dict[str, str],
                 top = prefix + S.top_level_type_name(sym) + "#"
                 if top in move_to and move_to[top] == to:
                     continue
-                if S.owner_type(sym).startswith(t[:-1]):
-                    continue
+                owner = S.owner_type(sym)
+                if owner == t or owner.startswith(t):
+                    continue        # the moved type or a type nested in it
                 md = p.nav.definition(sym)
                 if md is not None and _visibility(md) == "package" and sym not in opened:
                     found.append(f"{S.short(t)} uses {S.short(sym)}, package-private in {old} "
@@ -2841,8 +2850,11 @@ def verify(nav: Navigator, meta: dict, confirm: Callable | None = None) -> list[
     created = meta.get("created", 0)
 
     def shard_after_plan(src: str) -> bool:
+        """A shard written after the patched file (a build of that content), not only after
+        the plan (a build between planning and applying saw the old sources)."""
         try:
-            return any(os.stat(sh.path).st_mtime > created
+            written = max(created, os.stat(os.path.join(nav.ws.root, src)).st_mtime)
+            return any(os.stat(sh.path).st_mtime > written
                        for sh in nav.ws.shard_for_source(src))
         except OSError:
             return False

@@ -122,9 +122,13 @@ def _init_scripts(project: str, dirname: str = "") -> list[tuple[str, str]]:
         if "scip-javac" not in text and "-Xplugin:scip" not in text:
             continue
         m = re.search(r"def\s+PROJECTS\s*=\s*\[([^\]]*)\]", text)
-        cmp_ = re.search(r"""((?:[\w$]+\s*\.\s*)*name)\s*([!=]=)\s*['"]([^'"]+)['"]""", text)
-        pre = re.search(r"""((?:[\w$]+\s*\.\s*)*name)\s*\.\s*startsWith\s*\(\s*['"]([^'"]+)"""
-                        r"""['"]""", text)
+        # Only the root project's (or its directory's) name, not a task's or a configuration's.
+        subj = r"(?:rootProject|root|project|gradle\.rootProject)(?:\s*\.\s*projectDir)?" \
+            r"\s*\.\s*name"
+        cmp_ = re.search(r"(!?)\(?\s*(" + subj + r")\s*([!=]=)\s*['\"]([^'\"]+)['\"]\s*\)?"
+                         r"(\s*\)?\s*return\b)?", text)
+        pre = re.search(r"(!?)\s*(" + subj + r")\s*\.\s*startsWith\s*\(\s*['\"]([^'\"]+)"
+                        r"['\"]\s*\)(\s*\)?\s*return\b)?", text)
 
         def subject(expr: str) -> str:
             return (dirname or project) if "projectDir" in expr else project
@@ -133,13 +137,27 @@ def _init_scripts(project: str, dirname: str = "") -> list[tuple[str, str]]:
             applies = "yes (all projects)" if not names else (
                 "yes" if project in names else f"NO: PROJECTS = {names} does not include {project!r}")
         elif cmp_ is not None:
-            only, who = cmp_.group(3), subject(cmp_.group(1))
-            what = "directory" if "projectDir" in cmp_.group(1) else "root project"
-            applies = "yes" if only == who else f"NO: only for {what} {only!r}"
+            negated, expr, op, only, ret = cmp_.groups()
+            who = subject(expr)
+            what = "directory" if "projectDir" in expr else "root project"
+            # `if (name != 'x') return` keeps x; `if (name == 'x') return` leaves x out;
+            # without a return, the block applies to x.
+            keeps_only = (op == "!=") == bool(ret) if not negated else (op == "==") == bool(ret)
+            if keeps_only:
+                applies = "yes" if only == who else f"NO: only for {what} {only!r}"
+            else:
+                applies = f"NO: {what} {only!r} is left out" if only == who else "yes"
         elif pre is not None:
-            prefix, who = pre.group(2), subject(pre.group(1))
-            what = "directories" if "projectDir" in pre.group(1) else "projects"
-            applies = "yes" if who.startswith(prefix) else f"NO: only for {what} named {prefix}*"
+            negated, expr, prefix, ret = pre.groups()
+            who = subject(expr)
+            what = "directories" if "projectDir" in expr else "projects"
+            keeps_only = bool(negated) == bool(ret)
+            if keeps_only:
+                applies = "yes" if who.startswith(prefix) else \
+                    f"NO: only for {what} named {prefix}*"
+            else:
+                applies = f"NO: {what} named {prefix}* are left out" if who.startswith(prefix) \
+                    else "yes"
         else:
             applies = "unknown (custom script)"
         out.append((path, applies))

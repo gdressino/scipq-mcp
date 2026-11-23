@@ -732,7 +732,7 @@ class Service:
                 if S.parent(member) != t or S.is_local_like(member) or \
                         S.kind_of(member) not in ("method", "term"):
                     continue
-                if t in supers and re.search(r"\bprivate\b", (sig or "").split("(")[0]):
+                if t in supers and S.is_private(sig or ""):
                     continue   # not inherited
                 out.setdefault(S.name_of(member), []).append(
                     ("method" if S.is_method(member) else "field", R._sig_arity(sig or "")))

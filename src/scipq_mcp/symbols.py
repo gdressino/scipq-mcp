@@ -212,6 +212,19 @@ def name_of(symbol: str) -> str:
     return d[-1].name if d else symbol
 
 
+_ANNOTATION = re.compile(r"@[\w$.]+(?:\s*\((?:[^()\"]|\"(?:[^\"\\\\]|\\\\.)*\"|\((?:[^()]|\([^()]*\))*\))*\))?")
+
+
+def without_annotations(signature: str) -> str:
+    """A signature without its annotations (whose arguments may hold parentheses)."""
+    return _ANNOTATION.sub(" ", signature or "")
+
+
+def is_private(signature: str) -> bool:
+    """Whether a member's signature declares it private."""
+    return re.search(r"\bprivate\b", without_annotations(signature).split("(", 1)[0]) is not None
+
+
 _SUPER_BEFORE = re.compile(r"\bsuper\s*\.\s*$")
 
 

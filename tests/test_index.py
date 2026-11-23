@@ -515,16 +515,18 @@ def test_concepts(sample_copy, tmp_path):
 
 
 def test_concept_stems_and_prefix_families():
-    from scipq_mcp.graph import concept_terms, prefix_family, stem
-    assert stem("facturas") == "factura" and prefix_family("factura") == ["factura"]
+    from scipq_mcp.graph import concept_terms, stem, word_family
+    assert stem("facturas") == "factura" and word_family("facturas") == ["factura"]
     assert stem("clases") == "clase" and stem("states") == "state"    # -s, not -es
     assert stem("funciones") == stem("función") == "func"
     assert stem("exportación") == stem("exportar") == stem("exporter") == "export"
-    fam = prefix_family("export")
+    fam = word_family("exportar")
     assert "exportac" in fam and "exporter" in fam and "export" not in fam   # not "exporte"
-    assert prefix_family(stem("entities")) == ["entity", "entitie"]
+    # No state: a bare word asked first does not change another word's family.
+    assert word_family("export") == ["export"] and word_family("exportar") == fam
+    assert word_family("entities") == ["entity", "entitie"]
+    assert word_family("series") == ["sery", "serie"]
     assert concept_terms("factura|facturas pedido|pedidos") == [["factura"], ["pedido"]]
-    assert prefix_family(stem("series")) == ["sery", "serie"]
     assert concept_terms("envío de la facturaPendiente") == [["envio"], ["factura"], ["pendiente"]]
     # Forms given as alternatives are searched as written (one word of the query each).
     assert concept_terms("Pago|pagar|payment de pedidos") == [

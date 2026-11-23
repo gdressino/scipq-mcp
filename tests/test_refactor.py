@@ -317,3 +317,17 @@ def test_an_earlier_step_can_open_access_for_a_move(refactor_root, javaparser_ca
                                "to": "com.example.shop.util.io"}}])
     assert "WILL NOT COMPILE" not in out and "+    public static String header() {" in \
         patch_of(out)
+
+
+def test_review_regressions_without_a_jvm():
+    from scipq_mcp import compare as CMP
+    from scipq_mcp import refactor as R
+    from scipq_mcp import symbols as S
+    # change_signature's no_calls is a known key.
+    R.load_plan({"steps": [{"change_signature": {"symbol": "A#m", "parameters": [],
+                                                 "no_calls": True}}]})
+    # Annotations with arguments do not hide the modifiers or the parameter list.
+    assert S.is_private('@SuppressWarnings("unchecked") private void helper()')
+    assert not S.is_private('@Named("private") public void open()')
+    assert R._param_types('@Deprecated(since = "2") void m(int a, int b)') == ("int", "int")
+    assert CMP.shape('@Deprecated(since = "2") void m(int a)') == "void m(int)"

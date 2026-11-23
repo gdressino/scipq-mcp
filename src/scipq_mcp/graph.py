@@ -633,7 +633,9 @@ class Graph:
             return out_
 
         def first_string(text: str) -> str:
-            m = re.search(r'"((?:[^"\\]|\\.)*)"', text)
+            """The annotation's value: `value = "…"`, `path = "…"` or its leading string."""
+            m = re.search(r'(?:^|[(,\s])(?:value|path)\s*=\s*\{?\s*"((?:[^"\\]|\\.)*)"', text) \
+                or re.match(r'\s*\{?\s*"((?:[^"\\]|\\.)*)"', text)
             return m.group(1)[:80] if m else ""
 
         def route(sym: str, owner: str) -> str:
@@ -662,8 +664,7 @@ class Graph:
             if sym not in sigs:
                 d = self.definitions([ids[sym]]).get(ids[sym]) if sym in ids else None
                 sigs[sym] = d[4] if d else ""
-            head = sigs[sym].split("(", 1)[0]
-            return re.search(r"\bprivate\b", re.sub(r"@\w+(\([^)]*\))?", " ", head)) is not None
+            return S.is_private(sigs[sym])
 
         def abstract(t: str) -> bool:
             """An abstract class or an interface: a base of screens, jobs…, not one."""
@@ -1412,34 +1413,48 @@ que se su sus es son como entre sobre the of a an to in for on and or with is ar
 from as into via""".split())
 
 
-_WHOLE: set[str] = set()       # stems that are whole words (nothing was taken off)
-_IES: set[str] = set()         # stems of plurals in -ies (entities, series): + y or + ie
-_KEEP_BASE: set[str] = set()   # stems also searched bare (none for now)
 _SUFFIXES = ("aciones", "iciones", "acion", "icion", "ciones", "cion", "adores", "adoras",
              "ador", "adora", "adas", "ados", "ada", "ado", "ando", "iendo", "ings", "ing",
              "ions", "ion", "ers", "er", "ed", "ar", "ir")
 
 
-def stem(word: str) -> str:
-    """A light stem for prefix search (Spanish and English): accents and plurals off, then a
-    verb or noun ending: exportar/exportación/exporter -> export, facturas -> factura,
-    enviadas -> envi, entities -> entit (searched as entity, entitie)."""
+def _stem(word: str) -> tuple[str, str]:
+    """(stem, how): "whole" when no ending was taken off, "ies" for a plural in -ies, "cut"
+    when a verb or noun ending was. Pure: the same word always gives the same answer."""
     w = "".join(c for c in unicodedata.normalize("NFD", word.lower())
                 if unicodedata.category(c) != "Mn")
     # Plurals: -ies (entities -> entity, series -> serie), -es after a consonant that takes
     # it in Spanish (factores, funciones, ordenes), else -s (clases, states, tickets).
     if len(w) > 4 and w.endswith("ies"):
-        _IES.add(w[:-3])
-        return w[:-3]
+        return w[:-3], "ies"
     if len(w) > 4 and w.endswith("es") and w[-3] in "lnrdzj":
         w = w[:-2]
     elif len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
         w = w[:-1]
     for suf in _SUFFIXES:
         if w.endswith(suf) and len(w) - len(suf) >= 4:
-            return w[:-len(suf)]
-    _WHOLE.add(w)        # no ending taken off: the word itself, as a prefix
-    return w
+            return w[:-len(suf)], "cut"
+    return w, "whole"
+
+
+def stem(word: str) -> str:
+    """A light stem for prefix search (Spanish and English): accents and plurals off, then a
+    verb or noun ending: exportar/exportación/exporter -> export, facturas -> factura,
+    enviadas -> envi, entities -> entit."""
+    return _stem(word)[0]
+
+
+def word_family(word: str) -> list[str]:
+    """The prefixes a query word is searched as: the word itself when nothing was taken off,
+    the stem followed by the starts of its usual endings when an ending was (import ->
+    importac, importar, importad, importer…, so that it does not match importe), and the
+    -y and -ie forms of a plural in -ies (entities -> entity, entitie)."""
+    base, how = _stem(word)
+    if how == "ies":
+        return [base + "y", base + "ie"]
+    if how == "whole" or len(base) < 4:
+        return [base]
+    return [base + x for x in ("ac", "ar", "ad", "er", "ing", "ion", "ed", "or", "ab", "ib")]
 
 
 def words_of_symbol_owner(symbol: str, packages: bool = False) -> list[str]:
@@ -1452,19 +1467,6 @@ def words_of_symbol_owner(symbol: str, packages: bool = False) -> list[str]:
         pkgs = [d.name for d in parts if d.suffix == S.NAMESPACE][-3:]
         out += [w for p in pkgs for w in words_of(p).split()]
     return out
-
-
-def prefix_family(stem_: str) -> list[str]:
-    """The prefixes a stem stands for: the stem itself when it is a whole word, else the
-    stem followed by the starts of its usual endings (import -> importac, importar, importad,
-    importer…), so that it does not match words that only share the start (importe)."""
-    base = stem_
-    if base in _IES:
-        return [base + "y", base + "ie"]
-    if len(base) < 4 or base in _WHOLE:
-        return [base]
-    fam = [base + x for x in ("ac", "ar", "ad", "er", "ing", "ion", "ed", "or", "ab", "ib")]
-    return fam + [base] if base in _KEEP_BASE else fam
 
 
 def _plain(text: str) -> str:
@@ -1481,7 +1483,7 @@ def concept_terms(query: str) -> list[list[str]]:
     """What a concept query searches: one group of prefixes per word. Forms written by the
     caller as alternatives (pago|pagar|payment) are searched as given, as prefixes (a
     singular finds its plural); a word alone is reduced to a light stem and its usual
-    endings (see stem and prefix_family). Stopwords and identifiers split as for names."""
+    endings (see word_family). Stopwords and identifiers split as for names."""
     out: list[list[str]] = []
     for tok in query.split():
         if "|" in tok:
@@ -1495,7 +1497,7 @@ def concept_terms(query: str) -> list[list[str]]:
         for w in _plain(tok).split():
             if len(w) < 2 or w in _STOPWORDS:
                 continue
-            group = prefix_family(stem(w))
+            group = word_family(w)
             if group not in out:
                 out.append(group)
     return out[:12]

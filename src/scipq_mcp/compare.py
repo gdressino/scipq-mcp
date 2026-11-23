@@ -87,7 +87,9 @@ def api_of(g: Graph, scope: str = "", api_only: bool = True) -> dict[str, Entry]
 
 def shape(signature: str) -> str:
     """A signature as callers and overriders see it: parameter names and `final` left out
-    (scip-javac's signatures carry the names: renaming a parameter breaks nothing)."""
+    (scip-javac's signatures carry the names: renaming a parameter breaks nothing). Its
+    annotations are left out too (their arguments hold parentheses)."""
+    signature = " ".join(S.without_annotations(signature).split())
     i = signature.find("(")
     if i < 0:
         return signature

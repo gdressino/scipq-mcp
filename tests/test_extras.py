@@ -618,6 +618,13 @@ def test_init_scripts_that_filter_by_name_prefix(tmp_path, monkeypatch):
     assert got[str(init / "a.init.gradle")] == "yes"
     got = dict(SETUP._init_scripts("shop-app", "store-web"))
     assert got[str(init / "a.init.gradle")] == "NO: only for directories named shop*"
+    # A task's name is not the project's; == with return leaves that project out.
+    (init / "a.init.gradle").write_text(
+        'tasks.withType(JavaCompile) { if (it.name == "compileJava") { } } // scip-javac\n')
+    assert dict(SETUP._init_scripts("shop"))[str(init / "a.init.gradle")].startswith("unknown")
+    (init / "a.init.gradle").write_text('if (rootProject.name == "legacy") return // scip-javac\n')
+    assert dict(SETUP._init_scripts("shop"))[str(init / "a.init.gradle")] == "yes"
+    assert dict(SETUP._init_scripts("legacy"))[str(init / "a.init.gradle")].startswith("NO")
 
 
 def test_check_refs_library_types_only_in_old_versions(tmp_path):
