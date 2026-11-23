@@ -15,6 +15,16 @@ public class Startup {
     }
 
     @PostConstruct
+    public void factory() {
+        factories.add(new Supplier<String>() {
+            @Override
+            public String get() {
+                return Pages.lazy();
+            }
+        });
+    }
+
+    @PostConstruct
     public void warm() {
         Pages.lazy();
     }

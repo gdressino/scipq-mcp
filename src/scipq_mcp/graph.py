@@ -39,6 +39,7 @@ class Node:
     test: bool = False
     sites: list[int] = field(default_factory=list)  # 1-based lines where it calls `via`
     task_dir: str = ""            # "<module>/<task>" of its shard (e.g. "core/compileTestJava")
+    inner: bool = False           # every call is inside a local or anonymous class
 
 
 @dataclass
@@ -444,13 +445,14 @@ class Graph:
         lifecycle = lifecycle or set()
 
         def creators(found: list[int]) -> list[int]:
-            """Constructors of the types whose lifecycle methods were reached."""
+            """Constructors of the types whose lifecycle methods were reached (the type the
+            chain is bound to, when the method is inherited from a base class)."""
             out_ = []
             for sid in found:
                 sym = names.get(sid, "")
                 if S.kind_of(sym) != "method" or S.name_of(sym) not in lifecycle:
                     continue
-                prefix = S.owner_type(sym) + "`<init>`"
+                prefix = (bound.get(sid) or S.owner_type(sym)) + "`<init>`"
                 for (cid,) in self.con.execute(
                         "SELECT s.id FROM symbols s WHERE s.symbol >= ? AND s.symbol < ? AND "
                         "EXISTS (SELECT 1 FROM defs d WHERE d.symbol_id = s.id)",
@@ -501,7 +503,8 @@ class Graph:
                     bound[caller] = bound[target]   # still the same object's code
                 src, mod, test = sh[shard_id]
                 nodes[caller] = Node("", level, names.get(target, ""), src, 0, module_of(mod),
-                                     bool(test), _lines(sites), mod)
+                                     bool(test), _lines(sites), mod,
+                                     inner=all("@" in x for x in sites.split(",") if x))
                 if len(nodes) >= max_nodes:
                     truncated = True
                     break
@@ -515,7 +518,9 @@ class Graph:
                     for caller, target in self._project_overridden(nxt):
                         if target not in seen:
                             seen.add(target)
-                            dispatch[target] = S.owner_type(names.get(caller, ""))
+                            # An override reached for X stays X's (narrower than its owner).
+                            dispatch[target] = bound.get(caller) or \
+                                S.owner_type(names.get(caller, ""))
                             extra.append(target)
                 if lifecycle:
                     extra += creators(nxt)
@@ -646,8 +651,10 @@ class Graph:
             return declared[t]
 
         def deferred(n: Node) -> bool:
-            """Every call it makes on the way is inside a lambda or a method reference: it
-            registers code that runs later, it does not run it."""
+            """Every call it makes on the way is inside a lambda, a method reference or an
+            anonymous class: it registers code that runs later, it does not run it."""
+            if n.inner:
+                return True
             lines = lines_of(n.source)
             return bool(n.sites) and all(0 < x <= len(lines) and ("->" in lines[x - 1] or
                                                                   "::" in lines[x - 1])

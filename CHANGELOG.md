@@ -40,7 +40,8 @@ version and date when releasing.
   receivers, members of nested builders, Object/Class/enum and JDO-enhancer members, Python
   snippets and names, examples ("por ejemplo", "e.g."), and mentions the line says are gone
   ("removed", "borrado"); paths are also resolved from the document's folder and against
-  files that exist but are not indexed. Folders of closed docs (`archive/`, `done/`, `archivo/`…) are left
+  files that exist but are not indexed. A library type found only in an old cached version
+  of its artifact is reported ("only in ui-data 2.10.5; 25.1.5 has none"). Folders of closed docs (`archive/`, `done/`, `archivo/`…) are left
   out unless `files` names them; `[check_refs] exclude` in `.scipq.toml` adds globs; a
   folder in `files` means its Markdown files.
 - `impact` and `changed` list the entry points the change reaches, by kind (screens,
@@ -52,7 +53,8 @@ version and date when releasing.
   without a route, is not one. A rule with `reached = false` keeps code alive for
   `dead_code` without being listed: the `spring` profile's beans; its events, schedules and
   startup hooks (`@EventListener`, `@Scheduled`, `@PostConstruct`, runners) are kinds of
-  their own; a startup hook that only registers a lambda or a method reference is not one.
+  their own; a startup hook that only registers a lambda, a method reference or an
+  anonymous class is not one.
   Rules may take the types an annotation names (`referenced_by`: the `vaadin` profile's
   layouts in `@Route(layout = …)`), and profiles may list `[lifecycle] methods` the framework
   calls on an object it was given (Vaadin's `onAttach`): `impact` goes on from them to

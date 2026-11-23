@@ -1,0 +1,9 @@
+Ø
+3shop/src/main/java/com/example/shop/CountBadge.java0com/example/shop/CountBadge#BZ 3'com/example/shop/CountBadge#`<init>`().B%com/example/shop/BaseBadge#B )java/lang/Override#B<&com/example/shop/CountBadge#refresh().BZ !com/example/shop/Pages#B)com/example/shop/Pages#count().B€
+com/example/shop/CountBadge#"
+com/example/shop/BaseBadge#(2
+CountBadge:1"java*)public class CountBadge extends BaseBadgeP
+'com/example/shop/CountBadge#`<init>`().(	2<init>:"java*public CountBadge()Œ
+&com/example/shop/CountBadge#refresh()."+
+%com/example/shop/BaseBadge#refresh().(2refresh:*"java*"@Override
+protected void refresh()"java

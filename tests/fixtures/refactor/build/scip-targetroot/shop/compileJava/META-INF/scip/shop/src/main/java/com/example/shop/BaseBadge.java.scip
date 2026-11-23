@@ -1,0 +1,7 @@
+Ø
+2shop/src/main/java/com/example/shop/BaseBadge.java/com/example/shop/BaseBadge#BZ
+ 2&com/example/shop/BaseBadge#`<init>`().B<&com/example/shop/BaseBadge#onAttach().BZ /%com/example/shop/BaseBadge#refresh().B;%com/example/shop/BaseBadge#refresh().BZ	 ‹
+com/example/shop/BaseBadge#?onAttach() is declared here; subclasses only change refresh(). (2	BaseBadge:"java*public class BaseBadgeN
+&com/example/shop/BaseBadge#`<init>`().(	2<init>:"java*public BaseBadge()W
+&com/example/shop/BaseBadge#onAttach().(2onAttach:!"java*protected void onAttach()T
+%com/example/shop/BaseBadge#refresh().(2refresh: "java*protected void refresh()"java

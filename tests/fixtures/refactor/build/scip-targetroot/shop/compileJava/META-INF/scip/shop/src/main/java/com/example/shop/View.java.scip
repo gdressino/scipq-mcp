@@ -1,0 +1,7 @@
+Ï
+-shop/src/main/java/com/example/shop/View.java*com/example/shop/View#BZ -!com/example/shop/View#`<init>`().Bjava/lang/String#B5com/example/shop/View#render().BZ java/lang/String#B6 com/example/shop/View#measure().BZ
+ )com/example/shop/View#render().B	…
+com/example/shop/View#?The base of pages: measure() runs render() on the same object. (2View:""java*public abstract class ViewD
+!com/example/shop/View#`<init>`().(	2<init>:"java*public View()K
+com/example/shop/View#render().(2render:"java*public String render()N
+ com/example/shop/View#measure().(2measure:"java*public String measure()"java

@@ -1,7 +1,8 @@
-»
-2shop/src/main/java/com/example/shop/SalesPage.java/com/example/shop/SalesPage#BZ 2&com/example/shop/SalesPage#`<init>`().B com/example/shop/Page#B#java/lang/Override#Bjava/lang/String#B8"com/example/shop/SalesPage#body().BZ !com/example/shop/Pages#B)com/example/shop/Pages#sales().Bs
+Â
+2shop/src/main/java/com/example/shop/SalesPage.java/com/example/shop/SalesPage#BZ 2&com/example/shop/SalesPage#`<init>`().B com/example/shop/Page#B#java/lang/Override#Bjava/lang/String#B8"com/example/shop/SalesPage#body().BZ !com/example/shop/Pages#B)com/example/shop/Pages#sales().Bè
 com/example/shop/SalesPage#"
-com/example/shop/Page#(2	SalesPage:+"java*#public class SalesPage extends PageN
+com/example/shop/Page#"
+com/example/shop/View#(2	SalesPage:+"java*#public class SalesPage extends PageN
 &com/example/shop/SalesPage#`<init>`().(	2<init>:"java*public SalesPage()|
 "com/example/shop/SalesPage#body()."#
 com/example/shop/Page#body().(2body:)"java*!@Override

@@ -1,6 +1,7 @@
-š
+Í
 3shop/src/main/java/com/example/shop/OrdersView.javacom/B
-com/vaadin/Bcom/vaadin/flow/B!com/vaadin/flow/router/B'com/vaadin/flow/router/Route#B#'com/vaadin/flow/router/Route#B/%com/vaadin/flow/router/Route#value().B0&com/vaadin/flow/router/Route#layout().B$com/example/shop/AppShell#B"** com/example/shop/AppShell#class.B+00com/example/shop/OrdersView#BZ	 ='com/example/shop/OrdersView#`<init>`().BZ ,"com/example/shop/Badge#`<init>`().B
+com/vaadin/Bcom/vaadin/flow/B!com/vaadin/flow/router/B'com/vaadin/flow/router/Route#B#'com/vaadin/flow/router/Route#B/%com/vaadin/flow/router/Route#value().B0&com/vaadin/flow/router/Route#layout().B$com/example/shop/AppShell#B"** com/example/shop/AppShell#class.B+00com/example/shop/OrdersView#BZ
+ ='com/example/shop/OrdersView#`<init>`().BZ	 ,"com/example/shop/Badge#`<init>`().B1'com/example/shop/CountBadge#`<init>`().B
 com/example/shop/OrdersView#(2
 OrdersView:Q"java*I@Route(value = "orders", layout = AppShell.class)
 public class OrdersViewP

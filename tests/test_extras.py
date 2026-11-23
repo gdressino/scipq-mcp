@@ -559,6 +559,10 @@ def test_impact_dispatches_through_template_methods(refactor_root, tmp_path):
     assert "d3  Pages#show()" in out and "d3  Page#frame()" in out
     assert "StockPage" not in out           # its super.render()/frame(), refresh(): its own
     assert "page  d1  SalesPage" in out and "page  d2  Page " not in out    # abstract
+    # Page#render() overrides View#render(): View#measure() runs it on the same object, and
+    # StockPage#refreshAll()'s measure() runs on a StockPage (bound to SalesPage, not Page).
+    deep = Service(refactor_root, cache_dir=str(tmp_path / "c")).impact("Pages#sales", depth=5)
+    assert "View#measure()" in deep and "StockPage" not in deep
     # From the override itself: the base's code runs on it, the sibling's does not.
     out = Service(refactor_root, cache_dir=str(tmp_path / "c")).impact("SalesPage#body",
                                                                        depth=4)
@@ -576,9 +580,13 @@ def test_impact_lifecycle_creators_layouts_and_startup_lambdas(refactor_root, tm
     assert "d1  Badge#onAttach()" in out and "d2  OrdersView#<init>()" in out
     assert 'screen  d2  OrdersView  ' in out and '@Route("orders")' in out
     assert "screen  d2  AppShell  " in out and "named in @Route(layout)" in out
+    # onAttach() inherited from BaseBadge, reached for a CountBadge: CountBadge's creators.
+    out = svc.impact("Pages#count")
+    assert "BaseBadge#onAttach()" in out and "OrdersView#<init>()" in out
     out = svc.impact("Pages#lazy")
-    assert "startup  d1  Startup  " in out and "warm()" in out and "register()" not in \
-        out.split("Startup.java")[1].split("\n")[0]
+    row = out.split("Startup.java")[1].split("\n")[0]
+    assert "startup  d1  Startup  " in out and "warm()" in row
+    assert "register()" not in row and "factory()" not in row   # a lambda, an anonymous class
 
 
 def test_init_scripts_that_filter_by_name_prefix(tmp_path, monkeypatch):
@@ -600,3 +608,24 @@ def test_init_scripts_that_filter_by_name_prefix(tmp_path, monkeypatch):
     assert got[str(init / "a.init.gradle")] == "yes"
     got = dict(SETUP._init_scripts("shop-app", "store-web"))
     assert got[str(init / "a.init.gradle")] == "NO: only for directories named shop*"
+
+
+def test_check_refs_library_types_only_in_old_versions(tmp_path):
+    import sqlite3
+    from scipq_mcp.checkrefs import Model
+    con = sqlite3.connect(tmp_path / "libraries.sqlite")
+    con.executescript("""
+        CREATE TABLE jars (id INTEGER PRIMARY KEY, path TEXT, mtime_ns INTEGER, size INTEGER,
+                           coordinates TEXT);
+        CREATE TABLE classes (name TEXT, jar_id INTEGER, entry TEXT);
+        INSERT INTO jars VALUES (1, 'a', 0, 0, 'org.ui:ui-data:2.10.5'),
+                                (2, 'b', 0, 0, 'org.ui:ui-data:25.1.5');
+        INSERT INTO classes VALUES ('org/ui/data/OldRenderer', 1, ''),
+                                   ('org/ui/data/Grid', 1, ''), ('org/ui/data/Grid', 2, '');
+    """)
+    con.commit()
+    con.close()
+    m = Model.__new__(Model)
+    m.external_names, m._stale, m._cache_base = set(), {}, str(tmp_path)
+    assert m.stale_library("OldRenderer") == "only in ui-data 2.10.5; 25.1.5 has none"
+    assert m.stale_library("Grid") == ""

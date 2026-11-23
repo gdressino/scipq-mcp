@@ -137,6 +137,7 @@ class Model:
         self._cache_base = cache_base
         self._library: set[str] | None = None
         self._packages: set[str] | None = None
+        self._stale: dict[str, str] = {}
 
     def library_names(self) -> set[str]:
         """Simple names of the library classes the project could mean: those in the library
@@ -162,6 +163,48 @@ class Model:
 
     def is_library(self, simple: str) -> bool:
         return simple in self.external_names or simple in self.library_names()
+
+    def stale_library(self, simple: str) -> str:
+        """For a library class the project does not use: a note when only old versions of
+        its artifact have it ("only in flow-data 2.10.5; 25.1.5 has none"), else ""."""
+        if simple in self.external_names:
+            return ""
+        if simple in self._stale:
+            return self._stale[simple]
+        from .cachedir import default_base
+        from .libsrc import _version_key
+        note = ""
+        path = os.path.join(self._cache_base or default_base(), "libraries.sqlite")
+        try:
+            con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+            have: dict[str, set[str]] = {}
+            for (coords,) in con.execute(
+                    "SELECT DISTINCT j.coordinates FROM classes c JOIN jars j ON j.id = c.jar_id "
+                    "WHERE c.name LIKE ? OR c.name LIKE ?", (f"%/{simple}", f"%${simple}")):
+                ga, _, ver = coords.rpartition(":")
+                if not ga or coords.startswith("JDK"):
+                    have = {}
+                    break
+                have.setdefault(ga, set()).add(coords)
+            stale = []
+            for ga, with_it in have.items():
+                every = [c for (c,) in con.execute(
+                    "SELECT DISTINCT coordinates FROM jars WHERE coordinates LIKE ?",
+                    (ga + ":%",))]
+                newest = max(every, key=_version_key)
+                if newest in with_it:
+                    stale = []
+                    break
+                stale.append((ga.rsplit(":", 1)[-1], max(with_it, key=_version_key)
+                              .rsplit(":", 1)[-1], newest.rsplit(":", 1)[-1]))
+            con.close()
+            if stale:
+                art, old, new = stale[0]
+                note = f"only in {art} {old}; {new} has none"
+        except sqlite3.Error:
+            note = ""
+        self._stale[simple] = note
+        return note
 
     def supertypes(self, t: str) -> list[str]:
         if t not in self._supers:
@@ -584,6 +627,10 @@ def _check_member(m: Model, mention: str, written_type: str, name: str, params,
         # A constant or a field as the receiver (LOG.info, MAX.x), a library type, or prose
         # (an unknown capitalized word followed by .call(): only code spans, links and #
         # forms are sure to be code).
+        if lib and strict and m.stale_library(simple):
+            add(mention, f"no type {written_type} in the libraries' current versions ("
+                + m.stale_library(simple) + ")", "no-type")
+            return []
         if re.fullmatch(r"[A-Z][A-Z0-9_]+", simple) or lib or not strict or \
                 _is_library_like(written_type):
             return []

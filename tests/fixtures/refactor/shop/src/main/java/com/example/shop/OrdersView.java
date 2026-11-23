@@ -6,5 +6,6 @@ import com.vaadin.flow.router.Route;
 public class OrdersView {
     public OrdersView() {
         new Badge();
+        new CountBadge();
     }
 }

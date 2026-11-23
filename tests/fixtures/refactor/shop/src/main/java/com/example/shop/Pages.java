@@ -9,6 +9,10 @@ public class Pages {
         return "badge";
     }
 
+    static String count() {
+        return "count";
+    }
+
     static String lazy() {
         return "lazy";
     }
