@@ -629,6 +629,21 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     names += sorted(c for c in _glued_calls(line, mo, code, oa, ob) if c not in names)
     names = [x for x in names if not x.startswith("new ")] + \
         [x[4:] for x in names if x.startswith("new ")]
+    seg = line[oa:ob]
+
+    def as_code(x: str) -> bool:
+        """The doc writes x as code: x( with no space, .x or #x (a word alone in backticks
+        may be a branch or a role: `main`, `helper`)."""
+        q = re.escape(x)
+        return len(x) > 2 and re.search(r"(?<![\w$])" + q + r"\(|\." + q + r"(?![\w$])|#" +
+                                        q + r"(?![\w$])", seg) is not None
+
+    def receiver_only(x: str) -> bool:
+        """x appears only as a receiver or a local of the doc's code (pm.foo(), q = …)."""
+        q = re.escape(x)
+        return re.search(r"(?<![\w$.])" + q + r"\s*(?:\.|=[^=])", seg) is not None and \
+            re.search(r"(?<![\w$])" + q + r"\(|[.#]" + q + r"(?![\w$])", seg) is None
+    names = [x for x in names if not receiver_only(x)]
     for src in fits:
         members = {x: [y for t in m.types_in.get(src, [])
                        for y in m.member_syms.get((t, x), []) if y not in m.generated]
@@ -640,12 +655,28 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         if not lines:
             _with_header(root, src, 1, text_cache)
             lines = text_cache.get(src) or []
-        window = "\n".join(lines[max(0, n - 3):min(len(lines), end_n + 2)])
+        span = lines[max(0, n - 3):min(len(lines), end_n + 2)]
+        code_part = "\n".join(c for c in span if not re.match(r"\s*(//|\*|/\*)", c))
+        comments = "\n".join(c for c in span if re.match(r"\s*(//|\*|/\*)", c))
+
         def mentions(x: str) -> bool:
-            if re.search(r"(?<![\w$])" + re.escape(x) + r"(?![\w$])", window):
-                return True
+            q = re.escape(x)
+            if re.search(r"(?<![\w$])" + q + r"(?![\w$])", code_part) or \
+                    re.search(r"(?<![\w$])" + q + r"\(|[.#]" + q + r"(?![\w$])", comments):
+                return True         # in a comment, only written as code
             fields = [y for y in members.get(x, []) if S.kind_of(y) == "term"]
-            return bool(fields) and x.lower() in window.lower()     # getX/setX of a field
+            return bool(fields) and x.lower() in code_part.lower()  # getX/setX of a field
+
+        def anywhere(x: str) -> bool:
+            """The file declares x or calls it somewhere (code, not comments)."""
+            return bool(members.get(x)) or any(
+                re.search(r"(?<![\w$])" + re.escape(x) + r"\s*\(", _no_strings(c))
+                for c in lines if not re.match(r"\s*(//|\*|/\*)", c))
+        # A name this file neither declares nor mentions counts only when the doc writes it
+        # as code: a prose word ("en main", "de sólo lectura") never does.
+        known = [x for x in known if anywhere(x) or as_code(x)]
+        if not known:
+            continue
         def contains(x: str) -> bool:
             """N..M falls in X's own lines (with its javadoc and annotations)."""
             for y in members.get(x, []):
@@ -674,8 +705,12 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         if calls:
             where.append("called at " + ", ".join(map(str, calls[:4]))
                          + (" …" if len(calls) > 4 else ""))
-        add(mo.group(0), f"line {n} no longer mentions {x}"
-            + (f" ({'; '.join(where)})" if where else ""), "line-moved")
+        if where:
+            add(mo.group(0), f"line {n} no longer mentions {x} ({'; '.join(where)})",
+                "line-moved")
+        else:
+            add(mo.group(0), f"line {n} no longer calls {x} (nothing in this file mentions it "
+                "now)", "line-moved")
         return
 
 
@@ -695,7 +730,8 @@ def _neighbour_cells(line: str, pos: int) -> list[tuple[int, int]]:
 
 # Between items: " · ", "; ", a table cell, a sentence end, a comma before the next code span
 # (a list of evidences: `A.java:1 — …`, `B.java:2 — …`).
-_SEPARATORS = re.compile(r" · |;\s|\|(?!\|)|(?<=[.!?])\s+(?=[A-Z¿¡`(])|,\s+(?=`)|\s→\s")
+_SEPARATORS = re.compile(r" · |;\s|\|(?!\|)|(?<=[.!?])\s+(?=[A-Z¿¡`(])|,\s+(?=`)|\s→\s|"
+                         r",?\s+(?:y|and|e)\s+(?=`?:\d)|,\s*(?=`?:\d)")
 
 
 def _no_strings(text: str) -> str:
@@ -711,7 +747,7 @@ def _glued_calls(line: str, mo, code: list, a: int, b: int) -> set[str]:
     if own:
         pieces.append(line[own[0]:mo.start()] + line[mo.end():own[1]])
     after = re.split(r";|\s·\s|\||\s→\s", line[mo.end():b])[0]
-    after = re.split(r",\s*:\d", after)[0]
+    after = re.split(r"(?:,|\s(?:y|and|e))\s*`?:\d", after)[0]
     if re.match(r"`?\s*(?:—|–|-|:|\()", after):
         pieces.append(after[:160])
     before = line[a:mo.start()]
@@ -930,6 +966,16 @@ def render(problems: list[Problem], checked: int, nfiles: int, offset: int, limi
     note = (f"\n({archived} files under archive folders ({', '.join(sorted(ARCHIVE_DIRS))}) "
             "left out: name them in files to check them)") if archived else ""
     # The same mention with the same problem in one file: once, with its lines.
+    # One row per mention on a line: the message with a hint (is at / called at) first.
+    best: dict[tuple, Problem] = {}
+    for p in problems:
+        k = (p.path, p.line, p.mention)
+        rank = 2 if " is at " in p.what else 1 if "called at" in p.what else 0
+        old = best.get(k)
+        if old is None or rank > (2 if " is at " in old.what else 1 if "called at" in
+                                  old.what else 0):
+            best[k] = p
+    problems = [p for p in problems if best[(p.path, p.line, p.mention)] is p]
     merged: dict[tuple, list[int]] = {}
     first: dict[tuple, Problem] = {}
     for p in problems:
