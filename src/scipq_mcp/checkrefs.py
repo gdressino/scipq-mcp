@@ -605,64 +605,55 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     # name glued to the path first: `name (File:N)`, `File:N — name`, `File:N (name)`):
     # Type#member mentions and method names in its code spans that the files' types declare.
     # The line number must fall in one of them, or be a call of it.
+    oa, ob = _segment(line, mo.start(), mo.end(), parens=False)
     a, b = _segment(line, mo.start(), mo.end())
     if line.lstrip().startswith("|") and not any(a <= at < b for _x, at in named_here) and \
             not re.search(r"[a-z_$][\w$]*\s*\(", line[a:b].replace(mo.group(0), "")):
-        a, b = 0, len(line)     # a table cell with only the path: the row names the member
-    glued = _glued_names(line[a:b], mo.group(0))
-    near = [(x, y) for x, y in code if a <= x < b]
-    segment_names = {x for p, q in near for x in
-                     re.findall(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q])}
+        a, b = oa, ob = 0, len(line)    # a table cell with only the path: the row's names
+    glued = _glued_names(line[oa:ob], mo.group(0))
     constructor = re.search(r"\bconstructor\b", line[a:b], re.I) is not None
+    end_n = int(mo.group(3)) if mo.group(3) else n
     spans_here = []
     for src in fits:
-        def named(names: set[str] | None) -> list[str]:
-            out_ = [x for x, at in named_here if a <= at < b and
+        def named(names: set[str] | None, lo_: int, hi_: int) -> list[str]:
+            seg_names = {x for p, q in code if lo_ <= p < hi_ for x in
+                         re.findall(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q])}
+            out_ = [x for x, at in named_here if lo_ <= at < hi_ and
                     m.where.get(x, ("",))[0] == src and (names is None or S.name_of(x) in names)]
             for t in m.types_in.get(src, []):
-                for name in (names if names is not None else segment_names):
+                for name in (names if names is not None else seg_names):
                     out_ += [x for x in m.member_syms.get((t, name), [])
                              if S.is_method(x) or S.kind_of(x) == "term"]
                 if constructor:
                     out_ += m.member_syms.get((t, S.name_of(t)), [])
-            return out_
+            return [x for x in out_ if x not in m.generated]
         lines = text_cache.get(src) or []
         if not lines:
             _with_header(root, src, 1, text_cache)
             lines = text_cache.get(src) or []
-        # The name glued to the path when it is one of the file's members, else the names
-        # of the mention's part of the line; generated members (Lombok's) only when no
-        # written member has the name.
-        syms = (named(glued) if glued else []) or named(None)
-        syms = [x for x in syms if x not in m.generated]
-        # The doc shows a call (`x = foo(…)`, `foo(…).bar`, "hace foo(…)"): the line must
-        # still call it.
-        seg_text = line[a:b]
-        # Only in code spans, and shown as a call on something: obj.foo(…), x = foo(…).
-        shown_calls = {g.group(2) for p_, q_ in near for g in re.finditer(
-            r"(?:([a-z_$][\w$]*|\))\s*\.|=\s*|\breturn\s+)([a-z_$][\w$]*)\s*\(",
-            line[p_:q_]) if g.group(2) in m.by_member}
-        for name in sorted({S.name_of(x) for x in syms if S.is_method(x)} | shown_calls):
-            q = re.escape(name)
-            # x = foo(…), return foo(…), "hace foo(…)", obj.foo(…) (not Type.foo(…): a
-            # mention of the member), foo(…).bar
-            shown = re.search(r"(?:=|\breturn|\bhace|\bllama|\bcalls?)\s*`?" + q + r"\s*\(|"
-                              + q + r"\s*\([^)]*\)\s*[.\[]", seg_text) or any(
-                not r_.group(1)[:1].isupper() for r_ in re.finditer(
-                    r"([\w$]+|\))\s*\.\s*" + q + r"\s*\(", seg_text))
-            if not shown:
+        # The member the mention is about: the name glued to the path, else the names of its
+        # parentheses, else of its sentence, cell or · item.
+        syms = (named(glued, oa, ob) if glued else []) or named(None, a, b)
+        if not syms:
+            # No member named: a call glued to the path (`File:N — foo(…)`, `foo(…)
+            # (File:N)`, the next table cell) must still be made there (±2).
+            calls_shown = _glued_calls(line, mo, code, oa, ob)
+            if not calls_shown:
                 continue
-            end_n = int(mo.group(3)) if mo.group(3) else n
-            calls = [k + 1 for k, c in enumerate(lines)
-                     if re.search(r"(?<![\w$])" + re.escape(name) + r"\s*\(", c)
-                     and not re.match(r"\s*(//|\*|/\*)", c)
-                     and not re.search(r"\b(?:public|protected|private|static|void)\b[^=;]*"
-                                       + re.escape(name) + r"\s*\(", c)]
-            if any(n - 1 <= k <= end_n + 1 for k in calls):
-                return
+            found: dict[str, list[int]] = {}
+            for name in calls_shown:
+                rx = (r"\bnew\s+" + re.escape(name[4:]) + r"\s*[(<]") if name.startswith("new ") \
+                    else r"(?<![\w$])" + re.escape(name) + r"\s*\("
+                found[name] = [k + 1 for k, c in enumerate(lines)
+                               if re.search(rx, _no_strings(c)) and
+                               not re.match(r"\s*(//|\*|/\*)", c)]
+            if any(n - 2 <= k <= end_n + 2 for ks in found.values() for k in ks):
+                continue
+            name = sorted(calls_shown)[0]
+            ks = found[name]
             add(mo.group(0), f"line {n} no longer calls {name}" + (
-                f" (calls at {', '.join(map(str, calls[:4]))}{' …' if len(calls) > 4 else ''})"
-                if calls else " (nothing in this file calls it now)"), "line-moved")
+                f" (calls at {', '.join(map(str, ks[:4]))}{' …' if len(ks) > 4 else ''})"
+                if ks else " (nothing in this file calls it now)"), "line-moved")
             return
         # A single line that calls the name (in code, not a comment) is the call the doc
         # points at; a range is a block of code, which must fall in the member.
@@ -679,19 +670,59 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
             lo = min((w[2] + 1) if w[2] is not None else w[1], w[1])
             hi = (w[3] + 1) if w[3] is not None else w[1]
             spans_here.append((sym, _with_header(root, src, lo, text_cache), hi))
-    end_n = int(mo.group(3)) if mo.group(3) else n      # a range N-M overlaps a member
     if spans_here and not any(n <= hi + 1 and end_n >= lo - 2 for _s, lo, hi in spans_here):
         sym, lo, hi = min(spans_here, key=lambda x: min(abs(n - x[1]), abs(n - x[2])))
         add(mo.group(0), f"line {n} is not in {S.short(sym)} any more (now lines {lo}–{hi})",
             "line-moved")
 
 
-_SEPARATORS = re.compile(r" · |;\s|\|(?!\|)|(?<=[.!?])\s+(?=[A-Z¿¡`(])")
+# Between items: " · ", "; ", a table cell, a sentence end, a comma before the next code span
+# (a list of evidences: `A.java:1 — …`, `B.java:2 — …`).
+_SEPARATORS = re.compile(r" · |;\s|\|(?!\|)|(?<=[.!?])\s+(?=[A-Z¿¡`(])|,\s+(?=`)")
 
 
-def _segment(line: str, start: int, end: int) -> tuple[int, int]:
+def _no_strings(text: str) -> str:
+    return re.sub(r'"(?:[^"\\]|\\.)*"', '""', text)
+
+
+def _glued_calls(line: str, mo, code: list, a: int, b: int) -> set[str]:
+    """Calls written right next to a path: in its own code span, after `File:N —` or
+    `File:N (`, before ` (File:N)`, or in the next table cell when that is code; not
+    across ";", " · ", nor into the next mention's parentheses. `new X(…)` is "new X"."""
+    pieces = []
+    own = next(((p, q) for p, q in code if p <= mo.start() < q), None)
+    if own:
+        pieces.append(line[own[0]:mo.start()] + line[mo.end():own[1]])
+    after = re.split(r";|\s·\s|\|", line[mo.end():b])[0]
+    after = re.split(r",\s*:\d", after)[0]
+    if re.match(r"`?\s*(?:—|–|→|->|-|:|\()", after):
+        pieces.append(after[:160])
+    before = line[a:mo.start()]
+    bm = re.search(r"(`[^`]+`)\s*\(\s*`?$", before)
+    if bm:
+        pieces.append(bm.group(1))
+    if line.lstrip().startswith("|"):
+        cells = line.split("|")
+        pos = 0
+        for k, cell in enumerate(cells):
+            if pos <= mo.start() < pos + len(cell) + 1:
+                if cell.replace("`", "").strip() == mo.group(0).replace("`", "").strip() and \
+                        k + 1 < len(cells) and "`" in cells[k + 1]:
+                    pieces += re.findall(r"`([^`]+)`", cells[k + 1])
+                break
+            pos += len(cell) + 1
+    out = set()
+    for piece in pieces:
+        piece = _no_strings(piece)
+        for g in re.finditer(r"\bnew\s+([A-Z][\w$]*)\s*[(<]|(?<![\w$])([a-z_$][\w$]*)\s*\(",
+                             piece):
+            out.add(f"new {g.group(1)}" if g.group(1) else g.group(2))
+    return out - {"if", "for", "while", "switch", "catch", "return", "synchronized", "new"}
+
+
+def _segment(line: str, start: int, end: int, parens: bool = True) -> tuple[int, int]:
     """The part of a doc line a mention belongs to: between separators (" · ", "; ", a table
-    cell's "|", a sentence end)."""
+    cell's "|", a sentence end), and inside its parentheses (with parens)."""
     a, b = 0, len(line)
     for sep in _SEPARATORS.finditer(line):
         if sep.end() <= start:
@@ -699,6 +730,8 @@ def _segment(line: str, start: int, end: int) -> tuple[int, int]:
         elif sep.start() >= end:
             b = sep.start()
             break
+    if not parens:
+        return a, b
     # Inside parentheses (… (File:N → `name`) …): what they hold.
     depth, open_at = 0, -1
     for k in range(start - 1, a - 1, -1):
@@ -822,7 +855,10 @@ def _check_member(m: Model, mention: str, written_type: str, name: str, params,
             + (_closest(name, m.names_in(t)) or m.elsewhere(name, t)), "no-member")
         return [t]
     syms = [x for c in cands for x in m.member_syms.get((c, name), [])]
-    if params is not None and params.strip() and not call:
+    typed = params is not None and bool(params.strip()) and all(
+        re.fullmatch(r"(?:[A-Z][\w$.<>\[\]]+|boolean|int|long|short|byte|char|float|double)"
+                     r"(?:\.\.\.|\[\])?", x.strip()) for x in params.split(","))
+    if params is not None and params.strip() and (not call or typed):
         want = _params(params)
         from .refactor import _param_types
         have = [_param_types(s) for c in cands for s in (m.member(c, name)[0] or [])
