@@ -1212,6 +1212,33 @@ class Service:
                                                                       suppressed, weak), set()
         return body
 
+    def _b_concepts(self, query: str, kind: str = "", scope: str = "",
+                    include_tests: bool = False, offset: int = 0, limit: int = 20,
+                    include_generated: bool = False) -> Body:
+        def body(nav: Navigator):
+            if not query.strip():
+                raise QueryError("query: words describing what you look for")
+            with self._graph(nav) as (g, stats):
+                st = self.settings(nav.ws.root, g)
+                rows = g.concepts(query, "" if kind == "any" else kind, scope, include_tests,
+                                  offset + limit + 1, include_generated, st.concepts_exclude)
+            terms = G.concept_terms(query)
+            page_rows = rows[offset:offset + limit]
+            # The first sentence of each one's javadoc, from its shard (one search for all).
+            docs = {}
+            try:
+                for sym, d in nav._definitions_of({r[0] for r in page_rows}).items():
+                    text = " ".join(x.strip() for x in (d.info.documentation if d.info else [])
+                                    if x.strip())
+                    if text:
+                        docs[sym] = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0][:160]
+            except (QueryError, OSError):
+                pass
+            return render.index_note(stats) + render.concepts(
+                query, terms, page_rows, docs, offset, limit, len(rows) > offset + limit), \
+                {r[2][0] for r in page_rows}
+        return body
+
     def _b_census(self, scope: str = "", limit: int = 50, category: str = "annotations",
                   offset: int = 0) -> Body:
         def body(nav: Navigator):
@@ -1309,6 +1336,12 @@ class Service:
                 api_only: bool = True, limit: int = 50, all_worktrees: bool = False) -> str:
         return self._run(project_root, self._b_compare(other_root, scope, api_only, limit,
                                                        all_worktrees), foot_first=True)
+
+    def concepts(self, query: str, project_root: str | None = None, kind: str = "",
+                 scope: str = "", include_tests: bool = False, offset: int = 0,
+                 limit: int = 20, include_generated: bool = False) -> str:
+        return self._run(project_root, self._b_concepts(query, kind, scope, include_tests,
+                                                        offset, limit, include_generated))
 
     def refactor(self, plan=None, project_root: str | None = None, dry_run: bool = False,
                  plan_id: str = "", verify: bool = False) -> str:
@@ -1410,7 +1443,7 @@ class Service:
         "typed": "_b_typed", "family": "_b_family", "overloads": "_b_overloads",
         "tests": "_b_tests", "index_status": "_b_index_status",
         "impact": "_b_impact", "path": "_b_path", "changed": "_b_changed", "deps": "_b_deps",
-        "dead_code": "_b_dead_code", "census": "_b_census", "cache_status": "_b_cache_status",
+        "dead_code": "_b_dead_code", "census": "_b_census", "concepts": "_b_concepts", "cache_status": "_b_cache_status",
         "context": "_b_context", "compare": "_b_compare", "steps": "_b_steps",
     }
 

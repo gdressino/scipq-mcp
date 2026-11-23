@@ -1260,6 +1260,30 @@ def step_text(query: str, found) -> str:
                                for x in found])
 
 
+def concepts(query: str, terms: list[str], rows, docs: dict, offset: int, limit: int,
+             more: bool) -> str:
+    if not terms:
+        return f"no words to search in {query!r}"
+    if not rows:
+        return (f"no definition mentions {', '.join(terms)} (in names, owners, annotations, "
+                "signatures or javadoc; tests left out unless include_tests)")
+    lines = [f"definitions about {' '.join(terms)} (best first: name, annotations and call "
+             f"labels, owner, signature, javadoc; words also as prefixes and singular; tests and "
+             f"generated files left out unless asked):"]
+    for k, (sym, score, d) in enumerate(rows, offset + 1):
+        src, line, _mod, test, sig = d
+        kind = {"term": "field"}.get(S.kind_of(sym), S.kind_of(sym) or "symbol")
+        lines.append(f"{k:>3}. {S.short(sym)}  {kind}  {src}:{line}"
+                     + ("  [test]" if test else ""))
+        if sig:
+            lines.append(f"       {' '.join(sig.split())[:150]}")
+        if docs.get(sym):
+            lines.append(f"       — {docs[sym]}")
+    if more:
+        lines.append(f"next offset {offset + limit}")
+    return "\n".join(lines)
+
+
 def cucumber_affected(run, reached: int) -> str:
     lines = _run_block(run)
     if not lines:

@@ -58,6 +58,9 @@ def _query_parser(sub) -> None:
     add("def", "symbol")
     add("context", "symbol", budget={"type": int, "default": 4000})
     add("steps", **paging, query={"default": ""}, check={"action": "store_true"})
+    add("concepts", "query", offset={"type": int, "default": 0},
+        limit={"type": int, "default": 20}, kind={"default": ""}, scope={"default": ""},
+        tests={"action": "store_true"})
     add("refactor", plan={"default": "", "help": "the plan: JSON text, or @file.json"},
         dry_run={"action": "store_true"}, plan_id={"default": ""},
         verify={"action": "store_true"})
@@ -114,6 +117,9 @@ def _run_query(a) -> str:
                               by_name=a.by_name, by_name_globs=a.globs, scope=a.scope)
     if t == "def":
         return svc.definition(a.symbol)
+    if t == "concepts":
+        return svc.concepts(a.query, kind=a.kind, scope=a.scope, include_tests=a.tests,
+                            offset=a.offset, limit=a.limit)
     if t == "refactor":
         plan = a.plan
         if plan.startswith("@"):

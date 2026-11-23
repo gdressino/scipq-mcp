@@ -459,6 +459,28 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
                                  limit)
 
     @tool
+    def concepts(
+        query: Annotated[str, Field(description="Words for what you look for, in the code's "
+                                                "language: 'alta de cliente', 'retry "
+                                                "payment', 'audit log'")],
+        project_root: ProjectRoot = "",
+        kind: Annotated[Literal["any", "type", "method", "field"], Field(
+            description="Only this kind of definition")] = "any",
+        scope: Annotated[str, Field(description="Package (prefix or glob), module or source "
+                                                "path glob")] = "",
+        include_tests: Annotated[bool, Field(description="Also test code")] = False,
+        include_generated: Annotated[bool, Field(
+            description="Also files whose header says they are generated")] = False,
+        offset: Offset = 0, limit: Limit(20, 200) = 20,
+    ) -> str:
+        """Definitions about something, when you do not know their names: words of their
+        names (camelCase split), owners, annotation texts (columns, paths, step texts…),
+        signatures and javadoc, ranked; accents ignored, words also as prefixes. Word
+        matching, not meaning: try the project's own vocabulary and synonyms."""
+        return service.concepts(query, project_root, kind, scope, include_tests, offset, limit,
+                                include_generated)
+
+    @tool
     def census(project_root: ProjectRoot = "",
                category: Annotated[Literal["annotations", "entities"], Field(
                    description="annotations: which are used and how much; entities: persistent "

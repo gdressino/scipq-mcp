@@ -29,7 +29,7 @@ from .cachedir import default_base, entry_dir
 from .scip import DEFINITION, KIND_NAMES, read_documents
 from .workspace import SUFFIX, Workspace
 
-SCHEMA_VERSION = "5"
+SCHEMA_VERSION = "8"
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
@@ -63,10 +63,23 @@ CREATE TABLE IF NOT EXISTS annotations (
     annotation_id INTEGER NOT NULL, def_id INTEGER NOT NULL, shard_id INTEGER NOT NULL,
     line INTEGER NOT NULL,
     PRIMARY KEY (annotation_id, def_id, shard_id, line)) WITHOUT ROWID;
+-- Concept search (v3 item 4): one row of words per definition, in the FTS5 table `concepts`
+-- (columns name, owner, ann, sig, doc); this maps its rowids back.
+CREATE TABLE IF NOT EXISTS concept_map (
+    rowid INTEGER PRIMARY KEY, symbol_id INTEGER NOT NULL, shard_id INTEGER NOT NULL,
+    generated INTEGER NOT NULL DEFAULT 0);    -- the file says it is generated (its header)
 """
+
+# Contentless with deletes (SQLite 3.43+) keeps only the inverted index; older SQLite stores
+# the words too.
+_FTS_OPTIONS = ("content='', contentless_delete=1, " if sqlite3.sqlite_version_info >= (3, 43)
+                else "")
+CONCEPTS = (f"CREATE VIRTUAL TABLE IF NOT EXISTS concepts USING fts5(name, owner, ann, sig, doc, "
+            f"calls, {_FTS_OPTIONS}tokenize='unicode61 remove_diacritics 2');")
 
 INDEXES = """
 CREATE INDEX IF NOT EXISTS shards_source ON shards(source);
+CREATE INDEX IF NOT EXISTS concept_map_shard ON concept_map(shard_id);
 CREATE INDEX IF NOT EXISTS defs_shard ON defs(shard_id);
 CREATE INDEX IF NOT EXISTS refs_caller ON refs(caller_id, symbol_id);
 CREATE INDEX IF NOT EXISTS refs_shard ON refs(shard_id);
@@ -247,6 +260,7 @@ def extract(path: str, source: str, root: str) -> dict:
         refs = [o for o in occs if not o.roles & DEFINITION and o.symbol
                 and not S.is_local(o.symbol)]
         refs.sort(key=lambda o: (o.range.start_line, o.range.start_char))
+        call_texts: dict[str, list[str]] = {}
         stack: list[tuple] = []
         ci = 0
         agg: dict[tuple[str, str], list[str]] = {}
@@ -277,6 +291,13 @@ def extract(path: str, source: str, root: str) -> dict:
             if o.symbol.endswith("#"):
                 ls = lines()
                 text = ls[r.start_line] if r.start_line < len(ls) else ""
+                if re.match(r"\s*\.\s*class\b", text[r.end_char:]):
+                    said = _call_strings(text, r.start_char)
+                    if said:
+                        call_texts.setdefault(o.symbol, []).append(said)
+            if o.symbol.endswith("#"):
+                ls = lines()
+                text = ls[r.start_line] if r.start_line < len(ls) else ""
                 if _is_annotation(text, r.start_char):
                     target = None
                     for c in reversed(stack):
@@ -286,6 +307,129 @@ def extract(path: str, source: str, root: str) -> dict:
                     if target is not None and not target[5]:
                         out["anns"].append((o.symbol, target[4], r.start_line))
         out["refs"].extend((s, c, ",".join(v)) for (s, c), v in agg.items())
+        out.setdefault("concepts", []).extend(
+            _concept_rows(defs_by_symbol, infos, out["anns"], lines))
+        # Labels given to a type where it is registered: new MenuEntry("label", X.class…).
+        for sym, said in call_texts.items():
+            out["concepts"].append((sym, "", "", "", "", "", " ".join(said)[:2000]))
+    return out
+
+
+def _call_strings(line: str, col: int) -> str:
+    """The string literals of the call around `col` on this line (the argument list that
+    holds X.class), as words; "" when there are none."""
+    depth, start = 0, -1
+    for k in range(col - 1, -1, -1):
+        c = line[k]
+        if c == ")":
+            depth += 1
+        elif c == "(":
+            if depth == 0:
+                start = k
+                break
+            depth -= 1
+    if start < 0:
+        return ""
+    depth, end = 0, len(line)
+    for k in range(start, len(line)):
+        c = line[k]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                end = k
+                break
+    found = [s for s in _STRING.findall(line[start:end]) if re.search(r"[^\W\d_]", s)]
+    return " ".join(found)[:500]
+
+
+# --- concept words ---------------------------------------------------------------------------
+
+_HUMP = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
+_JAVA_WORDS = set("""public protected private static final abstract synchronized native
+transient volatile strictfp default void boolean byte char short int long float double class
+interface enum record extends implements throws new this super return null true false""".split())
+_STRING = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
+
+
+def words_of(identifier: str) -> str:
+    """An identifier as words: getFechaCambioEstado -> "get fecha cambio estado"; a name that
+    does not split stays whole (QOrder -> "qorder order")."""
+    parts = [p.lower() for p in _HUMP.findall(identifier.replace("$", " ")) if len(p) > 1
+             or p.isdigit()]
+    whole = identifier.lower()
+    # The whole name only when it does not split: a prefix search must not count
+    # nameAlias twice (its word and the compound) against a field called just name.
+    return " ".join(parts) if len(parts) > 1 else (whole if not parts or parts == [whole]
+                                                   else f"{whole} {parts[0]}")
+
+
+def _identifier_words(text: str) -> str:
+    out = []
+    for ident in re.findall(r"[A-Za-z_$][\w$]*", text):
+        if ident not in _JAVA_WORDS:
+            out.append(words_of(ident))
+    return " ".join(out)
+
+
+def _annotation_strings(lines: list[str], line: int, name: str) -> str:
+    """The annotation's name and the string literals of its arguments (any attribute)."""
+    chunk = "\n".join(lines[line:line + 15])
+    m = re.search(r"@\s*(?:[\w$]+\s*\.\s*)*" + re.escape(name) + r"\b\s*(\()?", chunk)
+    if not m:
+        return ""
+    out = [words_of(name)]
+    if m.group(1):
+        depth, end, k = 1, len(chunk), m.end()
+        in_str = False
+        while k < len(chunk):
+            c = chunk[k]
+            if in_str:
+                if c == "\\":
+                    k += 1
+                elif c == '"':
+                    in_str = False
+            elif c == '"':
+                in_str = True
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    end = k
+                    break
+            k += 1
+        for s in _STRING.findall(chunk[m.end():end])[:20]:
+            out.append(s[:300])
+    return " ".join(out)
+
+
+def _concept_rows(defs_by_symbol: dict, infos: dict, anns: list, lines) -> list[tuple]:
+    """(symbol, name, owner, annotation words, signature words, javadoc) per definition, for
+    concept search. Generated members (Lombok accessors) are left out: their field is there."""
+    by_def: dict[str, list[tuple[str, int]]] = {}
+    for ann, target, line in anns:
+        by_def.setdefault(target, []).append((ann, line))
+    out = []
+    for sym, row in defs_by_symbol.items():
+        flags, sig = row[6], row[8] or ""
+        if flags & FLAG_GENERATED or S.kind_of(sym) == "constructor":
+            continue
+        name = S.name_of(sym)
+        owner_parts = [d.name for d in S.parse(sym)[:-1] if d.suffix in (S.TYPE, S.NAMESPACE)]
+        owner = " ".join(words_of(p) for p in owner_parts[-3:])
+        ann_words = []
+        if by_def.get(sym):
+            ls = lines()
+            for ann, line in by_def[sym][:12]:
+                ann_words.append(_annotation_strings(ls, line, S.name_of(ann)))
+        info = infos.get(sym)
+        doc = ""
+        if info is not None and info.documentation:
+            doc = re.sub(r"<[^>]+>|\{@\w+\s*|[{}]", " ", " ".join(info.documentation))[:4000]
+        out.append((sym, words_of(name), owner, " ".join(ann_words),
+                    _identifier_words(sig.split("{")[0])[:2000], doc, ""))
     return out
 
 
@@ -320,7 +464,17 @@ def _extract_job(args):
     sid, path, source, root, shard_mtime_ns = args
     rows = extract(path, source, root)
     rows["src_sha1"] = source_sha1(root, source, shard_mtime_ns)
+    rows["generated_file"] = _generated_file(root, source)
     return sid, rows
+
+
+def _generated_file(root: str, source: str) -> bool:
+    from .graph import _GENERATED_HEADER, _file_header
+    try:
+        with open(os.path.join(root, source), "rb") as fh:
+            return _GENERATED_HEADER.search(_file_header(fh.read(1500))) is not None
+    except OSError:
+        return False
 
 
 def source_sha1(root: str, source: str, shard_mtime_ns: int | None = None) -> str | None:
@@ -418,6 +572,7 @@ class Index:
         con.execute("PRAGMA busy_timeout=30000")
         con.execute("PRAGMA temp_store=MEMORY")
         con.executescript(TABLES)
+        con.executescript(CONCEPTS)
         meta = dict(con.execute("SELECT key, value FROM meta"))
         real = os.path.realpath(self.ws.root)
         if meta and (meta.get("schema_version") != SCHEMA_VERSION
@@ -663,6 +818,9 @@ class Index:
     def _delete_shard_rows(con: sqlite3.Connection, sid: int) -> None:
         for table in ("defs", "refs", "rels", "annotations"):
             con.execute(f"DELETE FROM {table} WHERE shard_id = ?", (sid,))
+        con.execute("DELETE FROM concepts WHERE rowid IN (SELECT rowid FROM concept_map "
+                    "WHERE shard_id = ?)", (sid,))
+        con.execute("DELETE FROM concept_map WHERE shard_id = ?", (sid,))
 
     @staticmethod
     def _ids(con: sqlite3.Connection, ids: dict[str, int], syms: set[str]) -> None:
@@ -705,6 +863,14 @@ class Index:
                         [(ids[t], ids[s], k, sid) for t, s, k in rows["rels"]])
         con.executemany("INSERT OR IGNORE INTO annotations VALUES (?,?,?,?)",
                         [(ids[a], ids[d], sid, line) for a, d, line in rows["anns"]])
+        gen = int(bool(rows.get("generated_file")))
+        for sym, *words in rows.get("concepts", []):
+            if sym not in ids:
+                continue
+            rid = con.execute("INSERT INTO concept_map (symbol_id, shard_id, generated) "
+                              "VALUES (?, ?, ?)", (ids[sym], sid, gen)).lastrowid
+            con.execute("INSERT INTO concepts (rowid, name, owner, ann, sig, doc, calls) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)", (rid, *words))
 
     def _prune_external(self, con: sqlite3.Connection, stats: UpdateStats) -> None:
         """index.external=methods|none: prune references to symbols the project does not

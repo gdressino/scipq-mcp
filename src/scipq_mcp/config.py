@@ -102,6 +102,7 @@ class Settings:
     # Background they load: its steps run where the including step does.
     cucumber_include_steps: list[str] = field(default_factory=list)
     concept_attributes: list[str] = field(default_factory=list)
+    concepts_exclude: list[str] = field(default_factory=list)   # path globs (vendored code)
     tests_filter: str = ""               # template: {module} {task} {fqcn} {simple} {classes}
     tests_filter_from: str = ""          # where it came from
     files: list[str] = field(default_factory=list)   # configuration applied, lowest first
@@ -252,6 +253,10 @@ def sanitize_repo_config(data: dict) -> tuple[dict, list[str]]:
             clean = _capped(value, key, warnings)
             if clean is not None:
                 out[key] = clean
+    cc = out.get("concepts")
+    if isinstance(cc, dict) and "exclude" in cc:
+        cc["exclude"] = [g for g in _as_list(cc["exclude"], "concepts.exclude", warnings)
+                         if _relative_glob(g, "concepts.exclude", warnings)]
     dc = out.get("dead_code")
     if isinstance(dc, dict) and "exclude" in dc:
         dc["exclude"] = [g for g in _as_list(dc["exclude"], "dead_code.exclude", warnings)
@@ -471,6 +476,7 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
     s.dead_code_exclude += [g for g in strings(data.get("dead_code", {}).get("exclude", []))
                             if g]
     s.concept_attributes += list(data.get("concepts", {}).get("attributes", []))
+    s.concepts_exclude += strings(data.get("concepts", {}).get("exclude", []))
     cu = data.get("cucumber", {})
     if isinstance(cu.get("run"), str) and cu["run"]:
         s.cucumber_run = cu["run"]

@@ -493,3 +493,17 @@ def test_a_file_written_again_unchanged_is_not_stale(sample_copy, tmp_path, monk
     open(src, "w", encoding="utf-8").write(text)
     assert other.workspace(None).freshness().stale == [
         "core/src/main/java/com/example/model/Entity.java"]
+
+
+def test_concepts(sample_copy, tmp_path):
+    from scipq_mcp.service import Service
+    svc = Service(sample_copy, cache_dir=str(tmp_path / "cache"))
+    out = svc.concepts("lifecycle states")      # javadoc words; a plural finds the singular
+    assert out.index("Entity#setState()") < out.index("Entity#getState()")
+    assert "— Changes the lifecycle state." in out
+    assert "Store#load()" in svc.concepts("deprecated")                 # its annotation
+    assert "Session#find()" in svc.concepts("session find", kind="method")
+    assert "Session#find()" not in svc.concepts("session find", kind="type")
+    assert "ServiceTest" not in svc.concepts("service test") and \
+        "ServiceTest" in svc.concepts("service test", include_tests=True)
+    assert "no words to search" in svc.concepts("de la")
