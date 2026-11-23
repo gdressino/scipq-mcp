@@ -15,8 +15,8 @@ version and date when releasing.
   and synonyms as alternatives (`pago|pagar|payment`), and a word alone is reduced to a
   light stem (plurals and common Spanish and English endings off). Ranked by how many of the
   query's words a definition holds and how surely (its name, then annotations and labels,
-  then signature or javadoc), then bm25, types before methods before fields, constants last,
-  words in the owner or package as a bonus; tests, files whose header says they are
+  then signature or javadoc), then bm25, types before methods before fields, constants and
+  private members last, words in the owner or package as a bonus; tests, files whose header says they are
   generated and `[concepts] exclude` paths are left out unless asked.
 - `doctor()`: a checklist of what can make the index wrong or the tools weak: the plugin's
   setup (which init scripts apply to this project, and why not: a PROJECTS list, a root

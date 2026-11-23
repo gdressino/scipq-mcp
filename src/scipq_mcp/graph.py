@@ -217,8 +217,18 @@ class Graph:
                       0.7 if re.fullmatch(r"[A-Z0-9_$]+", S.name_of(sym) or "") else 1.0)
             scored.append((score, sid, sym))
         scored.sort(key=lambda x: (-x[0], x[2]))
+        # Private members are implementation details: behind the types and the API that
+        # match as well (the leading ones only; the rest keep their order).
+        head_n = max(600, 4 * limit)
+        defs: dict[int, tuple] = self.definitions([sid for _s, sid, _y in scored[:head_n]])
+        head = []
+        for score, sid, sym in scored[:head_n]:
+            sig = (defs.get(sid) or ("", 0, "", 0, ""))[4] or ""
+            sig = re.sub(r"@[\w$.]+(\((?:[^()]|\([^()]*\))*\))?", " ", sig).split("(", 1)[0]
+            head.append((score * (0.6 if re.search(r"\bprivate\b", sig) else 1.0), sid, sym))
+        head.sort(key=lambda x: (-x[0], x[2]))
+        scored = head + scored[head_n:]
         out = []
-        defs: dict[int, tuple] = {}
         for i in range(0, len(scored), 400):
             if len(out) >= limit:
                 break
