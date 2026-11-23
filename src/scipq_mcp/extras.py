@@ -234,11 +234,15 @@ _ANNOTATION_BEFORE = re.compile(r"@\s*(?:[A-Za-z_$][\w$]*\s*\.\s*)*$")
 def is_annotation_use(line: str, col: int) -> bool:
     """Whether the type name at `col` is written as an annotation: `@Name` or `@pkg.Name`, not
     inside a comment (javadoc `{@link Name}` and `{@code @Name}` do not count)."""
+    from .javasrc import mask
     before = line[:col]
     if not _ANNOTATION_BEFORE.search(before):
         return False
-    stripped = before.lstrip()
-    if stripped.startswith(("*", "/*", "//")) or "//" in before or "/*" in before:
+    if before.lstrip().startswith("*"):
+        return False  # a javadoc or block comment continuation line
+    # Comments and string contents blanked: `@Url("https://x") @Inject` still counts, and
+    # an `@` inside `// …`, `/* … */` or a string does not.
+    if not _ANNOTATION_BEFORE.search(mask(before)):
         return False
     return not re.search(r"\{\s*@(code|link|linkplain|literal)\b[^}]*$", before)
 

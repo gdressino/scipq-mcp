@@ -12,7 +12,8 @@ import re
 from dataclasses import dataclass
 
 _TYPE_DECL = re.compile(r"\b(class|interface|enum|record|@\s*interface)\s+([A-Za-z_$][\w$]*)")
-_ANNOTATION = re.compile(r"@\s*[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?")
+# An annotation use (`@interface` declares an annotation type: not one).
+_ANNOTATION = re.compile(r"@\s*(?!interface\b)[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?")
 _IDENT_BEFORE_PAREN = re.compile(r"([A-Za-z_$][\w$]*)\s*\(")
 _CONTROL = {"if", "for", "while", "switch", "catch", "synchronized", "return", "new", "else",
             "do", "try", "throw"}
@@ -64,6 +65,11 @@ def _mask_match(m: re.Match) -> str:
 def mask(text: str) -> str:
     """Comments and literal contents replaced by spaces; offsets and newlines preserved."""
     return _LITERALS.sub(_mask_match, text)
+
+
+def strip_comments(text: str) -> str:
+    """Comments replaced by spaces (offsets and newlines preserved); literals kept."""
+    return _LITERALS.sub(lambda m: _blank(m.group()) if m.group()[0] == "/" else m.group(), text)
 
 
 def _mask_slow(text: str) -> str:
@@ -147,6 +153,9 @@ class JavaSource:
             for m in _TYPE_DECL.finditer(self.masked, lo, hi):
                 if m.group(2) != name:
                     continue
+                between = self.masked[lo:m.start()]
+                if between.count("{") != between.count("}"):
+                    continue  # declared deeper (e.g. Builder.OfInt when looking for OfInt)
                 brace = self.masked.find("{", m.end(), hi)
                 if brace < 0:
                     continue
@@ -170,10 +179,25 @@ class JavaSource:
         m, t = self.masked, self.text
         out: list[Member] = []
         i = body_open + 1
+        if is_enum:
+            # The constants come first, up to the first `;` outside parentheses and braces
+            # (constants may have arguments and bodies), or to the end of the body.
+            k, depth = i, 0
+            while k < body_close:
+                ch = m[k]
+                if ch in "({":
+                    depth += 1
+                elif ch in ")}":
+                    depth -= 1
+                elif ch == ";" and depth == 0:
+                    break
+                k += 1
+            if m[i:k].strip():
+                out.append(Member("enum constants", "", " ".join(t[i:k].split())[:500],
+                                  self.line_of(_skip_space(m, i)), self.line_of(k), ""))
+            i = k + 1
         seg = i
-        depth = 0
         paren = 0
-        first_segment = True
         while i < body_close:
             ch = m[i]
             if ch == "(":
@@ -182,35 +206,25 @@ class JavaSource:
                 paren -= 1
             elif ch == "{" and paren == 0:
                 header = m[seg:i]
-                if _top_level_equals(header) or (is_enum and first_segment and "," in header):
-                    i = _match_brace(m, i) + 1  # an initializer or enum constant body
+                if _top_level_equals(header):
+                    i = _match_brace(m, i) + 1  # an initializer: `int[] a = {1, 2};`
                     continue
                 end = _match_brace(m, i)
-                mem = self._member(seg, i, end, type_name)
-                if mem:
-                    out.append(mem)
+                out.extend(self._member(seg, i, end, type_name))
                 i = end + 1
                 seg = i
-                first_segment = False
                 continue
             elif ch == ";" and paren == 0:
-                if is_enum and first_segment:
-                    out.append(Member("enum constants", "", " ".join(t[seg:i].split()),
-                                      self.line_of(_skip_space(m, seg)), self.line_of(i), ""))
-                else:
-                    mem = self._member(seg, i, i, type_name)
-                    if mem:
-                        out.append(mem)
+                out.extend(self._member(seg, i, i, type_name))
                 seg = i + 1
-                first_segment = False
             i += 1
         return out
 
-    def _member(self, seg: int, header_end: int, end: int, type_name: str) -> Member | None:
+    def _member(self, seg: int, header_end: int, end: int, type_name: str) -> list[Member]:
         m, t = self.masked, self.text
         start = _skip_space(m, seg)
         if start >= header_end:
-            return None
+            return []
         header_masked = m[start:header_end]
         javadoc = _javadoc(t[seg:start])
         declaration = " ".join(t[start:header_end].split())
@@ -219,12 +233,12 @@ class JavaSource:
         words = bare.split()
         mods = tuple(w for w in words if w in _MODIFIERS)
         if not words or words == ["static"]:
-            return None  # initializer block
+            return []  # initializer block
         td = _TYPE_DECL.search(bare)
         if td and bare.find("(") in (-1,) or (td and td.start() < (bare.find("(") if "(" in bare
                                                                    else len(bare))):
-            return Member("type", td.group(2), declaration, self.line_of(start),
-                          self.line_of(end), javadoc, mods, self.line_of(start + td.start(2)))
+            return [Member("type", td.group(2), declaration, self.line_of(start),
+                           self.line_of(end), javadoc, mods, self.line_of(start + td.start(2)))]
         paren = _top_level_paren(bare)
         if paren >= 0 and _top_level_equals(bare[:paren]):
             paren = -1  # `Type name = new Foo(…)`: a field with an initializer
@@ -232,21 +246,74 @@ class JavaSource:
             names = list(_IDENT_BEFORE_PAREN.finditer(bare[:paren + 1]))
             name = names[-1].group(1) if names else ""
             if not name or name in _CONTROL:
-                return None
+                return []
             kind = "constructor" if name == type_name else "method"
-            return Member(kind, name, declaration, self.line_of(start), self.line_of(end),
-                          javadoc, mods, self.line_of(start + names[-1].start(1)))
-        lhs = _split_top_level_equals(bare)
-        idents = list(re.finditer(r"[A-Za-z_$][\w$]*", lhs))
-        if not idents:
-            return None
-        return Member("field", idents[-1].group(), declaration, self.line_of(start),
-                      self.line_of(end), javadoc, mods, self.line_of(start + idents[-1].start()))
+            return [Member(kind, name, declaration, self.line_of(start), self.line_of(end),
+                           javadoc, mods, self.line_of(start + names[-1].start(1)))]
+        if end > header_end and type_name and words[-1] == type_name:
+            # A record's compact constructor: `public Point { … }`.
+            k = bare.rfind(type_name)
+            return [Member("constructor", type_name, declaration, self.line_of(start),
+                           self.line_of(end), javadoc, mods, self.line_of(start + k))]
+        out = []
+        for name, off in _declarators(bare):  # `int a = 1, b, c[];`: one field each
+            out.append(Member("field", name, declaration, self.line_of(start),
+                              self.line_of(end), javadoc, mods, self.line_of(start + off)))
+        return out
 
 
 _MODIFIERS = {"public", "protected", "private", "static", "final", "abstract", "default",
               "synchronized", "native", "transient", "volatile", "strictfp", "sealed",
               "non-sealed"}
+
+
+_IDENT = re.compile(r"[A-Za-z_$][\w$]*")
+
+
+def _declarators(bare: str) -> list[tuple[str, int]]:
+    """(name, offset) of each variable of a field declaration such as `T a = f(1, 2), b[];`:
+    split at commas outside parentheses, brackets, braces and type arguments. In an
+    initializer, `<` opens type arguments only after a name and before a type (`new X<A, B>()`),
+    so comparisons do not count."""
+    parts: list[tuple[int, int]] = []
+    depth = gdepth = 0
+    start, init = 0, False
+    n = len(bare)
+    for k, ch in enumerate(bare):
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch == "<":
+            if not init:
+                depth += 1
+            else:
+                prev = bare[:k].rstrip()[-1:]
+                nxt = bare[k + 1:].lstrip()[:1]
+                if (prev.isalnum() or prev in "_$.") and (nxt[:1].isupper() or nxt in ("?", ">",
+                                                                                   "@")):
+                    gdepth += 1
+        elif ch == ">":
+            if not init:
+                depth -= 1
+            elif gdepth and bare[k - 1:k] != "-":
+                gdepth -= 1
+        elif ch == "=" and depth == 0 and not init and bare[k + 1:k + 2] != "=" and \
+                bare[k - 1:k] not in ("!", "<", ">", "="):
+            parts.append((start, k))
+            init = True
+        elif ch == "," and depth == 0 and gdepth == 0:
+            if not init:
+                parts.append((start, k))
+            start, init = k + 1, False
+    if not init:
+        parts.append((start, n))
+    out = []
+    for a, b in parts:
+        ids = list(_IDENT.finditer(bare, a, b))
+        if ids:
+            out.append((ids[-1].group(), ids[-1].start()))
+    return out
 
 
 def _skip_space(s: str, i: int) -> int:
@@ -265,18 +332,6 @@ def _top_level_equals(header: str) -> bool:
         elif ch == "=" and depth <= 0:
             return True
     return False
-
-
-def _split_top_level_equals(header: str) -> str:
-    depth = 0
-    for k, ch in enumerate(header):
-        if ch in "(<[":
-            depth += 1
-        elif ch in ")>]":
-            depth -= 1
-        elif ch == "=" and depth <= 0:
-            return header[:k]
-    return header
 
 
 def enum_constant(text: str, name: str) -> tuple[str, str, int] | None:

@@ -418,7 +418,8 @@ def members(type_symbol: str, groups, external: list[str], offset: int, limit: i
 
 def _decl(declaration: str) -> str:
     """A declaration without its annotations, for listings."""
-    out = re.sub(r"@\s*[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?\s*", "", declaration).strip()
+    out = re.sub(r"@\s*(?!interface\b)[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?\s*", "",
+                 declaration).strip()
     return out[:200]
 
 

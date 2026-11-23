@@ -305,3 +305,69 @@ def test_library_cache_removed_while_running(libroot, tmp_path):
     assert ix.find_class("org/acme/ui/Widget") is not None
     shutil.rmtree(cache)
     assert ix.find_class("org/acme/ui/Widget") is not None
+
+
+TRICKY = '''package com.example.lib;
+
+public class Outer {
+    private int left, right = 2, grid[];
+    private final java.util.Map<String, Integer> sizes = new java.util.HashMap<String, Integer>(),
+        names = null;
+    boolean ok = left < right, other;
+
+    public @interface Marker {
+        String value() default "";
+    }
+
+    public record Range(int lo, int hi) {
+        public Range {
+            if (lo > hi) throw new IllegalArgumentException();
+        }
+    }
+
+    public enum Mode {
+        FAST {
+            int speed() { return 2; }
+        },
+        SLOW(1) {
+            int speed() { return 1; }
+        },
+        IDLE;
+
+        int speed() { return 0; }
+    }
+
+    static class Node {
+        static class Builder {
+            static class OfInt { int fromBuilder; }
+        }
+        static class OfInt { int direct; }
+    }
+}
+'''
+
+
+def test_parser_tricky_members():
+    src = JavaSource(TRICKY)
+
+    def members(*names, enum=False):
+        _start, lo, hi = src.find_type(list(names))
+        return [(m.kind, m.name) for m in src.members(lo, hi, is_enum=enum,
+                                                      type_name=names[-1])]
+
+    outer = members("Outer")
+    # every declarator of a field declaration
+    assert [n for k, n in outer if k == "field"] == ["left", "right", "grid", "sizes", "names",
+                                                     "ok", "other"]
+    # a nested @interface is a type, not a field
+    assert ("type", "Marker") in outer and ("field", "Marker") not in outer
+    # a record's compact constructor
+    assert members("Outer", "Range") == [("constructor", "Range")]
+    # enum constants with arguments and bodies are not members
+    assert members("Outer", "Mode", enum=True) == [("enum constants", ""), ("method", "speed")]
+    # a nested name resolves at its own level, not deeper
+    assert members("Outer", "Node", "OfInt") == [("field", "direct")]
+    assert members("Outer", "Node", "Builder", "OfInt") == [("field", "fromBuilder")]
+    lines = {m.name: m.line for m in src.members(*src.find_type(["Outer"])[1:],
+                                                 type_name="Outer")}
+    assert lines["right"] == 4 and lines["names"] == 6

@@ -305,3 +305,12 @@ def test_test_commands_for_every_layout():
     assert t == "run  :test --tests 'a.BTest'"
     t = render.format_test_filter("run {module} {task}", "core/compileIntegrationTestJava", ["c"])
     assert t == "run core :core:integrationTest"
+
+
+def test_is_annotation_use():
+    line = '@Url("https://example.com") @Inject Foo foo;'
+    assert X.is_annotation_use(line, line.index("Inject"))
+    assert not X.is_annotation_use("int x; // @Inject later", 17)
+    assert not X.is_annotation_use(' * {@link Inject}', 10)
+    assert not X.is_annotation_use('String s = "@Inject";', 13)
+    assert X.is_annotation_use("@Inject", 1)

@@ -292,13 +292,19 @@ def users_section(refs: list[Reference], short: str) -> Section | None:
                             "left out):", lines, f"references({short}) or typed({short})")
 
 
-_ASSIGN = r"\s*(?:=(?!=)|\+=|-=|\*=|/=|%=|&=|\|=|\^=|<<=|>>=|\+\+|--)"
+_ASSIGN_AFTER = re.compile(r"\s*(?:=(?!=)|\+=|-=|\*=|/=|%=|&=|\|=|\^=|<<=|>>>=|>>=|\+\+|--)")
+_INCREMENT_BEFORE = re.compile(r"(?:\+\+|--)\s*(?:this\s*\.\s*)?$")
 
 
-def is_write(text: str, name: str) -> bool:
-    """A heuristic on the line's text: `name = …`, `name += …`, `name++`, `++name`."""
-    return re.search(r"(?<![\w$])" + re.escape(name) + _ASSIGN, text) is not None or \
-        re.search(r"(?:\+\+|--)\s*(?:this\.)?" + re.escape(name) + r"(?![\w$])", text) is not None
+def is_write_at(line: str, start: int, end: int, next_line: str = "") -> bool:
+    """Whether the reference at [start, end) of `line` is assigned: `x = …`, `x += …`, `x++`,
+    `++x` (`this.x` too), also with the operator on the next line. Only this occurrence counts:
+    in `this.a = other.a;` the second `a` is a read."""
+    after = line[end:]
+    if not after.strip():
+        after = next_line
+    return _ASSIGN_AFTER.match(after) is not None or \
+        _INCREMENT_BEFORE.search(line[:start]) is not None
 
 
 def accessor_symbols(field_symbol: str) -> list[str]:
@@ -315,7 +321,6 @@ def accessor_symbols(field_symbol: str) -> list[str]:
 
 def field_sections(nav: Navigator, d: Definition, short: str
                    ) -> tuple[list[Section], list[Reference], list[str]]:
-    name = S.name_of(d.symbol)
     accessors = nav._definitions_of(set(accessor_symbols(d.symbol)))
     # A record component's accessor is implicit: scip-javac gives it no definition.
     implicit = X.record_accessor(nav, d.symbol, [d])
@@ -332,14 +337,20 @@ def field_sections(nav: Navigator, d: Definition, short: str
                                                                    else set()))
     refs = [r for rs in refs_by.values() for r in rs]
     wanted: dict[str, set[int]] = {}
-    for r in refs:
-        wanted.setdefault(r.location.source, set()).add(r.location.range.start_line)
-    texts = {src: nav.ws.source_lines(src, ls) for src, ls in wanted.items()}
+    for r in refs:  # each line and the next (an assignment may continue there)
+        wanted.setdefault(r.location.source, set()).update(
+            (r.location.range.start_line, r.location.range.start_line + 1))
+    raw = {src: X._raw_lines(nav.ws.root, src, ls) for src, ls in wanted.items()}
     writes, reads = [], []
-    for r in sorted(refs, key=lambda r: (r.location.source, r.location.range.start_line)):
-        text = texts.get(r.location.source, {}).get(r.location.range.start_line, "")
+    for r in sorted(refs, key=lambda r: (r.location.source, r.location.range.start_line,
+                                         r.location.range.start_char)):
+        lines = raw.get(r.location.source, {})
+        ln = r.location.range.start_line
+        line = lines.get(ln, "")
+        text = line.strip()
         accessor = r.symbol != d.symbol
-        write = S.name_of(r.symbol).startswith("set") if accessor else is_write(text, name)
+        write = S.name_of(r.symbol).startswith("set") if accessor else is_write_at(
+            line, r.location.range.start_char, r.location.range.end_char, lines.get(ln + 1, ""))
         row = (f"  {render.container_label(r.container) or '(top level)'}  "
                f"{r.location.source}:{r.location.line}: {_clip(text, 110)}"
                + (f"  ({S.name_of(r.symbol)})" if accessor else ""))

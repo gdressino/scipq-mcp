@@ -27,6 +27,34 @@ GENERATED_MARKERS = ("@Generated", "@lombok.Generated", "@javax.annotation.Gener
 _DECL_KEYWORD = re.compile(r"\b(class|interface|enum|record|@interface)\b")
 
 
+def _read_header(path: str, line: int, max_lines: int = 30) -> str:
+    """From `line` (0-based) up to the `{` that opens the body, outside parentheses (a record
+    header may span lines: `record Range(\n int lo,\n int hi) {`)."""
+    from .javasrc import mask, strip_comments
+    out = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for i, text in enumerate(fh):
+                if i < line:
+                    continue
+                out.append(text.rstrip("\n"))
+                masked = mask("\n".join(out))
+                depth = 0
+                for k, ch in enumerate(masked):
+                    if ch == "(":
+                        depth += 1
+                    elif ch == ")":
+                        depth -= 1
+                    elif ch in "{;" and depth <= 0:
+                        head = strip_comments("\n".join(out))[:k]
+                        return " ".join(x.strip() for x in head.splitlines() if x.strip())
+                if i - line >= max_lines:
+                    break
+    except OSError:
+        pass
+    return " ".join(x.strip() for x in out if x.strip())
+
+
 def _read_line(path: str, line: int) -> str:
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -274,7 +302,7 @@ class DocView:
         components: take the declaration from the source line instead."""
         if not self.root:
             return
-        line = _read_line(os.path.join(self.root, self.source), d.location.range.start_line)
+        line = _read_header(os.path.join(self.root, self.source), d.location.range.start_line)
         m = re.search(r"\b(record|class|interface|enum)\s+" + re.escape(S.name_of(d.symbol))
                       + r"\b", line)
         if not m:

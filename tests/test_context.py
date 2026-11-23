@@ -54,11 +54,21 @@ def test_cut_keeps_head_and_tail():
     assert C._cut(s, 10) == ["body → source(x)"]
 
 
-def test_is_write():
-    assert C.is_write("this.count = 0;", "count") and C.is_write("count++;", "count")
-    assert C.is_write("total += count; count -= 1", "count")
-    assert not C.is_write("if (count == 0) return;", "count")
-    assert not C.is_write("x = count;", "count")
+def test_is_write_at_the_reference_column():
+    def w(line, name, nth=0, nxt=""):
+        k = -1
+        for _ in range(nth + 1):
+            k = line.index(name, k + 1)
+        return C.is_write_at(line, k, k + len(name), nxt)
+
+    assert w("this.count = 0;", "count") and w("count++;", "count") and w("++this.count;", "count")
+    assert w("total += count; count -= 1", "count", 1) and not w("total += count;", "count")
+    assert not w("if (count == 0) return;", "count") and not w("x = count;", "count")
+    assert w("this.state = other.state;", "state") and not w("this.state = other.state;",
+                                                             "state", 1)
+    line = "if (cache == null) cache = new Cache(); return cache;"
+    assert [w(line, "cache", k) for k in range(3)] == [False, True, False]
+    assert w("        state", "state", nxt="            = null;")  # the operator on the next line
 
 
 def test_accessor_symbols():

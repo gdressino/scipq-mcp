@@ -210,3 +210,12 @@ def test_a_shard_removed_during_a_query_does_not_fail_it(sample_copy):
     os.unlink(victim)  # e.g. a recompilation cleaned it after the listing
     hits = ws.grep([b"com/example/model/Entity#"])
     assert hits and all(os.path.exists(h.path) for h in hits)
+
+
+def test_read_header_spans_lines(tmp_path):
+    from scipq_mcp.queries import _read_header
+    p = tmp_path / "Range.java"
+    p.write_text("package a;\n\npublic record Range(\n        int lo, // inclusive {\n"
+                 "        int hi) implements Comparable<Range> {\n}\n")
+    assert _read_header(str(p), 2) == ("public record Range( int lo, int hi) "
+                                       "implements Comparable<Range>")

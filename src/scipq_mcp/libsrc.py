@@ -741,7 +741,7 @@ def library_supertypes(index: LibraryIndex, type_symbol: str) -> list[str]:
         if decl is None:
             return []
         header = " ".join(src.masked[decl[0]:decl[1]].split())
-        header = re.sub(r"@\s*[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?", " ", header)
+        header = _ANNOT.sub(" ", header)
         pkg_m = _PACKAGE_DECL.search(src.masked)
         pkg = pkg_m.group(1) if pkg_m else ""
         single = {}
@@ -809,7 +809,7 @@ def library_ancestors(index: LibraryIndex, type_symbol: str, limit: int = 200) -
     return out
 
 
-_ANNOT = re.compile(r"@\s*[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?")
+_ANNOT = re.compile(r"@\s*(?!interface\b)[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?")
 
 
 def param_types(declaration: str, type_vars: set[str] = frozenset()) -> tuple | None:

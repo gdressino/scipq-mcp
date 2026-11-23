@@ -3,6 +3,22 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Fixed
+
+- Library sources (definition, source, members, overloads of JDK and dependency symbols):
+  every variable of `int a, b;` (about 900 fields of the JDK's java.base were missing), nested
+  `@interface` types (they were fields), records' compact constructors (they were fields),
+  enum constants with arguments or bodies (they were fields or methods), and nested type names
+  resolved at their own level (`Node.OfInt` could resolve to `Node.Builder.OfInt`). Checked
+  against a full Java parser on java.base (79,192 members), Vaadin flow-server and Guava: no
+  difference left, names, lines and overload order included.
+- `context` on a field tells writes from reads at each reference's column (also with the
+  operator on the next line): in `this.a = other.a;` the second `a` is a read.
+- Records whose header spans several lines get their whole declaration.
+- `annotated` counts an annotation after a string containing `//` on the same line.
+
 ## 0.2.2 — 2026-11-22
 
 ### Added
