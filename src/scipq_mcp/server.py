@@ -404,8 +404,10 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         """Transitive callers of a symbol, by depth, grouped by module or package, marking
         tests: what a change can affect, and the entry points it reaches (screens, endpoints
         with their routes, jobs…, one row per type, searched to depth 6 even when the rows
-        stop sooner). Uses the auxiliary index (built once per checkout, then updated
-        incrementally)."""
+        stop sooner). Not seen: calls through reflection, calls a library makes (listeners
+        and other callbacks it invokes), and code compiled without the plugin, so few or no
+        callers is not proof that nothing calls it. Uses the auxiliary index (built once per
+        checkout, then updated incrementally)."""
         return service.impact(symbol, project_root, depth, include_overridden, group_by,
                               offset, limit)
 
@@ -498,10 +500,11 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         overload has, names none of the same-named types has, missing files, and line
         numbers that no longer fall in the symbol named next to them; counts by kind, then
         by file, repeats merged. In a git checkout, line numbers are followed from the version
-        the doc was written against: "line N is now M" when the code only moved (fix the
-        number), "changed since the doc named X (date, commit)" when it was edited (re-read
-        the claim); missing files say when they were deleted, or that the repository never
-        had them (planned). [check_refs] other_versions in .scipq.toml lists the words a doc
+        the doc was written against. What to do: "line N is now M" (the code only moved):
+        fix the number; "changed since the doc named X (date, commit)": re-read what the doc
+        claims, the code is different; "so in the doc's version too": the doc was wrong from
+        the start, not drift: check what it meant; "deleted (date, commit)": the file is
+        gone; "planned?" / "never had": nothing to fix in the code, maybe in the doc. [check_refs] other_versions in .scipq.toml lists the words a doc
         writes before a path for another branch's version (v4). A folder in files means its
         Markdown files. Library types, placeholders (Foo, getX), Object/Class/enum members
         and mentions the line says are gone ("removed") are left alone."""
@@ -518,9 +521,10 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
 
     @tool
     def concepts(
-        query: Annotated[str, Field(description="Words for what you look for, in the code's "
-                                                "language; a word's forms and synonyms as "
-                                                "alternatives with |: 'alta|crear cliente', "
+        query: Annotated[str, Field(description="Words for what you look for, separated by "
+                                                "spaces; a word's forms and synonyms as "
+                                                "alternatives with | (no spaces around it): "
+                                                "'alta|crear cliente', "
                                                 "'retry|reintento payment|pago', 'audit log'")],
         project_root: ProjectRoot = "",
         kind: Annotated[Literal["any", "type", "method", "field"], Field(
@@ -532,13 +536,16 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
             description="Also files whose header says they are generated")] = False,
         offset: Offset = 0, limit: Limit(20, 200) = 20,
     ) -> str:
-        """Definitions about something, when you do not know their names: words of their
-        names (camelCase split), owners, annotation texts (columns, paths, step texts…),
-        signatures and javadoc, ranked by how many of the words they hold and how surely.
-        Word matching, not meaning: write each word's forms yourself as alternatives
-        (pago|pagar|payment: other stems, synonyms, the other language), each searched as a
-        prefix with accents ignored (a singular finds its plural); a word alone is reduced
-        to a light stem."""
+        """Definitions about something, when you do not know their names. Words, not meaning,
+        in names (camelCase split), owners, annotation texts (columns, paths, step texts…),
+        signatures and javadoc. Space-separated words are different words: results rank by
+        how many of them they hold, and how surely (not all are required). `|` joins the
+        alternatives of ONE word: its forms, synonyms, the other language
+        (pago|pagar|payment), each a prefix, accents ignored (a singular finds its plural); a
+        word alone is reduced to a light stem. Synonyms written as separate words
+        (`pago payment`) ask for definitions with both. If the top results do not fit, the
+        code uses other words: retry with the words of the names you got, abbreviations or
+        English, and fewer words; then follow a name with find or refs."""
         return service.concepts(query, project_root, kind, scope, include_tests, offset, limit,
                                 include_generated)
 

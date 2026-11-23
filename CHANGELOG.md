@@ -7,6 +7,12 @@ version and date when releasing.
 
 ### Changed
 
+- Tool descriptions say more about how to use the imprecise tools: `concepts` explains that
+  spaces separate different words and `|` joins the alternatives of one word (synonyms
+  written apart ask for both), and what to try when the results do not fit; `impact` names
+  what it cannot see (reflection, library callbacks, code built without the plugin);
+  `check_refs` says what to do with each kind of finding.
+
 - `check_refs` follows line numbers through git history. The version of the code a doc was
   written against is the first commit, on any branch and through the doc's renames, whose
   copy of the doc has that line; the version just before that commit (doc and code

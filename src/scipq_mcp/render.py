@@ -1328,8 +1328,8 @@ def concepts(query: str, terms: list[str], rows, docs: dict, offset: int, limit:
     searched = " ".join(shown(grp) for grp in terms)
     tip = "" if "|" in query else (
         "\n(each word was reduced to a stem and its usual endings; write a word's forms and "
-        "synonyms as alternatives to search those instead, each as a prefix: "
-        "pago|pagar|payment)")
+        "synonyms as alternatives joined by | (spaces separate different words) to search "
+        "those instead, each as a prefix: pago|pagar|payment)")
     if not rows:
         return (f"no definition mentions {searched} (in names, owners, annotations, "
                 "signatures or javadoc; tests left out unless include_tests)" + tip)
