@@ -563,6 +563,9 @@ def test_impact_dispatches_through_template_methods(refactor_root, tmp_path):
     # StockPage#refreshAll()'s measure() runs on a StockPage (bound to SalesPage, not Page).
     deep = Service(refactor_root, cache_dir=str(tmp_path / "c")).impact("Pages#sales", depth=5)
     assert "View#measure()" in deep and "StockPage" not in deep
+    # measure() on a View may be a SalesPage's; on a StockPage it is not.
+    assert "Gallery#show()" in deep and "Dash#show()" not in deep
+    assert "callers of methods these override were left out" in deep
     # From the override itself: the base's code runs on it, the sibling's does not.
     out = Service(refactor_root, cache_dir=str(tmp_path / "c")).impact("SalesPage#body",
                                                                        depth=4)

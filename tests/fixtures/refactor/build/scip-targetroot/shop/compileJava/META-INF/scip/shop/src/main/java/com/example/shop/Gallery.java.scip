@@ -1,0 +1,7 @@
+¾
+0shop/src/main/java/com/example/shop/Gallery.java-com/example/shop/Gallery#BZ 0$com/example/shop/Gallery#`<init>`().Bjava/lang/String#B
+6 com/example/shop/Gallery#show().BZ  com/example/shop/View#Blocal 0BRlocal 0B* com/example/shop/View#measure().B{
+com/example/shop/Gallery#5Calls measure() on any view: a SalesPage among them. (2Gallery:"java*public class GalleryJ
+$com/example/shop/Gallery#`<init>`().(	2<init>:"java*public Gallery()G
+ com/example/shop/Gallery#show().(2show:"java*String show(View v)>
+local 02v:"java*View vB com/example/shop/Gallery#show()."java

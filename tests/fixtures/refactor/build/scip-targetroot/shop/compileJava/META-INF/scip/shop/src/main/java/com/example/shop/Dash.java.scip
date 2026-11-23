@@ -1,0 +1,7 @@
+±
+-shop/src/main/java/com/example/shop/Dash.java*com/example/shop/Dash#BZ -!com/example/shop/Dash#`<init>`().Bjava/lang/String#B
+3com/example/shop/Dash#show().BZ %com/example/shop/StockPage#Blocal 0BRlocal 0B* com/example/shop/View#measure().Bw
+com/example/shop/Dash#:Calls measure() on a StockPage: never a SalesPage's code. (2Dash:"java*public class DashD
+!com/example/shop/Dash#`<init>`().(	2<init>:"java*public Dash()I
+com/example/shop/Dash#show().(2show: "java*String show(StockPage p)@
+local 02p:"java*StockPage pBcom/example/shop/Dash#show()."java
