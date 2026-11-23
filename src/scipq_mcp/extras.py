@@ -132,7 +132,7 @@ class MemberGroup:
 
 
 def _own_members(nav: Navigator, type_symbol: str, d: Definition) -> list[Definition]:
-    for v in nav._views(nav.ws.shards_for_source(d.location.source)[:1]):
+    for v in nav._views(nav.ws.shard_for_source(d.location.source)):
         return sorted(v.definitions(lambda sym, _i: not S.is_local_like(sym)
                                     and S.parent(sym) == type_symbol),
                       key=lambda x: (x.location.range.start_line, x.location.range.start_char))
@@ -412,7 +412,7 @@ def overloads(nav: Navigator, method: str) -> list[FamilyMember]:
     owner, name = S.parent(method), S.name_of(method)
     found: list[Definition] = []
     if d is not None:
-        for v in nav._views(nav.ws.shards_for_source(d.location.source)[:1]):
+        for v in nav._views(nav.ws.shard_for_source(d.location.source)):
             found = v.definitions(lambda sym, _i: not S.is_local_like(sym) and S.is_method(sym)
                                   and S.parent(sym) == owner and S.name_of(sym) == name)
     if not found:

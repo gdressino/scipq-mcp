@@ -387,3 +387,49 @@ def test_build_directories_from_the_command_line(tmp_path):
     assert any(_overlaps(d, root) for d in dirs)
     assert _overlaps(str(tmp_path), root)          # a build in a parent directory
     assert not _overlaps(str(tmp_path / "other"), root)
+
+
+def test_changed_when_the_build_is_a_subdirectory_of_the_repository(tmp_path, sample_root,
+                                                                     cache):
+    if not shutil.which("git"):
+        pytest.skip("git not available")
+    repo = tmp_path / "mono"
+    shutil.copytree(sample_root, repo / "java")
+    run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True,  # noqa: E731
+                                    capture_output=True)
+    run("init", "-q")
+    run("-c", "user.email=t@example.com", "-c", "user.name=t", "add", "-A")
+    run("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "init")
+    src = repo / "java/core/src/main/java/com/example/model/Entity.java"
+    src.write_text(src.read_text().replace("this.state = state;", "this.state = state; // x"))
+    shard = repo / ("java/build/scip-targetroot/core/compileJava/META-INF/scip/core/src/main/"
+                    "java/com/example/model/Entity.java.scip")
+    st = os.stat(src)
+    os.utime(shard, (st.st_atime + 5, st.st_mtime + 5))
+    out = Service(str(repo / "java"), cache_dir=cache).changed()
+    assert "Entity#setState()" in out and "not indexed" not in out, out
+
+
+def test_external_pruning_waits_for_unreadable_shards(sample_copy, cache):
+    shard = os.path.join(sample_copy, "build/scip-targetroot/core/compileJava/META-INF/scip/"
+                                      "core/src/main/java/com/example/model/Entity.java.scip")
+    data = open(shard, "rb").read()
+    with open(shard, "wb") as fh:  # being written: Entity# looks undefined right now
+        fh.write(data[: len(data) // 3])
+
+    def entity_refs(ix):
+        con = ix.connect()
+        try:
+            return con.execute("SELECT count(*) FROM refs r JOIN symbols s ON s.id = r.symbol_id "
+                               "WHERE s.symbol = 'com/example/model/Entity#'").fetchone()[0]
+        finally:
+            con.close()
+
+    ix = Index(Workspace(sample_copy), cache, external="methods")
+    assert ix.update().unreadable == 1
+    kept = entity_refs(ix)
+    assert kept > 0                      # not pruned as external while unreadable
+    with open(shard, "wb") as fh:
+        fh.write(data)
+    ix.update()
+    assert entity_refs(ix) >= kept       # defined again (plus its own): none lost

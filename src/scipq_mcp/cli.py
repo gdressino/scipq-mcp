@@ -161,6 +161,28 @@ def _run_query(a) -> str:
     raise SystemExit(f"unknown tool {t}")
 
 
+def _init_config(root: str | None) -> str:
+    import os
+
+    from . import config as CFG
+    from .workspace import Workspace, WorkspaceError, find_project_root
+
+    root = find_project_root(root or os.getcwd())
+    try:
+        ws = Workspace(root)
+        ws.files()
+    except WorkspaceError:
+        return CFG.repo_template([], detected=False)
+    profiles, _warnings = CFG.load_profiles()
+    found = []
+    for name, data in profiles.items():
+        anns = {CFG.to_symbol(x) for ep in data.get("entry_points", [])
+                for x in ep.get("annotations", [])}
+        if anns and ws.grep(x.encode() for x in anns):
+            found.append(name)
+    return CFG.repo_template(found, detected=True)
+
+
 def _cache(a) -> str:
     import os
 
@@ -226,6 +248,10 @@ def main(argv: list[str] | None = None) -> None:
                         "the server stays idle there, with no tools)")
 
     sub.add_parser("gradle-init", help="print the Gradle init script that writes the shards")
+    ic = sub.add_parser("init-config", help="print a .scipq.toml template for this checkout "
+                                            "(profiles detected from its shards); writes "
+                                            "nothing")
+    ic.add_argument("--root", help="the checkout (default: the one around the cwd)")
     c = sub.add_parser("cache", help="manage the auxiliary indexes")
     c.add_argument("action", choices=["status", "prune", "clear"])
     c.add_argument("--cache-dir", help="cache base directory (default: user cache)")
@@ -250,6 +276,8 @@ def main(argv: list[str] | None = None) -> None:
               getattr(a, "build_workers", None))
     elif a.command == "gradle-init":
         sys.stdout.write(_template())
+    elif a.command == "init-config":
+        sys.stdout.write(_init_config(a.root))
     elif a.command == "query":
         print(_run_query(a))
     elif a.command == "cache":

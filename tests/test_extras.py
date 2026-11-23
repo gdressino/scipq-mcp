@@ -286,3 +286,22 @@ def test_index_status_profiles(sample_copy, tmp_path):
     assert "once the auxiliary index exists" in svc.index_status()
     svc.dead_code()
     assert "auto (annotations found in the project)" in svc.index_status()
+
+
+def test_test_commands_for_every_layout():
+    from scipq_mcp import render
+    cmds = render.test_commands({"_root/compileTestJava": ["a.BTest"],
+                                 "app/testCompile": ["x.ATest", "x.CTest"],
+                                 "core/compileIntegrationTestJava": ["c.ITest"],
+                                 "a/b/compileTestJava": ["d.DTest"],
+                                 ".": ["e.ETest"]}, "./gradlew")
+    assert cmds[0] == "./gradlew :test --tests 'a.BTest'"
+    assert cmds[1] == "mvn -pl app test -Dtest='ATest,CTest'"
+    assert cmds[2] == "./gradlew :core:integrationTest --tests 'c.ITest'"
+    assert cmds[3] == "./gradlew :a:b:test --tests 'd.DTest'"
+    assert cmds[4].startswith("./gradlew test --tests 'e.ETest'")
+    t = render.format_test_filter("run {module} {task} {tests}", "_root/compileTestJava",
+                                  ["a.BTest"])
+    assert t == "run  :test --tests 'a.BTest'"
+    t = render.format_test_filter("run {module} {task}", "core/compileIntegrationTestJava", ["c"])
+    assert t == "run core :core:integrationTest"

@@ -91,3 +91,65 @@ def test_tests_filter_template(sample_root, tmp_path):
     out = Service(sample_root, config_file=str(conf), cache_dir=str(tmp_path / "cache")
                   ).tests("Entity#setState")
     assert "./run-tests.sh :app:test --tests 'com.example.app.ServiceTest'" in out
+
+
+def test_repo_config_and_precedence(tmp_path):
+    root = tmp_path / "shop"
+    root.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    (root / ".scipq.toml").write_text('''
+profiles = ["spring", "junit"]
+[tests]
+filter = "./gradlew {module}:test --tests '{fqcn}'"
+[by_name]
+globs = ["*.jrxml", "/etc/*", "../other/*", "src/**/*.xml"]
+''')
+    st = CFG.settings_for(str(root), home=str(home))
+    assert st.profiles == ["spring", "junit"] and st.source == ".scipq.toml in the checkout"
+    assert st.tests_filter_from == ".scipq.toml"
+    assert "*.jrxml" in st.by_name_globs and "src/**/*.xml" in st.by_name_globs
+    assert "/etc/*" not in st.by_name_globs and "../other/*" not in st.by_name_globs
+    assert sum("must be relative" in w for w in st.warnings) == 2
+    assert st.files == [".scipq.toml (the team's, from the checkout)"]
+    # The personal [[project]] entry overrides it, key by key.
+    write(str(home / "config.toml"), f'''
+[[project]]
+match = {{ path = "{root}" }}
+[project.tests]
+filter = "./mine.sh {{fqcn}}"
+''')
+    st = CFG.settings_for(str(root), home=str(home))
+    assert st.profiles == ["spring", "junit"]              # still the team's
+    assert st.tests_filter == "./mine.sh {fqcn}" and "(personal)" in st.files[-1]
+    lines = "\n".join(__import__("scipq_mcp.render", fromlist=["x"]).settings_lines(st))
+    assert "configuration (later ones win): .scipq.toml" in lines and "(from " in lines
+
+
+def test_repo_config_is_untrusted(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    (root / ".scipq.toml").write_text('match = { path = "/" }\ncache_dir = "/tmp/x"\n'
+                                      'profiles = ["junit"]\n[by_name]\npatterns = ['
+                                      + ", ".join(f'"p{k}"' for k in range(50)) + "]\n"
+                                      '[tests]\nfilter = "' + "x" * 1000 + '"\n')
+    st = CFG.settings_for(str(root), home=str(home))
+    w = "\n".join(st.warnings)
+    assert "`match` is ignored" in w and "unknown key 'cache_dir'" in w
+    assert len(st.by_name_patterns) == CFG.REPO_MAX_PATTERNS
+    assert st.tests_filter == "" and "longer than" in w
+    outside = tmp_path / "outside.toml"
+    outside.write_text('profiles = ["jdo"]\n')
+    (root / ".scipq.toml").unlink()
+    (root / ".scipq.toml").symlink_to(outside)
+    st = CFG.settings_for(str(root), home=str(home))
+    assert st.profiles == [] and any("link out of the checkout" in x for x in st.warnings)
+
+
+def test_setup_shows_the_configuration(sample_copy, tmp_path):
+    with open(os.path.join(sample_copy, ".scipq.toml"), "w") as fh:
+        fh.write('profiles = ["junit"]\n')
+    out = Service(sample_copy, cache_dir=str(tmp_path / "c")).setup(include_template=False)
+    assert "scipq configuration:" in out and "profiles: junit — .scipq.toml" in out

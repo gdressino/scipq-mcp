@@ -215,6 +215,11 @@ class Workspace:
         out = [self._make_shard(k, rel) for k, rel in self.files()]
         return _dedupe([s for s in out if self.source_exists(s.source)])
 
+    def shard_for_source(self, source: str) -> list[Shard]:
+        """[the shard of a source] (the most recently written when it has shards in several
+        tasks, as everywhere else), or []."""
+        return _dedupe(self.shards_for_source(source))[:1]
+
     def shards_for_source(self, source: str) -> list[Shard]:
         source = source.replace(os.sep, "/").lstrip("/")
         out = []
@@ -295,24 +300,38 @@ class Workspace:
         env = dict(os.environ, LC_ALL="C")
         out: list[str] = []
         pending = _chunks(rel_paths)
-        running: list[subprocess.Popen] = []
+        running: list[tuple[subprocess.Popen, list]] = []
 
-        def drain(proc: subprocess.Popen) -> None:
+        def drain(proc: subprocess.Popen, chunk: list) -> None:
             stdout, stderr = proc.communicate()
-            if proc.returncode not in (0, 1):
-                raise WorkspaceError(f"grep failed: {stderr.decode(errors='replace').strip()}")
-            out.extend(p.decode("utf-8", errors="surrogateescape")
-                       for p in stdout.split(b"\0") if p)
+            found = [p.decode("utf-8", errors="surrogateescape")
+                     for p in stdout.split(b"\0") if p]
+            out.extend(found)  # what grep printed holds even when it exits 2
+            if proc.returncode in (0, 1):
+                return
+            errors = [x for x in stderr.decode(errors="replace").splitlines() if x.strip()]
+            if errors and all(x.endswith("No such file or directory") for x in errors):
+                return  # shards removed since the listing (a compilation): the rest holds
+            # Anything else (e.g. PCRE's backtracking limit on a long binary line): this chunk
+            # again in Python.
+            try:
+                more = self._grep_python([os.fsdecode(c) for c in chunk], fixed, regex,
+                                         ignore_case)
+            except re.error:
+                raise WorkspaceError("grep failed: " + "; ".join(errors)[:300]) from None
+            seen = set(found)
+            out.extend(p for p in more if p not in seen)
 
         try:
             while pending or running:
                 while pending and len(running) < GREP_JOBS:
-                    running.append(subprocess.Popen(_low(base + pending.pop()), cwd=self.shards_dir,
-                                                    stdout=subprocess.PIPE,
-                                                    stderr=subprocess.PIPE, env=env))
-                drain(running.pop(0))
+                    chunk = pending.pop()
+                    running.append((subprocess.Popen(_low(base + chunk), cwd=self.shards_dir,
+                                                     stdout=subprocess.PIPE,
+                                                     stderr=subprocess.PIPE, env=env), chunk))
+                drain(*running.pop(0))
         finally:
-            for proc in running:
+            for proc, _chunk in running:
                 proc.kill()
                 proc.wait()
         return out

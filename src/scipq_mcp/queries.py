@@ -599,7 +599,7 @@ class Navigator:
 
     def outline(self, source: str) -> list[Definition]:
         source = self._normalize_source(source)
-        shards = self.ws.shards_for_source(source)
+        shards = self.ws.shard_for_source(source)
         if not shards:
             raise QueryError(f"no shard for {source}: not compiled yet, or not a source of this "
                              "project")
@@ -670,7 +670,7 @@ class Navigator:
         d = self.definition(symbol)
         if d is None or d.enclosing is None:
             return d, []
-        shards = self.ws.shards_for_source(d.location.source)
+        shards = self.ws.shard_for_source(d.location.source)
         by_symbol: dict[str, list[Location]] = {}
         for v in self._views(shards[:1]):
             for o in v.doc.occurrences:

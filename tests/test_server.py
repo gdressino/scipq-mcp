@@ -69,3 +69,14 @@ def test_tools_selection(sample_root):
     some, _ = _tools(["serve", "--root", sample_root, "--tools", "impact,references"],
                      cwd=sample_root)
     assert some == {"impact", "references", "setup"}
+
+
+def test_one_bad_query_does_not_sink_the_batch(sample_root):
+    from scipq_mcp.service import Service
+    out = Service(sample_root).batch([
+        {"tool": "references", "args": {"symbol": "Entity#setState"}},
+        {"tool": "callers", "args": {"symbol": "Entity#setState", "depth": "2"}},
+    ])
+    first, _, second = out.partition("### 2.")
+    assert "references" in first and "Service.java" in first
+    assert "error: TypeError" in second

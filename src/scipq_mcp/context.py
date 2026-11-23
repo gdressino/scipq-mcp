@@ -250,7 +250,7 @@ def overridden_by_section(nav: Navigator, symbol: str, short: str) -> Section | 
 def overload_count(nav: Navigator, d: Definition) -> int:
     owner, name = S.parent(d.symbol), S.name_of(d.symbol)
     n = 0
-    for v in nav._views(nav.ws.shards_for_source(d.location.source)[:1]):
+    for v in nav._views(nav.ws.shard_for_source(d.location.source)):
         n = len(v.definitions(lambda sym, _i: not S.is_local_like(sym) and S.is_method(sym)
                               and S.parent(sym) == owner and S.name_of(sym) == name))
     return n

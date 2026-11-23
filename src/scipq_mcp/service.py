@@ -101,8 +101,11 @@ class Service:
                 text, srcs = body(nav)
             except AmbiguousName as e:
                 text, srcs = render.candidates(e.resolution), set()
-            except (QueryError, WorkspaceError, ValueError) as e:
+            except (QueryError, WorkspaceError, ValueError, L.LibraryBusy) as e:
                 text, srcs = f"error: {e}", set()
+            except sqlite3.Error as e:  # e.g. a cache database removed or locked meanwhile
+                text, srcs = f"error: cache database: {e} (retry; `scipq-mcp cache clear` " \
+                             "rebuilds it)", set()
             texts.append(text)
             sources |= srcs
         fresh: Freshness | None = None
@@ -138,7 +141,14 @@ class Service:
             sym, note = Service._resolve(nav, name)
             return sym, note, query(sym)
         box: list = []
-        t = threading.Thread(target=lambda: box.append(nav.resolve(name)), daemon=True)
+
+        def resolve() -> None:
+            try:
+                box.append(nav.resolve(name))
+            except BaseException as e:  # re-raised below, in the caller's thread
+                box.append(e)
+
+        t = threading.Thread(target=resolve, daemon=True)
         t.start()
         try:
             result = query(guess)
@@ -146,6 +156,8 @@ class Service:
             result = None
         t.join()
         r = box[0]
+        if isinstance(r, BaseException):
+            raise r
         if r.symbol is None:
             raise AmbiguousName(r)
         if r.symbol != guess or result is None:
@@ -709,8 +721,9 @@ class Service:
         return body
 
     def _test_classes(self, g, nodes, settings) -> OrderedDict[str, set[str]]:
-        """{module: {test class FQCN}} among the nodes that live in test code. With a test
-        profile active (e.g. junit), only classes that have a test-annotated member count."""
+        """{"<module>/<task>": {test class FQCN}} among the nodes that live in test code. With a
+        test profile active (e.g. junit), only classes that have a test-annotated member
+        count."""
         out: OrderedDict[str, set[str]] = OrderedDict()
         real = g.classes_with(settings.test_annotations) if settings.test_annotations else None
         for n in nodes:
@@ -720,22 +733,14 @@ class Service:
             fqcn = f"{pkg}.{top}" if pkg else top
             if real is not None and fqcn not in real:
                 continue
-            out.setdefault(n.module, set()).add(fqcn)
+            out.setdefault(n.task_dir or n.module, set()).add(fqcn)
         return out
 
     def _tests_line(self, root: str, tests: OrderedDict[str, set[str]], template: str) -> str:
         if not tests:
             return ""
         gradle = "./gradlew" if os.path.exists(os.path.join(root, "gradlew")) else "gradle"
-        if template:
-            body = [render.format_test_filter(template, mod, sorted(names))
-                    for mod, names in tests.items()]
-        else:
-            body = []
-            for mod, names in tests.items():
-                task = "test" if mod in (".", "") else ":" + mod.replace("/", ":") + ":test"
-                body.append(f"{gradle} {task} " + " ".join(f"--tests '{c}'"
-                                                          for c in sorted(names)))
+        body = render.test_commands({t: sorted(n) for t, n in tests.items()}, gradle, template)
         return "tests to run (scipq-mcp does not):\n  " + "\n  ".join(body)
 
     def _b_changed(self, base: str = "HEAD", staged: bool = False,
@@ -757,7 +762,7 @@ class Service:
                         mod = next((m for _s, (src, m, _t) in g.shards().items()
                                     if src == e["source"]), "")
                         nodes[sym] = G.Node(sym, 0, "", e["source"], e["line"],
-                                            G.module_of(mod), True)
+                                            G.module_of(mod), True, task_dir=mod)
                 tests = self._test_classes(g, nodes.values(), st)
             tests_line = self._tests_line(nav.ws.root, tests, st.tests_filter)
             text = render.changed(res, base if not staged else f"{base} (staged)",
@@ -978,7 +983,14 @@ class Service:
             root = self._root(project_root)
         except WorkspaceError as e:
             return f"error: {e}"
-        return SETUP.render(SETUP.diagnose(root, self.shards_dir), include_template)
+        text = SETUP.render(SETUP.diagnose(root, self.shards_dir), include_template)
+        st = self.settings(root)
+        if not st.source:
+            st.source = "chosen from the project's annotations once the auxiliary index exists"
+        return text + "\n\nscipq configuration:\n" + "\n".join(
+            "  " + x for x in render.settings_lines(st)) + (
+            "" if st.files else f"\n  no {CFG.REPO_FILE} in the checkout (`scipq-mcp init-config` "
+            "prints one to start from)")
 
     BATCH_TOOLS = {
         "find_symbols": "_b_find", "references": "_b_references", "definition": "_b_definition",
@@ -1043,13 +1055,17 @@ def _const(text: str) -> Body:
 
 
 def _titled(title: str, inner: Body) -> Body:
+    """One query of a batch: whatever it raises (batch arguments skip the validation single
+    tools get, e.g. depth="2") becomes its own error line, never the whole batch's."""
     def body(nav: Navigator):
         try:
             text, srcs = inner(nav)
         except AmbiguousName as e:
             text, srcs = render.candidates(e.resolution), set()
-        except (QueryError, WorkspaceError, ValueError) as e:
+        except (QueryError, WorkspaceError, ValueError, L.LibraryBusy) as e:
             text, srcs = f"error: {e}", set()
+        except Exception as e:  # noqa: BLE001 - reported to the caller, per query
+            text, srcs = f"error: {type(e).__name__}: {e}", set()
         return f"{title}\n{text}", srcs
     return body
 

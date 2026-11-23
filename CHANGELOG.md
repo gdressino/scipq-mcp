@@ -17,6 +17,14 @@ version and date when releasing.
   and readers (told apart by the line's text), possible uses by name, tests. Library and JDK
   symbols: declaration and javadoc from the sources jar, and their uses in the project.
   Freshness warnings come first. Part of `--tools core`.
+- `.scipq.toml` at the project root: the team's settings travel with the repository (the keys
+  of a `[[project]]` entry, without `match`), read from the working tree. Precedence, lowest
+  first: built-in profiles, user profiles, `.scipq.toml`, the user's matching `[[project]]`.
+  Treated as untrusted input: size and list caps, relative globs inside the checkout only,
+  links out of it ignored, nothing executed. `setup` and `index_status` show which files apply
+  and where the tests filter came from.
+- `scipq-mcp init-config`: prints a `.scipq.toml` template with the profiles detected from the
+  checkout's shards; writes nothing. README: "Team setup".
 
 ### Changed
 
@@ -56,6 +64,25 @@ version and date when releasing.
   record component (`x()`); callers counted once each, and marked when truncated.
 - Build detection: Maven Wrapper, `-p`/`--project-dir`/`-f`/`--file`, and builds run from a
   parent directory count as a build running in the checkout.
+- `changed` when the build is a subdirectory of its git repository (a monorepo): diff paths are
+  relative to the project root (`git diff --relative`); every edited file was "not indexed".
+- Test commands (`changed`, `tests(transitive=true)`, configured filters) for the root project
+  (`:test`, not `:_root:test`), Maven (`mvn -pl … -Dtest=…`) and other test source sets
+  (`:core:integrationTest`), as `tests` already did; one implementation for all of them.
+- A shard removed while a query runs (a recompilation) no longer fails it with "grep failed":
+  the other results stand; other grep errors (PCRE limits) fall back to Python for that chunk.
+- `callees`, `outline`, `members`, `overloads` use the newest shard of a source with shards in
+  two tasks, as every other query does.
+- `--index-external methods|none`: references to symbols defined in a shard that could not be
+  read (being written) or that vanished are no longer pruned for good; pruning waits for a
+  clean update.
+- `batch`: a query that fails unexpectedly (e.g. `depth: "2"`) reports its own error instead
+  of failing the whole batch; library-map waits and cache database errors are error lines.
+- A name resolution that fails in its thread reports its error instead of an IndexError.
+- dead_code: two sessions refreshing the text index at once no longer collide.
+- Index schema 4: overrides and annotations are kept per shard, so removing one of a source's
+  two shards keeps the other's rows (dead_code could report overrides as dead). Existing
+  indexes are rebuilt once.
 
 ## 0.2.1 — 2026-11-22
 

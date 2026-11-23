@@ -28,7 +28,7 @@ from .cachedir import default_base, entry_dir
 from .scip import DEFINITION, KIND_NAMES, read_documents
 from .workspace import SUFFIX, Workspace
 
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
@@ -52,12 +52,12 @@ CREATE TABLE IF NOT EXISTS refs (
     PRIMARY KEY (symbol_id, caller_id, shard_id)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS rels (
     target_id INTEGER NOT NULL, symbol_id INTEGER NOT NULL, kind INTEGER NOT NULL,
-    shard_id INTEGER NOT NULL,
-    PRIMARY KEY (target_id, symbol_id, kind)) WITHOUT ROWID;
+    shard_id INTEGER NOT NULL,                 -- in the key: a source with shards in two tasks
+    PRIMARY KEY (target_id, symbol_id, kind, shard_id)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS annotations (
     annotation_id INTEGER NOT NULL, def_id INTEGER NOT NULL, shard_id INTEGER NOT NULL,
     line INTEGER NOT NULL,
-    PRIMARY KEY (annotation_id, def_id, line)) WITHOUT ROWID;
+    PRIMARY KEY (annotation_id, def_id, shard_id, line)) WITHOUT ROWID;
 """
 
 INDEXES = """
@@ -503,6 +503,7 @@ class Index:
             con.execute("DELETE FROM shards WHERE id = ?", (sid,))
         stats.removed = len(gone)
         if not todo:
+            self._prune_external(con, stats)
             return
         ids: dict[str, int] = {}
         if stats.built_from_scratch:
@@ -531,9 +532,8 @@ class Index:
             self._insert(con, sid, rows, ids)
             if progress and n % 500 == 0:
                 progress(n, len(jobs))
-        if self.external != "all":
-            self._drop_external(con)
         stats.unreadable = self.unreadable
+        self._prune_external(con, stats)
         if stats.built_from_scratch:
             con.executescript(INDEXES)
             if self.external != "all":
@@ -602,6 +602,22 @@ class Index:
                         [(ids[t], ids[s], k, sid) for t, s, k in rows["rels"]])
         con.executemany("INSERT OR IGNORE INTO annotations VALUES (?,?,?,?)",
                         [(ids[a], ids[d], sid, line) for a, d, line in rows["anns"]])
+
+    def _prune_external(self, con: sqlite3.Connection, stats: UpdateStats) -> None:
+        """index.external=methods|none: prune references to symbols the project does not
+        define, but not while some shard could not be read or vanished in this update (a
+        compilation in progress): the symbols it defines would look external and the references
+        to them, from shards that do not change, would be lost for good. Pending prunes run on
+        the next clean update."""
+        if self.external == "all":
+            return
+        if stats.unreadable or stats.removed:
+            con.execute("INSERT OR REPLACE INTO meta VALUES ('external_pruned', '0')")
+            return
+        row = con.execute("SELECT value FROM meta WHERE key = 'external_pruned'").fetchone()
+        if stats.processed or (row is not None and row[0] == "0"):
+            self._drop_external(con)
+            con.execute("INSERT OR REPLACE INTO meta VALUES ('external_pruned', '1')")
 
     def _drop_external(self, con: sqlite3.Connection) -> None:
         """index.external=methods|none: drop references to symbols the project does not define

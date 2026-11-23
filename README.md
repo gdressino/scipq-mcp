@@ -218,7 +218,38 @@ type_names = ["*Screen"]
 
 When several entries match, `path` beats `root_project`, which beats `git_remote`. Your own
 profiles go in `$XDG_CONFIG_HOME/scipq/profiles/*.toml` (same format as
-`src/scipq_mcp/profiles/`). `index_status` shows which entry and profiles apply.
+`src/scipq_mcp/profiles/`). `index_status` and `setup` show which files, entry and profiles
+apply, and where the tests filter came from.
+
+### Team setup
+
+A repository can carry its settings in **`.scipq.toml`** at the project root: the same keys as a
+`[[project]]` entry, without `match` (the file applies to its own checkout), read from the
+working tree, so each branch and worktree uses its own. `scipq-mcp init-config` prints one to
+start from, with the profiles detected from the checkout's shards; it writes nothing
+(`scipq-mcp init-config > .scipq.toml`).
+
+```toml
+profiles = ["spring", "jpa", "junit"]
+
+[tests]
+filter = "./gradlew {module}:test --tests '{fqcn}'"
+
+[by_name]
+globs = ["*.xml", "*.jrxml"]
+```
+
+Precedence, key by key, lowest first: built-in profiles, your profiles, the repository's
+`.scipq.toml` (the team's defaults), the matching `[[project]]` entry of your configuration
+(your overrides).
+
+The repository does not run anything by itself. `.scipq.toml` is treated as untrusted input:
+it is ignored when larger than 256 KiB or a link out of the checkout, lists and strings are
+capped, globs must be relative and stay inside the checkout, keys such as the cache directory
+cannot be set from it, and `tests.filter` is only text the tools print for you to run.
+
+Everyone on the team also needs the shards: the init script from `scipq-mcp gradle-init` in
+`~/.gradle/init.d/` (or the Maven snippet from `setup`), then a compilation.
 
 ### Naming symbols
 

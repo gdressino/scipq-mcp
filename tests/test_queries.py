@@ -199,3 +199,14 @@ def test_service_text(sample_root):
 def test_project_root_from_subdirectory(sample_root):
     sub = os.path.join(sample_root, "app", "src")
     assert "8 references" in Service().references("Entity#setState", project_root=sub)
+
+
+def test_a_shard_removed_during_a_query_does_not_fail_it(sample_copy):
+    import os
+    from scipq_mcp.workspace import Workspace
+    ws = Workspace(sample_copy)
+    files = ws.files()
+    victim = os.path.join(ws.scip_roots()[files[0][0]][0], files[0][1])
+    os.unlink(victim)  # e.g. a recompilation cleaned it after the listing
+    hits = ws.grep([b"com/example/model/Entity#"])
+    assert hits and all(os.path.exists(h.path) for h in hits)

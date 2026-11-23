@@ -594,12 +594,50 @@ def status(st, root: str) -> str:
     return "\n".join(lines)
 
 
-def format_test_filter(template: str, module: str, classes: list[str]) -> str:
-    """A configured test command: {module} (`a:b`), {task} (`:a:b:test`); per class {fqcn} /
-    {simple} (one line per class); or, for one line per module, {classes} (FQCNs separated by
-    spaces) or {tests} (`--tests 'A' --tests 'B'`)."""
-    mod = module.replace("/", ":") if module not in (".", "") else ""
-    task = f":{mod}:test" if mod else "test"
+def _module_and_test_task(task_dir: str) -> tuple[str, str]:
+    """("a:b", ":a:b:test") for "a/b/compileTestJava"; ("", ":test") for the root project
+    ("_root/…"); ("core", ":core:integrationTest") for compileIntegrationTestJava; for Maven
+    ("app/testCompile") the module directory and "test"; for one shared directory ("", "")."""
+    from .extras import test_task
+    from .workspace import build_task
+    path = build_task(task_dir)
+    if path.startswith(":"):
+        return path.rpartition(":")[0].lstrip(":"), test_task(task_dir)
+    if task_dir.endswith("/testCompile") or task_dir.endswith("/compile"):
+        mod = task_dir.rpartition("/")[0]
+        return ("" if mod in (".", "_root") else mod), "test"
+    return "", ""
+
+
+def test_commands(by_task: dict[str, list[str]], gradle: str = "gradle",
+                  template: str = "") -> list[str]:
+    """Commands to run test classes, grouped by the "<module>/<task>" of their shards."""
+    out = []
+    for task_dir, classes in by_task.items():
+        if template:
+            out.append(format_test_filter(template, task_dir, classes))
+            continue
+        mod, task = _module_and_test_task(task_dir)
+        filters = " ".join(f"--tests '{c}'" for c in classes)
+        if task.startswith(":"):
+            out.append(f"{gradle} {task} {filters}")
+        elif task_dir.endswith("/testCompile"):
+            names = ",".join(c.rsplit(".", 1)[-1] for c in classes)
+            out.append("mvn " + (f"-pl {mod} " if mod else "") + f"test -Dtest='{names}'")
+        elif not task:
+            out.append(f"{gradle} test {filters}   (use the test task of your build)")
+        else:
+            out.append(f"{task_dir}: " + " ".join(classes))
+    return out
+
+
+def format_test_filter(template: str, task_dir: str, classes: list[str]) -> str:
+    """A configured test command: {module} (`a:b`, "" for the root project), {task}
+    (`:a:b:test`, `:core:integrationTest`); per class {fqcn} / {simple} (one line per class);
+    or, for one line per module, {classes} (FQCNs separated by spaces) or {tests}
+    (`--tests 'A' --tests 'B'`)."""
+    mod, task = _module_and_test_task(task_dir)
+    task = task or "test"
     tests = " ".join(f"--tests '{c}'" for c in classes)
     if "{fqcn}" in template or "{simple}" in template:
         return "\n  ".join(template.format(module=mod, task=task, fqcn=c, tests=f"--tests '{c}'",
@@ -613,30 +651,13 @@ def tests(symbol: str, uses, task_of, gradle: str = "gradle", template: str = ""
     if not uses:
         return f"no test class uses {S.short(symbol)} directly"
     lines = [f"{S.short(symbol)} — used directly by {len(uses)} test classes"]
-    by_task: OrderedDict[str, list] = OrderedDict()
-    for t in uses:
-        by_task.setdefault(task_of(t.module), []).append(t)
+    for t in uses:  # (task_of is kept for callers; the commands come from test_commands)
         lines.append(f"  {t.test_class}  {t.source}:" + ", ".join(map(str, t.lines)))
     lines.append("run them (scipq-mcp does not):")
-    if template:
-        mods: OrderedDict[str, list[str]] = OrderedDict()
-        for t in uses:
-            mods.setdefault(t.module.rpartition("/")[0], []).append(t.test_class)
-        for mod, classes in mods.items():
-            lines.append("  " + format_test_filter(template, mod, classes))
-        return "\n".join(lines)
-    for task, ts in by_task.items():
-        filters = " ".join(f"--tests '{t.test_class}'" for t in ts)
-        if task.startswith(":"):
-            lines.append(f"  {gradle} {task} {filters}")
-        elif not task:
-            lines.append(f"  {gradle} test {filters}   (use the test task of your build)")
-        elif task.endswith("/testCompile"):
-            module = task.rsplit("/", 1)[0]
-            names = ",".join(t.test_class.rsplit(".", 1)[-1] for t in ts)
-            lines.append(f"  mvn -pl {module} test -Dtest='{names}'")
-        else:
-            lines.append(f"  {task}: " + " ".join(t.test_class for t in ts))
+    groups: OrderedDict[str, list[str]] = OrderedDict()
+    for t in uses:
+        groups.setdefault(t.module, []).append(t.test_class)
+    lines += ["  " + c for c in test_commands(groups, gradle, template)]
     return "\n".join(lines)
 
 
@@ -723,14 +744,8 @@ def tests_transitive(symbol: str, nodes, depth: int, task_of, gradle: str,
     lines.append("run them (scipq-mcp does not):")
     by_task: OrderedDict[str, list[str]] = OrderedDict()
     for (mod, fqcn), ns in classes.items():
-        by_task.setdefault(mod, []).append(fqcn)
-    if template:
-        for mod, names in by_task.items():
-            lines.append("  " + format_test_filter(template, mod, names))
-        return "\n".join(lines)
-    for mod, names in by_task.items():
-        filters = " ".join(f"--tests '{c}'" for c in names)
-        lines.append(f"  {gradle} {':' + mod.replace('/', ':') + ':test' if mod not in ('.', '') else 'test'} {filters}")
+        by_task.setdefault(ns[0].task_dir or mod, []).append(fqcn)
+    lines += ["  " + c for c in test_commands(by_task, gradle, template)]
     return "\n".join(lines)
 
 
@@ -902,8 +917,11 @@ def entities(rows, offset: int, limit: int) -> str:
 def settings_lines(st) -> list[str]:
     out = [f"profiles: {', '.join(st.profiles) or 'none'}"
            + (f" — {st.source}" if st.source else "")]
+    if getattr(st, "files", None):
+        out.append("configuration (later ones win): " + "; ".join(st.files))
     if st.tests_filter:
-        out.append(f"tests filter: {st.tests_filter}")
+        origin = getattr(st, "tests_filter_from", "")
+        out.append(f"tests filter: {st.tests_filter}" + (f"  (from {origin})" if origin else ""))
     for w in st.warnings:
         out.append(f"config warning: {w}")
     return out

@@ -15,8 +15,17 @@ The project configuration — `scipq-mcp --config FILE`, else `$XDG_CONFIG_HOME/
     filter = "./run-tests.sh {module}:test --tests '{fqcn}'"
 
 When several [[project]] entries match, the most specific kind wins: path > root_project >
-git_remote (then file order). Without a matching entry, built-in profiles whose annotations
-appear in the project are activated automatically.
+git_remote (then file order).
+
+A checkout can carry the team's settings in `.scipq.toml` at its root (the same keys as a
+[[project]] entry, without `match`), read from the working tree. Precedence, lowest first and
+key by key: built-in profiles, user profiles, the repository's `.scipq.toml`, the matching
+[[project]] entry of the user's configuration. Without profiles named in either file, built-in
+profiles whose annotations appear in the project are activated automatically.
+
+`.scipq.toml` comes with the repository, so it is untrusted input: it is size-capped, lists and
+strings are capped, path globs must be relative and stay inside the checkout, and nothing in it
+is ever executed (`tests.filter` is only printed).
 """
 
 from __future__ import annotations
@@ -24,6 +33,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import stat
 import subprocess
 import shutil
 import tomllib
@@ -35,6 +45,13 @@ KNOWN_PROJECT_KEYS = {"match", "profiles", "tests", "entry_points", "by_name", "
                       "persistence"}
 KNOWN_MATCH_KEYS = {"path", "root_project", "git_remote"}
 MATCH_ORDER = ("path", "root_project", "git_remote")
+
+REPO_FILE = ".scipq.toml"
+REPO_KEYS = KNOWN_PROJECT_KEYS - {"match"}
+REPO_MAX_BYTES = 256 * 1024
+REPO_MAX_ITEMS = 100     # per list (globs, annotations, entry points…)
+REPO_MAX_PATTERNS = 20
+REPO_MAX_TEXT = 400      # characters per string
 
 
 class ConfigError(Exception):
@@ -74,6 +91,8 @@ class Settings:
     by_name_patterns: list[str] = field(default_factory=list)
     concept_attributes: list[str] = field(default_factory=list)
     tests_filter: str = ""               # template: {module} {task} {fqcn} {simple} {classes}
+    tests_filter_from: str = ""          # where it came from
+    files: list[str] = field(default_factory=list)   # configuration applied, lowest first
     warnings: list[str] = field(default_factory=list)
 
 
@@ -175,11 +194,153 @@ def _matches(match: dict, root: str, lazy: dict) -> str | None:
     return None
 
 
+def _inside(path: str, root: str) -> bool:
+    root = os.path.realpath(root)
+    path = os.path.realpath(path)
+    return path == root or path.startswith(root + os.sep)
+
+
+def read_repo_config(root: str) -> tuple[dict, list[str]]:
+    """The checkout's `.scipq.toml`, validated (see the module docstring), and warnings."""
+    path = os.path.join(root, REPO_FILE)
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return {}, []
+    except OSError as e:
+        return {}, [f"{REPO_FILE}: {e}"]
+    if stat.S_ISLNK(st.st_mode):
+        if not _inside(path, root):
+            return {}, [f"{REPO_FILE} is a link out of the checkout: ignored"]
+        try:
+            st = os.stat(path)
+        except OSError as e:
+            return {}, [f"{REPO_FILE}: {e}"]
+    if not stat.S_ISREG(st.st_mode):
+        return {}, [f"{REPO_FILE} is not a regular file: ignored"]
+    if st.st_size > REPO_MAX_BYTES:
+        return {}, [f"{REPO_FILE} is larger than {REPO_MAX_BYTES // 1024} KiB: ignored"]
+    try:
+        data = _read_toml(path)
+    except ConfigError as e:
+        return {}, [str(e).replace(path, REPO_FILE)]
+    return sanitize_repo_config(data)
+
+
+def sanitize_repo_config(data: dict) -> tuple[dict, list[str]]:
+    warnings: list[str] = []
+    out: dict = {}
+    for key, value in data.items():
+        if key == "match":
+            warnings.append(f"{REPO_FILE}: `match` is ignored (the file applies to its own "
+                            "checkout)")
+        elif key not in REPO_KEYS:
+            warnings.append(f"{REPO_FILE}: unknown key {key!r}")
+        else:
+            clean = _capped(value, key, warnings)
+            if clean is not None:
+                out[key] = clean
+    bn = out.get("by_name")
+    if isinstance(bn, dict):
+        for k in ("globs", "exclude"):
+            if k in bn:
+                bn[k] = [g for g in bn[k] if _relative_glob(g, f"by_name.{k}", warnings)]
+        if len(bn.get("patterns", [])) > REPO_MAX_PATTERNS:
+            warnings.append(f"{REPO_FILE}: by_name.patterns: only the first "
+                            f"{REPO_MAX_PATTERNS} are used")
+            bn["patterns"] = bn["patterns"][:REPO_MAX_PATTERNS]
+    if "profiles" in out and not (isinstance(out["profiles"], list)
+                                  and all(isinstance(p, str) for p in out["profiles"])):
+        warnings.append(f"{REPO_FILE}: profiles must be a list of names: ignored")
+        del out["profiles"]
+    if "tests" in out and not isinstance(out["tests"].get("filter", ""), str):
+        warnings.append(f"{REPO_FILE}: tests.filter must be a string: ignored")
+        out["tests"].pop("filter", None)
+    return out, warnings
+
+
+def _capped(value, where: str, warnings: list[str]):
+    """Strings, numbers, booleans, and lists and tables of them, within the caps."""
+    if isinstance(value, str):
+        if len(value) > REPO_MAX_TEXT:
+            warnings.append(f"{REPO_FILE}: {where}: longer than {REPO_MAX_TEXT} characters: "
+                            "ignored")
+            return None
+        return value
+    if isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, list):
+        if len(value) > REPO_MAX_ITEMS:
+            warnings.append(f"{REPO_FILE}: {where}: only the first {REPO_MAX_ITEMS} items are "
+                            "used")
+            value = value[:REPO_MAX_ITEMS]
+        items = [_capped(v, where, warnings) for v in value]
+        return [v for v in items if v is not None]
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            c = _capped(v, f"{where}.{k}", warnings)
+            if c is not None:
+                out[k] = c
+        return out
+    warnings.append(f"{REPO_FILE}: {where}: unsupported value: ignored")
+    return None
+
+
+def _relative_glob(g, where: str, warnings: list[str]) -> bool:
+    if not isinstance(g, str) or not g:
+        return False
+    parts = g.replace("\\", "/").split("/")
+    if os.path.isabs(g) or g.startswith("~") or ".." in parts:
+        warnings.append(f"{REPO_FILE}: {where}: {g!r} must be relative and inside the "
+                        "checkout: ignored")
+        return False
+    return True
+
+
+def repo_template(profiles: list[str], detected: bool) -> str:
+    """A `.scipq.toml` to start from (printed by `scipq-mcp init-config`)."""
+    names = ", ".join(f'"{p}"' for p in profiles)
+    why = ("detected from the annotations this checkout uses" if detected else
+           "no shards yet: compile with the init script (scipq-mcp gradle-init), then run "
+           "init-config again to detect them")
+    return f"""# .scipq.toml — scipq-mcp settings shared by everyone working on this repository.
+# Read from the working tree (each branch or worktree uses its own). A personal [[project]]
+# entry in ~/.config/scipq/config.toml overrides it key by key. Nothing here is executed:
+# tests.filter is only printed for you to run. Paths and globs are relative to this directory.
+
+profiles = [{names}]   # {why}
+
+# [tests]
+# filter = "./gradlew {{module}}:test --tests '{{fqcn}}'"
+#   placeholders: {{module}} {{task}} {{fqcn}} {{simple}} {{classes}} {{tests}}
+
+# [by_name]
+# globs = ["*.xml", "*.jrxml"]      # files where names are used as text (reflection, reports)
+# exclude = ["generated/*"]
+
+# [[entry_points]]                  # framework entry points beyond the profiles
+# kind = "screen"
+# annotations = ["com.example.ui.Screen"]
+# supertypes = ["com.example.ui.BaseScreen"]
+# type_names = ["*Screen"]
+# packages = ["com.example.api"]    # public API used from outside: never dead code
+"""
+
+
+def _home_relative(path: str) -> str:
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home + os.sep) else path
+
+
 def settings_for(root: str, config_file: str | None = None, home: str | None = None,
                  present_annotations=None) -> Settings:
     """Settings for a checkout. `present_annotations` (SCIP symbols used in the project) enables
-    the automatic choice of built-in profiles when no [[project]] entry matches."""
+    the automatic choice of built-in profiles when neither the checkout's `.scipq.toml` nor a
+    matching [[project]] entry names profiles."""
     profiles, warnings = load_profiles(home)
+    repo, repo_warnings = read_repo_config(root)
+    warnings = warnings + repo_warnings
     path = config_file or os.path.join(home or config_home(), "config.toml")
     try:
         conf = _read_toml(path)
@@ -201,10 +362,16 @@ def settings_for(root: str, config_file: str | None = None, home: str | None = N
         if best is None or rank < best[0]:
             best = (rank, entry, kind)
     s = Settings(warnings=warnings)
+    personal = ""
+    if best is not None:
+        personal = (f"{_home_relative(path)} ([[project]] {best[2]} = "
+                    f"{best[1]['match'][best[2]]!r})")
     if best is not None and "profiles" in best[1]:
-        entry, kind = best[1], best[2]
-        s.profiles = list(entry.get("profiles", []))
-        s.source = f"{path} ({kind} = {entry['match'][kind]!r})"
+        s.profiles = list(best[1].get("profiles", []))
+        s.source = personal
+    elif "profiles" in repo:
+        s.profiles = list(repo["profiles"])
+        s.source = f"{REPO_FILE} in the checkout"
     elif present_annotations is not None:
         present = set(present_annotations)
         for name, data in profiles.items():
@@ -212,21 +379,23 @@ def settings_for(root: str, config_file: str | None = None, home: str | None = N
                     for a in ep.get("annotations", [])}
             if anns & present:
                 s.profiles.append(name)
-        s.source = "auto (annotations found in the project)" + (
-            f"; project settings from {path} ({best[2]} = {best[1]['match'][best[2]]!r})"
-            if best is not None else "")
+        s.source = "auto (annotations found in the project)"
     for name in s.profiles:
         data = profiles.get(name)
         if data is None:
             s.warnings.append(f"unknown profile {name!r}; available: {sorted(profiles)}")
             continue
-        _apply(s, data)
+        _apply(s, data, f"profile {name}")
+    if repo:
+        _apply(s, repo, REPO_FILE)
+        s.files.append(f"{REPO_FILE} (the team's, from the checkout)")
     if best is not None:
-        _apply(s, best[1])
+        _apply(s, best[1], personal)
+        s.files.append(personal + " (personal)")
     return s
 
 
-def _apply(s: Settings, data: dict) -> None:
+def _apply(s: Settings, data: dict, origin: str = "") -> None:
     for ep in data.get("entry_points", []):
         s.entry_annotations |= {to_symbol(a) for a in ep.get("annotations", [])}
         s.entry_packages += list(ep.get("packages", []))
@@ -252,3 +421,4 @@ def _apply(s: Settings, data: dict) -> None:
     t = data.get("tests", {})
     if t.get("filter"):
         s.tests_filter = t["filter"]
+        s.tests_filter_from = origin

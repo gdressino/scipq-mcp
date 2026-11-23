@@ -37,6 +37,7 @@ class Node:
     module: str = ""
     test: bool = False
     sites: list[int] = field(default_factory=list)  # 1-based lines where it calls `via`
+    task_dir: str = ""            # "<module>/<task>" of its shard (e.g. "core/compileTestJava")
 
 
 def module_of(task_dir: str) -> str:
@@ -95,7 +96,8 @@ class Graph:
     def names_seen(self, root: str, names: list[str], properties: set[str], globs: list[str],
                    exclude: list[str]) -> dict[str, str]:
         """{name: a file it appears in} — like names_in_strings, from the text index."""
-        self._text_index(root, list(globs))
+        with self.index._lock():  # another session may be refreshing it too
+            self._text_index(root, list(globs))
         excl = list(exclude) + list(DEFAULT_BY_NAME_EXCLUDE)
         found: dict[str, str] = {}
         for name in names:
@@ -172,7 +174,7 @@ class Graph:
     def ancestors(self, sid: int) -> list[int]:
         """Methods (or types) this one overrides (or extends): all levels, as recorded."""
         return [t for (t,) in self.con.execute(
-            "SELECT target_id FROM rels WHERE symbol_id = ? AND kind = ?",
+            "SELECT DISTINCT target_id FROM rels WHERE symbol_id = ? AND kind = ?",
             (sid, REL_IMPLEMENTATION))]
 
     def callers_of(self, targets: list[int]) -> list[tuple[int, int, int, str]]:
@@ -213,7 +215,7 @@ class Graph:
                 nxt.append(caller)
                 src, mod, test = sh[shard_id]
                 nodes[caller] = Node("", level, names.get(target, ""), src, 0, module_of(mod),
-                                     bool(test), _lines(sites))
+                                     bool(test), _lines(sites), mod)
                 if len(nodes) >= max_nodes:
                     truncated = True
                     break
@@ -657,15 +659,16 @@ class Graph:
         """(annotation, uses, files) for the annotations used on project definitions."""
         sh = self.shards()
         counts: dict[str, list] = {}
-        for ann, shard_id in self.con.execute(
-                "SELECT s.symbol, a.shard_id FROM annotations a JOIN symbols s "
+        for ann, def_id, line, shard_id in self.con.execute(
+                "SELECT s.symbol, a.def_id, a.line, a.shard_id FROM annotations a JOIN symbols s "
                 "ON s.id = a.annotation_id"):
             if shard_id not in sh or (scope and not fnmatch.fnmatch(sh[shard_id][0], scope)):
                 continue
-            c = counts.setdefault(ann, [0, set()])
-            c[0] += 1
-            c[1].add(shard_id)
-        rows = sorted(((a, n, len(f)) for a, (n, f) in counts.items()), key=lambda x: -x[1])
+            c = counts.setdefault(ann, [set(), set()])
+            c[0].add((def_id, line))       # once per use, also when a source has two shards
+            c[1].add(sh[shard_id][0])
+        rows = sorted(((a, len(u), len(f)) for a, (u, f) in counts.items()),
+                      key=lambda x: -x[1])
         return rows[:limit]
 
     def annotated_with(self, annotation: str) -> list[tuple[str, str, int, str]]:
@@ -682,7 +685,7 @@ class Graph:
                 WHERE a.annotation_id = ?""", (aid,)):
             if shard_id in sh:
                 out.append((sym, sh[shard_id][0], line + 1, sig or ""))
-        return sorted(out, key=lambda x: (x[1], x[2]))
+        return sorted(set(out), key=lambda x: (x[1], x[2], x[0]))
 
 
 def cycles(edges) -> list[list[str]]:
@@ -827,7 +830,9 @@ def git_diff_hunks(root: str, base: str, staged: bool, paths: list[str]
     git = shutil.which("git")
     if not git:
         raise GraphError("git is not available")
-    cmd = [git, "-C", root, "diff", "-U0", "--no-color", "--no-ext-diff"]
+    # --relative: paths relative to the project root (and only below it), as in the shards,
+    # also when the build lives in a subdirectory of its git repository.
+    cmd = [git, "-C", root, "diff", "-U0", "--no-color", "--no-ext-diff", "--relative"]
     if staged:
         cmd.append("--cached")
     if base:
