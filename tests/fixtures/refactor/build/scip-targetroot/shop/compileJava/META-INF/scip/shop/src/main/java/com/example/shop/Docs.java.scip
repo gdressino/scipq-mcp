@@ -1,0 +1,9 @@
+î
+-shop/src/main/java/com/example/shop/Docs.java*com/example/shop/Docs#BZ -!com/example/shop/Docs#`<init>`().B3com/example/shop/Docs#none().B	Z	
+ u
+com/example/shop/Docs#8 Uses {@link Prices#round(double)}.
+
+ @see Prices#round
+(2Docs:"java*public class DocsD
+!com/example/shop/Docs#`<init>`().(	2<init>:"java*public Docs()j
+com/example/shop/Docs#none().%Unrelated: {@link Order#getState()}. (2none:"java*public void none()"java

@@ -1,0 +1,8 @@
+„
+8shop/src/main/java/javax/jdo/annotations/FetchGroup.java5!javax/jdo/annotations/FetchGroup#BZ java/lang/String#B
+<(javax/jdo/annotations/FetchGroup#name().BR+!javax/jdo/annotations/Persistent#B?+javax/jdo/annotations/FetchGroup#members().BR}
+!javax/jdo/annotations/FetchGroup#"$
+ java/lang/annotation/Annotation#(2
+FetchGroup:$"java*public @interface FetchGroupY
+(javax/jdo/annotations/FetchGroup#name().(B2name:%"java*public abstract String name()h
++javax/jdo/annotations/FetchGroup#members().(B2members:."java*&public abstract Persistent[] members()"java

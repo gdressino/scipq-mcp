@@ -1,0 +1,6 @@
+÷
+/shop/src/main/java/com/example/shop/Prices.java,com/example/shop/Prices#BZ	 9#com/example/shop/Prices#`<init>`().BZ 6 com/example/shop/Prices#round().BZ local 0B$%R%java/lang/Math#B#java/lang/Math#round(+1).Blocal 0BG
+com/example/shop/Prices#(2Prices:!"java*public final class PricesI
+#com/example/shop/Prices#`<init>`().(	2<init>:"java*private Prices()W
+ com/example/shop/Prices#round().(P2round:*"java*"public static long round(double v)@
+local 02v:"java*double vB com/example/shop/Prices#round()."java

@@ -1,0 +1,58 @@
+ì2
+.shop/src/main/java/com/example/shop/Order.javajava/B
+java/util/Bjava/util/List#Bjavax/B
+javax/jdo/B javax/jdo/annotations/B'javax/jdo/annotations/Column#B#javax/B
+javax/jdo/B javax/jdo/annotations/B.$javax/jdo/annotations/Discriminator#B*javax/B
+javax/jdo/B javax/jdo/annotations/B6,javax/jdo/annotations/DiscriminatorStrategy#B2javax/B
+javax/jdo/B javax/jdo/annotations/B+!javax/jdo/annotations/FetchGroup#B'javax/B
+javax/jdo/B javax/jdo/annotations/B.$javax/jdo/annotations/NotPersistent#B*javax/B
+javax/jdo/B javax/jdo/annotations/B3)javax/jdo/annotations/PersistenceCapable#B/javax/B	
+javax/jdo/B	 javax/jdo/annotations/B	+!javax/jdo/annotations/Persistent#B	'lombok/B
+lombok/Getter#B
+lombok/Blombok/Setter#B3)javax/jdo/annotations/PersistenceCapable#B;1javax/jdo/annotations/PersistenceCapable#table().B.$javax/jdo/annotations/Discriminator#B9/javax/jdo/annotations/Discriminator#strategy().B6,javax/jdo/annotations/DiscriminatorStrategy#B/A7javax/jdo/annotations/DiscriminatorStrategy#CLASS_NAME.B0:7-javax/jdo/annotations/Discriminator#column().B<B+!javax/jdo/annotations/FetchGroup#B2(javax/jdo/annotations/FetchGroup#name().B5+javax/jdo/annotations/FetchGroup#members().B '+!javax/jdo/annotations/Persistent#B,62(javax/jdo/annotations/Persistent#name().B7;+!javax/jdo/annotations/Persistent#BIS2(javax/jdo/annotations/Persistent#name().BTXlombok/Getter#B#java/lang/SuppressWarnings#B
+java/lang/Bjava/Blombok/Generated#Blombok/B%com/example/shop/Order#state.Blocal 0B%com/example/shop/Order#total.Blocal 1Bjava/lang/String#B$com/example/shop/Order#note.Blocal 2Bjava/util/List#Bcom/example/shop/Line#B%com/example/shop/Order#lines.Blocal 3Blombok/Setter#B6"com/example/shop/Order#setState().J R6"com/example/shop/Order#setTotal().J R5!com/example/shop/Order#setNote().J R6"com/example/shop/Order#setLines().J R+com/example/shop/Order#BZ# ."com/example/shop/Order#`<init>`().B$com/example/shop/HasState#B&1com/example/shop/Order#state.BR%java/lang/SuppressWarnings#B
+java/lang/Bjava/Blombok/Generated#Blombok/B'com/example/shop/Order#state.Blocal 0BR8"com/example/shop/Order#getState().J R'javax/jdo/annotations/Column#B.$javax/jdo/annotations/Column#name().B3com/example/shop/Order#total.BZ %java/lang/SuppressWarnings#B
+java/lang/Bjava/Blombok/Generated#Blombok/B'com/example/shop/Order#total.Blocal 1BR8"com/example/shop/Order#getTotal().J R.$javax/jdo/annotations/NotPersistent#Bjava/lang/String#B2com/example/shop/Order#note.BZ local 2BR+!javax/jdo/annotations/Persistent#B6,javax/jdo/annotations/Persistent#mappedBy().Bjava/util/List#B com/example/shop/Line#B3com/example/shop/Order#lines.BZ %java/lang/SuppressWarnings#B
+java/lang/Bjava/Blombok/Generated#Blombok/Bjava/util/List#B com/example/shop/Line#B'com/example/shop/Order#lines.Blocal 3BR8"com/example/shop/Order#getLines().J Rjava/lang/String#B 7!com/example/shop/Order#getNote().B Z " &com/example/shop/Order#note.B!&com/example/shop/Order#note.B!#'ß
+com/example/shop/Order#GA persistent order: Lombok accessors, a fetch group naming its fields. "
+com/example/shop/HasState#(2Order:ô"java*ê@PersistenceCapable(table = "ORDERS")
+@Discriminator(strategy = DiscriminatorStrategy.CLASS_NAME, column = "CLASS")
+@FetchGroup(name = "withLines", members = {@Persistent(name = "lines"), @Persistent(name = "state")})
+@Getter
+@Setter
+public class Order implements HasStateF
+"com/example/shop/Order#`<init>`().(	2<init>:"java*public Order()C
+com/example/shop/Order#state.(2state:"java*private int statec
+com/example/shop/Order#total.(2total:9"java*1@Column(name = "TOTAL_AMOUNT")
+private long totalR
+com/example/shop/Order#note.(2note:*"java*"@NotPersistent
+private String notej
+com/example/shop/Order#lines.(2lines:@"java*8@Persistent(mappedBy = "order")
+private List<Line> lines}
+!com/example/shop/Order#getNote().,Written by hand next to Lombok's accessors. (2getNote:"java*public String getNote()†
+"com/example/shop/Order#getState()."+
+%com/example/shop/HasState#getState().(2getState:A"java*9@SuppressWarnings("all")
+@Generated
+public int getState()t
+"com/example/shop/Order#getTotal().(2getTotal:B"java*:@SuppressWarnings("all")
+@Generated
+public long getTotal()z
+"com/example/shop/Order#getLines().(2getLines:H"java*@@SuppressWarnings("all")
+@Generated
+public List<Line> getLines()}
+"com/example/shop/Order#setState().(2setState:K"java*C@SuppressWarnings("all")
+@Generated
+public void setState(int state)M
+local 02state:"java*final int stateB"com/example/shop/Order#setState().~
+"com/example/shop/Order#setTotal().(2setTotal:L"java*D@SuppressWarnings("all")
+@Generated
+public void setTotal(long total)N
+local 12total:"java*final long totalB"com/example/shop/Order#setTotal().|
+!com/example/shop/Order#setNote().(2setNote:L"java*D@SuppressWarnings("all")
+@Generated
+public void setNote(String note)M
+local 22note:"java*final String noteB!com/example/shop/Order#setNote().Ñ
+"com/example/shop/Order#setLines().(2setLines:R"java*J@SuppressWarnings("all")
+@Generated
+public void setLines(List<Line> lines)T
+local 32lines:"java*final List<Line> linesB"com/example/shop/Order#setLines()."java

@@ -26,6 +26,8 @@ from . import symbols as S
 from . import config as CFG
 from . import compare as CMP
 from . import cucumber as CU
+from . import jvm as JVM
+from . import refactor as R
 from . import context as C
 from . import libsrc as L
 from .cachedir import CacheError
@@ -639,6 +641,68 @@ class Service:
         run = self._cucumber_run_lines(nav.ws.root, affected, feats, st)
         return render.cucumber_affected(run, len(reached)) if run else ""
 
+    # --- refactor ---------------------------------------------------------------------------
+
+    def _b_refactor(self, plan=None, dry_run: bool = False, plan_id: str = "",
+                    verify: bool = False) -> Body:
+        def body(nav: Navigator):
+            root = nav.ws.root
+            if verify:
+                meta, _patch = R.load_meta(root, plan_id, self.cache_dir)
+                lines = R.verify(nav, meta)
+                ok = lines and lines[0].startswith("verified")
+                text = "\n".join(lines)
+                if ok:
+                    paths = [f["new"] for f in meta["files"]]
+                    try:
+                        changed, _srcs = self._b_changed("HEAD", False, paths, 3)(nav)
+                        text += "\n\nwhat the change reaches (changed since HEAD in the " \
+                                "patched files):\n" + changed
+                    except (QueryError, WorkspaceError) as e:
+                        text += f"\n(tests to run: run changed(); {e})"
+                return text, {f["new"] for f in meta["files"]}
+            if plan is None or plan == "":
+                raise QueryError("pass plan (or plan_id with verify=true); refactor_help shows "
+                                 "the format")
+            with self._graph(nav) as (g, _stats):
+                st = self.settings(root, g)
+            try:
+                res = R.run(nav, st, plan, lambda lvl: JVM.Worker(lvl, self.cache_dir),
+                            self.cache_dir, dry_run, lambda t: self._members_named(nav, t),
+                            JVM.language_level(root))
+            except JVM.ToolError as e:
+                raise QueryError(str(e)) from e
+            return res.text, set()
+        return body
+
+    def _members_named(self, nav: Navigator, sym: str) -> dict[str, list]:
+        """{name: [(kind, arity)]} of a type's members, inherited ones (libraries too)."""
+        out: dict[str, list] = {}
+        external = [sym]
+        if nav.definition(sym) is not None:
+            try:
+                groups, external = X.members(nav, sym, True)
+            except QueryError:
+                groups, external = [], []
+            for grp in groups:
+                for m in grp.members:
+                    out.setdefault(S.name_of(m.symbol), []).append(
+                        ("method" if S.is_method(m.symbol) else "field", R._arity_of(m)))
+        if external:
+            try:
+                index = self._library_index(nav.ws.root)
+                order = self._nearest_first(index, nav, sym, external) \
+                    if nav.definition(sym) is not None else [sym]
+                for _ext, _lib, mems, _h in L.ordered_members(index, order, set()):
+                    for m in mems:
+                        if m.kind in ("method", "field"):
+                            types = L.param_types(m.declaration) if m.kind == "method" else ()
+                            out.setdefault(m.name, []).append(
+                                (m.kind, len(types) if types is not None else -1))
+            except (CacheError, OSError, L.LibraryBusy, sqlite3.Error):
+                pass
+        return out
+
     # --- context ----------------------------------------------------------------------------
 
     def _b_context(self, symbol: str, token_budget: int = 4000) -> Body:
@@ -1189,6 +1253,10 @@ class Service:
                 api_only: bool = True, limit: int = 50, all_worktrees: bool = False) -> str:
         return self._run(project_root, self._b_compare(other_root, scope, api_only, limit,
                                                        all_worktrees), foot_first=True)
+
+    def refactor(self, plan=None, project_root: str | None = None, dry_run: bool = False,
+                 plan_id: str = "", verify: bool = False) -> str:
+        return self._run(project_root, self._b_refactor(plan, dry_run, plan_id, verify))
 
     def steps(self, query: str = "", project_root: str | None = None, check: bool = False,
               offset: int = 0, limit: int = DEFAULT_LIMIT) -> str:

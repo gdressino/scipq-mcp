@@ -84,5 +84,12 @@ rm -rf "$CROOT/build/scip-targetroot"
 compile_in "$CROOT" shop compileJava "$OUT/shop" "" shop/src/main/java
 compile_in "$CROOT" shop compileTestJava "$OUT/shop-test" "$OUT/shop" shop/src/test/java
 
+# A third one for refactoring: persistence (stand-in JDO annotations), Lombok, shadowing,
+# overloads, static imports and javadoc links.
+RROOT="$HERE/refactor"
+rm -rf "$RROOT/build/scip-targetroot"
+compile_in "$RROOT" shop compileJava "$OUT/refactor" "$LOMBOK" shop/src/main/java
+
 find "$ROOT/build/scip-targetroot" -type f -name '*.scip' | sort | sed "s|$ROOT/||"
 find "$CROOT/build/scip-targetroot" -type f -name '*.scip' | sort | sed "s|$HERE/||"
+find "$RROOT/build/scip-targetroot" -type f -name '*.scip' | sort | sed "s|$HERE/||"

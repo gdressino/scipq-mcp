@@ -26,4 +26,14 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      - name: JavaParser for the refactoring tests (checksum pinned in jvm.py)
+        shell: bash
+        run: |
+          v=$(sed -n 's/^PINNED_VERSION = "\(.*\)"/\1/p' src/scipq_mcp/jvm.py)
+          sum=$(sed -n 's/^PINNED_SHA256 = "\(.*\)"/\1/p' src/scipq_mcp/jvm.py)
+          jar="$RUNNER_TEMP/javaparser-core-$v.jar"
+          curl -fsSL -o "$jar" \
+            "https://repo1.maven.org/maven2/com/github/javaparser/javaparser-core/$v/javaparser-core-$v.jar"
+          echo "$sum  $jar" | shasum -a 256 -c -
+          echo "SCIPQ_TEST_JAVAPARSER=$jar" >> "$GITHUB_ENV"
       - run: uv run --python ${{ matrix.python }} pytest -q

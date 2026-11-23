@@ -10,4 +10,5 @@ build/
 # The test fixtures ship their SCIP shards; the jars used to regenerate them do not.
 !tests/fixtures/sample/build/
 !tests/fixtures/cucumber/build/
+!tests/fixtures/refactor/build/
 tests/fixtures/.jars/

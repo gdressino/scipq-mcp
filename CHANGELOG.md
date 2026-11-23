@@ -3,6 +3,25 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Added
+
+- Refactoring (V3 item 9): `refactor(plan, dry_run)` runs a plan (JSON: macros `rename`,
+  `change_signature`, `replace_calls`, `move`, `annotate`, `create`, or `select`/`do`
+  primitives with templates, node kinds and structural `where` patterns) into a patch stored
+  in the cache, never applied: sites from the index (override families, Lombok and record
+  accessors, constructors, imports, static imports, javadoc links), text edits of the original
+  ranges, every edited file re-parsed by JavaParser with the expected node over each edit.
+  Refuses stale files, library overrides, name clashes, shadowing by locals or enclosing
+  classes, and renames that would change a JDO/JPA column, table or class-name discriminator
+  (`keep_column`, `migration`); lists uses by name to review. `refactor(plan_id,
+  verify=true)` checks the index after the patch is applied and compiled. `refactor_help`
+  documents the format; an MCP prompt `refactor` walks through it.
+- `scipq-mcp tools install javaparser` (pinned version and SHA-256) and `tools status`.
+  JavaParser is not bundled: the newest jar in the cache, the Maven repository or Gradle's
+  cache is used, in a short-lived JVM at the lowest priority.
+
 ## 0.4.0 — 2026-11-23
 
 ### Added

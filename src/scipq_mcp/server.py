@@ -29,7 +29,9 @@ under a second with no startup. Use grep for text (string literals, comments, lo
 files) and for code edited since the last compilation. If an LSP/IDE tool is also available,
 prefer these unless you need uncompiled code. find_symbols finds a symbol from part of its
 name. Before changing a symbol, start with `context`: definition, body, callers, callees,
-overrides and tests in one answer, trimmed to a token budget.
+overrides and tests in one answer, trimmed to a token budget. To change code across files
+(rename, signature, move, API migration): call refactor_help first, then refactor; it returns
+a verified patch for you to apply, never edits the checkout itself.
 
 FIRST USE: the tools need the shards. If a tool answers that there are no SCIP shards, call
 `setup`: it inspects the build (Gradle/Maven) and returns the exact steps and the init script
@@ -479,6 +481,37 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         return service.index_status(project_root)
 
     @tool
+    def refactor(
+        plan: Annotated[dict[str, Any] | str | None, Field(
+            description='{"steps": [...]}: macros (rename, change_signature, replace_calls, '
+                        'move, annotate, create) or select/do primitives; refactor_help '
+                        "explains them")] = None,
+        project_root: ProjectRoot = "",
+        dry_run: Annotated[bool, Field(description="Only resolve: sites, nodes, captures; no "
+                                                   "patch")] = False,
+        plan_id: Annotated[str, Field(description="With verify: the id a previous call "
+                                                  "printed")] = "",
+        verify: Annotated[bool, Field(description="After applying the patch and compiling: "
+                                                  "check the new index, list tests to run")]
+        = False,
+    ) -> str:
+        """Runs a refactoring plan and returns a patch (stored in the cache, never applied):
+        sites from the index, syntax checked with JavaParser in a short-lived JVM, plus checks
+        a compiler does not make (columns of persistent fields, shadowing, library
+        overrides). Apply it with git apply after asking the user, compile, then verify."""
+        return service.refactor(plan, project_root, dry_run, plan_id, verify)
+
+    @tool
+    def refactor_help(
+        topic: Annotated[Literal["all", "flow", "macros", "select", "actions", "placeholders",
+                                 "checks", "examples"], Field(
+            description="What to explain")] = "all",
+    ) -> str:
+        """The refactoring plan format, with examples. Read it before writing a plan."""
+        from . import refactor as R
+        return R.help_topic(topic)
+
+    @tool
     def batch(
         queries: Annotated[list[dict[str, Any]], Field(
             description="[{'tool': 'references', 'args': {'symbol': 'Account#setState'}}, …] — "
@@ -496,6 +529,15 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
                     "stale, explain the steps it returns, ask me before changing the build or "
                     "~/.gradle, and once I agree make the change and tell me which build "
                     "command to run (do not run long builds without asking).")
+
+        @prompt(name="refactor", description="Refactor Java code with a verified plan")
+        def refactor_prompt(what: str = "") -> str:
+            return ("Refactor with scipq: " + (what + ". " if what else "") +
+                    "Call refactor_help, write a plan, run refactor with dry_run=true and "
+                    "adjust it until the sites are the right ones, then run it for real. Show "
+                    "me the summary, the review list and the diff, and ask me before applying "
+                    "the patch with git apply. After I agree and the code is compiled, run "
+                    "refactor with plan_id and verify=true and tell me which tests to run.")
 
     _slim_schemas(mcp)
     return mcp

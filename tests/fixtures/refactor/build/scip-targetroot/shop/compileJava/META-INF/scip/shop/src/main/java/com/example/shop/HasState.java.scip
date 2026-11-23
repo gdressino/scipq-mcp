@@ -1,0 +1,4 @@
+Î
+1shop/src/main/java/com/example/shop/HasState.java.com/example/shop/HasState#BZ 9%com/example/shop/HasState#getState().BRK
+com/example/shop/HasState#(2HasState:!"java*public interface HasState[
+%com/example/shop/HasState#getState().(B2getState:&"java*public abstract int getState()"java

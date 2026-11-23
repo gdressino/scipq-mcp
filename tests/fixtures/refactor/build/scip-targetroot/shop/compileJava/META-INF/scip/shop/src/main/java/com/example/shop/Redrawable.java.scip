@@ -1,0 +1,7 @@
+ 
+3shop/src/main/java/com/example/shop/Redrawable.java0com/example/shop/Redrawable#B Z 3'com/example/shop/Redrawable#`<init>`().B java/lang/Runnable#B,4;%com/example/shop/Redrawable#redraw().B	Z ƒ
+com/example/shop/Redrawable#"
+java/lang/Runnable#(2
+Redrawable:<"java*4public abstract class Redrawable implements RunnableP
+'com/example/shop/Redrawable#`<init>`().(	2<init>:"java*public Redrawable()H
+%com/example/shop/Redrawable#redraw().(2redraw:"java*void redraw()"java

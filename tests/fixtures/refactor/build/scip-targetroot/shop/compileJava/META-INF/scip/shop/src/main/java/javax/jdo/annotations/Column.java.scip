@@ -1,0 +1,6 @@
+ê
+4shop/src/main/java/javax/jdo/annotations/Column.java1javax/jdo/annotations/Column#BZ java/lang/String#B
+8$javax/jdo/annotations/Column#name().BRq
+javax/jdo/annotations/Column#"$
+ java/lang/annotation/Annotation#(2Column: "java*public @interface ColumnU
+$javax/jdo/annotations/Column#name().(B2name:%"java*public abstract String name()"java

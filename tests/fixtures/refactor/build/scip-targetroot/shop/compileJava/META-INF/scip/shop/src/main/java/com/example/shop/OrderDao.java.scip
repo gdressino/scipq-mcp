@@ -1,0 +1,9 @@
+³
+1shop/src/main/java/com/example/shop/OrderDao.java.com/example/shop/OrderDao#BZ 1%com/example/shop/OrderDao#`<init>`().Bjava/lang/String#B='com/example/shop/OrderDao#openFilter().BZ 9#com/example/shop/OrderDao#weight().BZ
+ !com/example/shop/Order#Blocal 0BRlocal 0B	,"com/example/shop/Order#getState().B	local 0B	,"com/example/shop/Order#getTotal().B	 (G
+com/example/shop/OrderDao#(2OrderDao:"java*public class OrderDaoL
+%com/example/shop/OrderDao#`<init>`().(	2<init>:"java*public OrderDao()Š
+'com/example/shop/OrderDao#openFilter().-A JDOQL filter: names the field in a string. (2
+openFilter:""java*public String openFilter()T
+#com/example/shop/OrderDao#weight().(2weight:#"java*public long weight(Order o)B
+local 02o:"java*Order oB#com/example/shop/OrderDao#weight()."java

@@ -1,0 +1,15 @@
+è
+.shop/src/main/java/com/example/shop/Panel.java+com/example/shop/Panel#BZ ."com/example/shop/Panel#`<init>`().B7!com/example/shop/Panel#refresh().B	Z 4com/example/shop/Panel#wire().B	Z java/lang/Runnable#Blocal 0BRlocal 0B	#java/lang/Runnable#run().B
+5com/example/shop/Panel#setup().B
+	Z
+ (com/example/shop/Panel#wire().B&com/example/shop/Redrawable#Bjava/lang/Override#Blocal 2BZ +!com/example/shop/Panel#refresh().B>
+com/example/shop/Panel#(2Panel:"java*public class PanelF
+"com/example/shop/Panel#`<init>`().(	2<init>:"java*public Panel()F
+!com/example/shop/Panel#refresh().(2refresh:"java*void refresh()G
+com/example/shop/Panel#wire().(2wire:"java*void wire(Runnable r)@
+local 02r:"java*
+Runnable rBcom/example/shop/Panel#wire().@
+com/example/shop/Panel#setup().(2setup:"java*void setup()_
+local 2"
+java/lang/Runnable#run().(2run:#"java*@Override
+public void run()Blocal 1"java

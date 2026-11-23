@@ -1,0 +1,11 @@
+Á
+Cshop/src/main/java/javax/jdo/annotations/DiscriminatorStrategy.java@,javax/jdo/annotations/DiscriminatorStrategy#B!Z C7javax/jdo/annotations/DiscriminatorStrategy#`<init>`().B!K7javax/jdo/annotations/DiscriminatorStrategy#CLASS_NAME.BRA7javax/jdo/annotations/DiscriminatorStrategy#`<init>`().BJ6javax/jdo/annotations/DiscriminatorStrategy#VALUE_MAP.BRA7javax/jdo/annotations/DiscriminatorStrategy#`<init>`().Bà
+,javax/jdo/annotations/DiscriminatorStrategy#"
+java/lang/Enum#"!
+java/lang/constant/Constable#"
+java/lang/Comparable#"
+java/io/Serializable#(2DiscriminatorStrategy:)"java*!public enum DiscriminatorStrategyl
+7javax/jdo/annotations/DiscriminatorStrategy#`<init>`().(	2<init>:'"java*private DiscriminatorStrategy()
+7javax/jdo/annotations/DiscriminatorStrategy#CLASS_NAME.2
+CLASS_NAME:8"java*0DiscriminatorStrategy.CLASS_NAME /* ordinal 0 */|
+6javax/jdo/annotations/DiscriminatorStrategy#VALUE_MAP.2	VALUE_MAP:7"java*/DiscriminatorStrategy.VALUE_MAP /* ordinal 1 */"java

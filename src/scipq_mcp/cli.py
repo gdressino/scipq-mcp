@@ -4,6 +4,7 @@ directly for debugging.
     scipq-mcp [serve] [--root DIR]        MCP server on stdio
     scipq-mcp gradle-init                 print the Gradle init script template
     scipq-mcp query [--root DIR] <tool> <args>
+    scipq-mcp tools install javaparser    download JavaParser for refactoring (checksum pinned)
 """
 
 from __future__ import annotations
@@ -57,6 +58,9 @@ def _query_parser(sub) -> None:
     add("def", "symbol")
     add("context", "symbol", budget={"type": int, "default": 4000})
     add("steps", **paging, query={"default": ""}, check={"action": "store_true"})
+    add("refactor", plan={"default": "", "help": "the plan: JSON text, or @file.json"},
+        dry_run={"action": "store_true"}, plan_id={"default": ""},
+        verify={"action": "store_true"})
     add("compare", scope={"default": ""}, all={"action": "store_true"},
         limit={"type": int, "default": 50}, other={"default": ""},
         all_worktrees={"action": "store_true"})
@@ -110,6 +114,12 @@ def _run_query(a) -> str:
                               by_name=a.by_name, by_name_globs=a.globs, scope=a.scope)
     if t == "def":
         return svc.definition(a.symbol)
+    if t == "refactor":
+        plan = a.plan
+        if plan.startswith("@"):
+            with open(plan[1:], encoding="utf-8") as fh:
+                plan = fh.read()
+        return svc.refactor(plan or None, dry_run=a.dry_run, plan_id=a.plan_id, verify=a.verify)
     if t == "steps":
         return svc.steps(a.query, check=a.check, offset=a.offset, limit=a.limit)
     if t == "context":
@@ -274,6 +284,10 @@ def main(argv: list[str] | None = None) -> None:
                    help="prune: also entries unused for this many days (default 30)")
     c.add_argument("--root", help="clear: the checkout whose entry to remove (default: cwd)")
     c.add_argument("--all", action="store_true", help="clear: every entry")
+    tl = sub.add_parser("tools", help="external tools refactoring uses (JavaParser)")
+    tl.add_argument("action", choices=["status", "install"])
+    tl.add_argument("name", nargs="?", default="javaparser", choices=["javaparser"])
+    tl.add_argument("--cache-dir", help="cache base directory (default: user cache)")
     _query_parser(sub)
 
     a = parser.parse_args(argv)
@@ -297,6 +311,16 @@ def main(argv: list[str] | None = None) -> None:
         print(_run_query(a))
     elif a.command == "cache":
         print(_cache(a))
+    elif a.command == "tools":
+        from . import jvm
+
+        if a.action == "install":
+            try:
+                print(jvm.install_javaparser(a.cache_dir))
+            except (jvm.ToolError, OSError) as e:
+                raise SystemExit(f"error: {e}") from e
+        else:
+            print("\n".join(jvm.status(a.cache_dir)))
 
 
 if __name__ == "__main__":

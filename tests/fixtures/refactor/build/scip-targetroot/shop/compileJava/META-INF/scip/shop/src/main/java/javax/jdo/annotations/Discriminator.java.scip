@@ -1,0 +1,7 @@
+À
+;shop/src/main/java/javax/jdo/annotations/Discriminator.java8$javax/jdo/annotations/Discriminator#BZ 6,javax/jdo/annotations/DiscriminatorStrategy#BC/javax/jdo/annotations/Discriminator#strategy().B"R%java/lang/String#B
+A-javax/jdo/annotations/Discriminator#column().BR†
+$javax/jdo/annotations/Discriminator#"$
+ java/lang/annotation/Annotation#(2Discriminator:'"java*public @interface Discriminatorw
+/javax/jdo/annotations/Discriminator#strategy().(B2strategy:8"java*0public abstract DiscriminatorStrategy strategy()b
+-javax/jdo/annotations/Discriminator#column().(B2column:'"java*public abstract String column()"java

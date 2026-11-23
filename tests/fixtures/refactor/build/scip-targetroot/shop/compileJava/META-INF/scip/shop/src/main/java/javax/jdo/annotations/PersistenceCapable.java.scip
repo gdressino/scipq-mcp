@@ -1,0 +1,6 @@
+µ
+@shop/src/main/java/javax/jdo/annotations/PersistenceCapable.java=)javax/jdo/annotations/PersistenceCapable#B$Z java/lang/String#B
+E1javax/jdo/annotations/PersistenceCapable#table().BRá
+)javax/jdo/annotations/PersistenceCapable#JStand-in for JDO's annotation (the fixture compiles without the JDO jar). "$
+ java/lang/annotation/Annotation#(2PersistenceCapable:,"java*$public @interface PersistenceCapabled
+1javax/jdo/annotations/PersistenceCapable#table().(B2table:&"java*public abstract String table()"java

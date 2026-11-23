@@ -1,0 +1,8 @@
+õ
+0shop/src/main/java/com/example/shop/Counter.java-com/example/shop/Counter#BZ
+ 0$com/example/shop/Counter#`<init>`().B3com/example/shop/Counter#count.BR6 com/example/shop/Counter#next().BZ	 local 0BR)com/example/shop/Counter#count.B)com/example/shop/Counter#count.Blocal 0BD
+com/example/shop/Counter#(2Counter:"java*public class CounterJ
+$com/example/shop/Counter#`<init>`().(	2<init>:"java*public Counter()E
+com/example/shop/Counter#count.(2count:"java*private int countE
+ com/example/shop/Counter#next().(2next:"java*public int next()G
+local 0(=2total:"java*	int totalB com/example/shop/Counter#next()."java

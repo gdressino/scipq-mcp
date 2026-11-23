@@ -23,7 +23,8 @@ the rest is the MCP SDK), one server for any number of checkouts.
 
 scipq-mcp **reads** shards, sources and git metadata (`git diff`, `git ls-files`). It never
 compiles, never runs tests and never writes to your repository; the only thing it writes is its
-own cache. The index is produced by the build you
+own cache. Even refactoring only produces a patch, stored in that cache, for you (or the agent,
+with your permission) to apply with `git apply`. The index is produced by the build you
 already run; scipq-mcp consumes it. When the index is not enough (stale shards, files that
 never compiled, a checkout that was never built) it says so and tells you what to build,
 without running it.
@@ -152,10 +153,45 @@ query, and pinned sessions upgrade when you choose, not all at once mid-day.
 | `index_status()` | shards per task, stale and uncompiled files, tracked files without a shard, what to recompile | — |
 | `compare(other_root, scope, api_only)` | this checkout against another (e.g. two worktrees): definitions only in one side or with another signature, maybe-renamed pairs; with shared git history, members changed on both sides since the merge base and what merging one into the other would break (the other side's uses of what one removed or changed) | — |
 | `steps(query, check)` | Cucumber-JVM: a step definition's feature steps and the scenarios to run; a .feature's steps and the method each runs; a step's text and its method; `check=True`: undefined, ambiguous, not understood and unused step definitions | — |
+| `refactor(plan, dry_run)` / `refactor(plan_id, verify)` | runs a refactoring plan (see below) into a verified patch; after it is applied and compiled, checks the new index and lists what to test | rename / change signature / move |
+| `refactor_help(topic)` | the plan format, with examples | — |
 | `batch(queries)` | several of the above in one call | — |
 
 All tools are read-only and take an optional `project_root`. Lists take `offset`/`limit` and
 say `next offset N` when there is more.
+
+### Refactoring
+
+`refactor(plan)` turns a plan the agent writes into a patch. A plan is JSON data, never code:
+macros (`rename`, `change_signature`, `replace_calls`, `move`, `annotate`, `create`) or
+primitives that select nodes (the index's sites of a symbol, or every node of a kind inside a
+declaration, optionally matching a structural pattern like `$x.size() == 0`) and act on them
+(rename, replace with a template, wrap, remove, insert, add/remove/reorder arguments and
+parameters, annotations, modifiers, members, imports). `refactor_help` documents the format.
+
+- **Where**: from the index, so a rename touches that method's override family and its Lombok
+  accessors, and nothing else with the same name; uses by name the index cannot see (strings,
+  XML, `.feature` files, column names) are listed for review.
+- **How**: every change is an edit of the original text (comments and formatting outside the
+  edits are kept byte for byte); [JavaParser](https://javaparser.org) checks that each edited
+  file parses at the project's Java version with a node of the expected kind over each edit.
+  It runs in a short-lived JVM, at the lowest priority, that reads the sources from scipq-mcp
+  and never touches the checkout.
+- **Refused**: stale files or a running build; a method overriding a library method; a name
+  that already exists in the hierarchy; a local or an enclosing (anonymous) class that would
+  capture a renamed member; a persistent field whose column, or a class whose table or
+  class-name discriminator, follows its name (JDO/JPA), unless the plan keeps the column
+  (`keep_column`) or declares a migration.
+- **Then**: the patch (with full blob ids, for `git apply -3`) goes to the cache. Apply it with
+  `git apply`, compile, and run `refactor(plan_id=…, verify=true)`: every renamed identifier
+  must resolve to the renamed symbol, and it lists what the change reaches and the tests to
+  run.
+
+JavaParser is not bundled. scipq-mcp uses the newest `javaparser-core` jar it finds in its
+cache, `~/.m2/repository` or Gradle's cache (3.28+ for Java 25); `scipq-mcp tools install
+javaparser` downloads the pinned version from Maven Central and checks its SHA-256, and
+`mvn dependency:get -Dartifact=com.github.javaparser:javaparser-core:3.28.2` works too. A JDK
+11+ (`javac`) is needed to compile the small worker once.
 
 ### Library and JDK symbols
 
@@ -345,6 +381,8 @@ for debugging or scripts:
 scipq-mcp query --root ~/src/project refs 'Account#setState'
 scipq-mcp query impl Entity --direct
 scipq-mcp query callers 'Entity#setState()' --depth 2
+scipq-mcp query refactor --plan @plan.json --dry-run
+scipq-mcp tools status                  # which JavaParser and JDK refactoring would use
 ```
 
 ## Development

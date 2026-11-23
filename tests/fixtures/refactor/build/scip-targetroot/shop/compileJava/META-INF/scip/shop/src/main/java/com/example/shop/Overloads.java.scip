@@ -1,0 +1,15 @@
+¾	
+2shop/src/main/java/com/example/shop/Overloads.java/com/example/shop/Overloads#BZ 2&com/example/shop/Overloads#`<init>`().B5com/example/shop/Overloads#m().B	
+Z java/lang/String#Blocal 0BRlocal 1BR7!com/example/shop/Overloads#m(+1).B	
+Z java/lang/Object#Blocal 2BRlocal 3BR7!com/example/shop/Overloads#use().B		Z	 )com/example/shop/Overloads#m().B
+	)com/example/shop/Overloads#m().B	J
+com/example/shop/Overloads#(2	Overloads:"java*public class OverloadsN
+&com/example/shop/Overloads#`<init>`().(	2<init>:"java*public Overloads()G
+com/example/shop/Overloads#m().(2m:"java*void m(String s, int k)?
+local 02s:"java*String sBcom/example/shop/Overloads#m().<
+local 12k:"java*int kBcom/example/shop/Overloads#m().I
+!com/example/shop/Overloads#m(+1).(2m:"java*void m(Object o, int k)A
+local 22o:"java*Object oB!com/example/shop/Overloads#m(+1).>
+local 32k:"java*int kB!com/example/shop/Overloads#m(+1).>
+!com/example/shop/Overloads#use().(2use:"java*
+void use()"java

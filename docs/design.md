@@ -5,9 +5,12 @@ Status: v1 and v2 implemented; v3 proposed.
 ## Principles
 
 1. **Read-only.** scipq-mcp reads shards, sources and git metadata. The only processes it
-   starts are `grep`, `find` and read-only `git` (`ls-files`, `diff`, `rev-parse`, `show`). It
-   never compiles, runs tests, or writes to the repository. The only thing it writes is its own
-   cache (v2). When the index is not enough it says so and names what to build.
+   starts are `grep`, `find`, read-only `git` (`ls-files`, `diff`, `rev-parse`, `show`) and,
+   for refactoring only (v3 item 9), a short-lived JVM running JavaParser that receives
+   sources on stdin, answers on stdout and exits at the end of the call (`javac` compiles it
+   once into the cache). It never compiles the project, runs tests, or writes to the
+   repository. The only thing it writes is its own cache (v2), refactoring patches included.
+   When the index is not enough it says so and names what to build.
 2. **No resident index.** v1 keeps nothing between calls. v2 adds an *on-disk*, disposable
    auxiliary database for queries that must look at everything; it is never loaded into memory.
 3. **Generic core, declarative profiles.** The package knows nothing about any particular
@@ -200,6 +203,13 @@ section. Unknown keys are reported, not ignored silently.
 7. Entry points per profile on top of `impact`.
 8. Persistence model per profile: entities ↔ tables, fields ↔ columns, relations, and who writes
    a field (setter uses, Lombok included, plus assignments found in the line).
-9. Rename plan as a diff, never applied: exact columns, the override family, Lombok accessors,
-   uses by name flagged for review; refuses when affected files are stale.
+9. Refactoring plans (done ahead of 4–8): JSON data the agent writes — macros (rename,
+   change_signature, replace_calls, move, annotate, create) or select/do primitives over the
+   index's sites or nodes of a kind, with structural `where` patterns. Edits are text edits of
+   the original ranges composed inside-out (`edits.py`); JavaParser (`worker/`, not bundled)
+   only locates nodes and validates that every edited file parses with the expected node over
+   each edit (expressions are parenthesized when they would merge). Checks a compiler does not
+   make: shadowing by locals and enclosing classes, library overrides, JDO/JPA columns, tables
+   and class-name discriminators. The patch is stored in the cache, applied by the agent with
+   `git apply`; `verify` checks the new index after the build.
 10. Generalize: Kotlin, and reading an aggregated `index.scip` from other indexers.

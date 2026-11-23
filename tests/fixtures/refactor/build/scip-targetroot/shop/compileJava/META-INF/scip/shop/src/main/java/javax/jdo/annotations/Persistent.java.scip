@@ -1,0 +1,9 @@
+ò
+8shop/src/main/java/javax/jdo/annotations/Persistent.java5!javax/jdo/annotations/Persistent#BZ java/lang/String#B
+<(javax/jdo/annotations/Persistent#name().BRjava/lang/String#B
+@,javax/jdo/annotations/Persistent#mappedBy().BR!}
+!javax/jdo/annotations/Persistent#"$
+ java/lang/annotation/Annotation#(2
+Persistent:$"java*public @interface PersistentY
+(javax/jdo/annotations/Persistent#name().(B2name:%"java*public abstract String name()e
+,javax/jdo/annotations/Persistent#mappedBy().(B2mappedBy:)"java*!public abstract String mappedBy()"java

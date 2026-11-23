@@ -1,0 +1,13 @@
+Â	
+-shop/src/main/java/com/example/shop/Line.javajavax/B
+javax/jdo/B javax/jdo/annotations/B3)javax/jdo/annotations/PersistenceCapable#B/javax/B
+javax/jdo/B javax/jdo/annotations/B+!javax/jdo/annotations/Persistent#B'3)javax/jdo/annotations/PersistenceCapable#B;1javax/jdo/annotations/PersistenceCapable#table().B*com/example/shop/Line#BZ -!com/example/shop/Line#`<init>`().B+!javax/jdo/annotations/Persistent#B!com/example/shop/Order#B2com/example/shop/Line#order.BZ 3com/example/shop/Line#quantity.B
+R
+!com/example/shop/Order#B4com/example/shop/Line#owner().BZ &com/example/shop/Line#order.B`
+com/example/shop/Line#(2Line:>"java*6@PersistenceCapable(table = "LINES")
+public class LineD
+!com/example/shop/Line#`<init>`().(	2<init>:"java*public Line()P
+com/example/shop/Line#order.(2order:'"java*@Persistent
+private Order orderK
+com/example/shop/Line#quantity.(2quantity:"java*private int quantityG
+com/example/shop/Line#owner().(2owner:"java*public Order owner()"java
