@@ -56,6 +56,7 @@ def _query_parser(sub) -> None:
         globs={"nargs": "*", "default": None}, scope={"default": ""})
     add("def", "symbol")
     add("context", "symbol", budget={"type": int, "default": 4000})
+    add("steps", **paging, query={"default": ""}, check={"action": "store_true"})
     add("compare", scope={"default": ""}, all={"action": "store_true"},
         limit={"type": int, "default": 50}, other={"default": ""},
         all_worktrees={"action": "store_true"})
@@ -109,6 +110,8 @@ def _run_query(a) -> str:
                               by_name=a.by_name, by_name_globs=a.globs, scope=a.scope)
     if t == "def":
         return svc.definition(a.symbol)
+    if t == "steps":
+        return svc.steps(a.query, check=a.check, offset=a.offset, limit=a.limit)
     if t == "context":
         return svc.context(a.symbol, token_budget=a.budget)
     if t == "compare":

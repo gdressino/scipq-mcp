@@ -1072,3 +1072,132 @@ def compare(a_label: str, b_label: str, diff, api_only: bool, scope: str, git: d
     lines.append("(from both indexes, syntactic: behavior changes and overload resolution are "
                  "not seen; scipq-mcp never merges)")
     return "\n".join(lines)
+
+
+# --- cucumber ---------------------------------------------------------------------------------
+
+def _glue_label(x) -> str:
+    return f"{S.short(x.symbol)}  {x.source}:{x.line}"
+
+
+def _cut(rows: list[str], limit: int) -> list[str]:
+    return rows[:limit] + ([f"    … and {len(rows) - limit} more"] if len(rows) > limit else [])
+
+
+def steps_check(glues, feats, match, offset: int, limit: int) -> str:
+    steps = [(f, s) for f in feats for s in f.steps]
+    undefined, ambiguous, used = [], [], set()
+    for f, s in steps:
+        m = match(s)
+        used |= {id(x) for x in m}
+        if not m:
+            undefined.append(f"    {s.source}:{s.line}  {s.keyword} {s.text}".rstrip())
+        elif len(m) > 1:
+            ambiguous.append(f"    {s.source}:{s.line}  {s.keyword} {s.text}  → "
+                             + ", ".join(S.short(x.symbol) for x in m))
+    unknown = [f"    {_glue_label(x)}  @{x.annotation}" + (f"({x.text!r})" if x.text else
+                                                             "(not made of string literals)")
+               for x in glues if x.kind == "unknown"]
+    unused = [f"    {_glue_label(x)}  @{x.annotation}({x.text!r})" for x in glues
+              if x.regex is not None and id(x) not in used]
+    kinds = {k: sum(1 for x in glues if x.kind == k) for k in ("expression", "regex", "unknown")}
+    lines = [f"cucumber: {len(glues)} step definitions ({kinds['expression']} expressions, "
+             f"{kinds['regex']} regexes" + (f", {kinds['unknown']} not understood"
+                                            if kinds["unknown"] else "")
+             + f"); {len(feats)} features, {sum(len(f.scenarios) for f in feats)} scenarios, "
+             f"{len(steps)} steps (docs/, hidden and ignored files left out)"]
+    for title, rows in (("undefined steps (no step definition matches)", undefined),
+                        ("ambiguous steps (several match)", ambiguous),
+                        ("step definitions not understood (pattern)", unknown),
+                        ("step definitions no step uses", unused)):
+        lines.append(f"  {title}: {len(rows) or 'none'}")
+        lines += _cut(rows[offset:], limit)
+    return "\n".join(lines)
+
+
+def feature_steps(feat, match, offset: int, limit: int) -> str:
+    lines = [f"{feat.name or '(no name)'} — {feat.source} ({feat.language}, "
+             f"{len(feat.scenarios)} scenarios" + (f", tags {' '.join(feat.tags)}" if feat.tags
+                                                   else "") + ")"]
+    rows, seen = [], set()
+    for s in feat.steps:
+        key = (s.line, s.text)
+        if key in seen:  # an outline's step, once per Examples row: show its first expansion
+            continue
+        seen.add(key)
+        m = match(s)
+        target = ("UNDEFINED" if not m else _glue_label(m[0]) if len(m) == 1 else
+                  "AMBIGUOUS: " + ", ".join(S.short(x.symbol) for x in m))
+        rows.append(f"  {s.line:>5}  {s.keyword} {s.text}  → {target}")
+    shown, suffix = page(rows, offset, limit)
+    return "\n".join(lines + ([f"steps{suffix}:"] if suffix else []) + list(shown))
+
+
+def _run_block(run) -> list[str]:
+    if not run:
+        return []
+    affected, by_source, cmds, excluded = run
+    n = sum(len(v) for v in affected.values())
+    lines = [f"scenarios to run: {n} in {len(affected)} features"]
+    shown = 0
+    for src, idx in sorted(affected.items()):
+        for k in sorted(idx):
+            if shown == 30:
+                break
+            sc = by_source[src].scenarios[k]
+            tags = f"  [{' '.join(sc.tags)}]" if sc.tags else ""
+            lines.append(f"  {src}:{sc.line}  {sc.name[:100]}{tags[:80]}")
+            shown += 1
+    if n > shown:
+        lines.append(f"  … and {n - shown} more")
+    lines.append("run them (scipq-mcp does not):")
+    lines += [f"  {c}" for c in cmds]
+    if excluded:
+        lines.append(f"WARNING: {len(excluded)} of them carry a tag the build leaves out "
+                     "([cucumber] exclude_tags), so they will not run: " + "; ".join(excluded[:5])
+                     + (" …" if len(excluded) > 5 else ""))
+    return lines
+
+
+def glue_uses(glues, uses, run, offset: int, limit: int) -> str:
+    x = glues[0]
+    lines = [_glue_label(x)]
+    for g in glues:
+        lines.append(f"  @{g.annotation}({g.text!r})  ({g.kind}"
+                     + (f": {g.regex.pattern[:120]}" if g.regex is not None else "") + ")")
+    rows, seen = [], set()
+    for f, s in uses:
+        key = (s.source, s.line, s.text)
+        if key in seen:
+            continue
+        seen.add(key)
+        sc = [f.scenarios[k].name for k in s.pickles[:1]]
+        rows.append(f"  {s.source}:{s.line}  {s.keyword} {s.text}"
+                    + (f"  [{sc[0]}]" if sc else ""))
+    if not rows:
+        lines.append("no step in the project's .feature files uses it (docs/, hidden and "
+                     "ignored files left out)")
+        return "\n".join(lines)
+    shown, suffix = page(rows, offset, limit)
+    lines.append(f"used by {len(rows)} steps in {len({f.source for f, _s in uses})} "
+                 f"features{suffix}:")
+    lines += list(shown)
+    return "\n".join(lines + _run_block(run))
+
+
+def step_text(query: str, found) -> str:
+    if not found:
+        return f"no step definition matches {query!r} (undefined)"
+    head = (f"{query!r} is run by" if len(found) == 1 else
+            f"{query!r} is AMBIGUOUS: {len(found)} step definitions match")
+    return "\n".join([head] + [f"  {_glue_label(x)}  @{x.annotation}({x.text!r})"
+                               for x in found])
+
+
+def cucumber_affected(run, reached: int) -> str:
+    lines = _run_block(run)
+    if not lines:
+        return ""
+    lines[0] = "cucumber " + lines[0] + (f" (through {reached} step definitions reached)"
+                                         if reached else "") + ":"
+    return "\n".join(lines)

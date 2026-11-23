@@ -195,6 +195,24 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         return service.context(symbol, project_root, token_budget)
 
     @tool
+    def steps(
+        query: Annotated[str, Field(description="A step definition (method), a .feature path, "
+                                                "or a step's text (with or without keyword); "
+                                                "empty with check=True")] = "",
+        project_root: ProjectRoot = "",
+        check: Annotated[bool, Field(description="The whole project: undefined and ambiguous "
+                                                 "steps, step definitions not understood or "
+                                                 "unused")] = False,
+        offset: Offset = 0,
+        limit: Limit(100) = 100,
+    ) -> str:
+        """Cucumber-JVM. For a step definition: its expression and every feature step it runs,
+        with the command to run those scenarios. For a .feature: each step and the method that
+        runs it (undefined/ambiguous marked). For a step's text: the method(s) it runs. tests
+        (transitive) and changed also list the scenarios affected."""
+        return service.steps(query, project_root, check, offset, limit)
+
+    @tool
     def compare(
         other_root: Annotated[str, Field(description="The other checkout: a worktree or clone "
                                                      "of this project, compiled")] = "",

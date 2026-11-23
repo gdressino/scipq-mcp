@@ -40,9 +40,10 @@ import tomllib
 from dataclasses import dataclass, field
 from importlib import resources
 
-KNOWN_PROFILE_KEYS = {"profile", "entry_points", "persistence", "by_name", "concepts", "tests"}
+KNOWN_PROFILE_KEYS = {"profile", "entry_points", "persistence", "by_name", "concepts", "tests",
+                      "cucumber"}
 KNOWN_PROJECT_KEYS = {"match", "profiles", "tests", "entry_points", "by_name", "concepts",
-                      "persistence", "dead_code"}
+                      "persistence", "dead_code", "cucumber"}
 KNOWN_MATCH_KEYS = {"path", "root_project", "git_remote"}
 MATCH_ORDER = ("path", "root_project", "git_remote")
 
@@ -90,6 +91,12 @@ class Settings:
     by_name_exclude: list[str] = field(default_factory=list)    # path globs
     by_name_patterns: list[str] = field(default_factory=list)
     dead_code_exclude: list[str] = field(default_factory=list)  # path globs: never candidates
+    # Cucumber: commands to run affected scenarios ({names}, {features}; {tags}), and tags the
+    # build leaves out (an affected scenario carrying one is reported: it will not run).
+    cucumber_run: str = ""
+    cucumber_run_features: str = ""
+    cucumber_exclude_tags: list[str] = field(default_factory=lambda: ["@pending", "@ignore",
+                                                                      "@wip", "@skip"])
     concept_attributes: list[str] = field(default_factory=list)
     tests_filter: str = ""               # template: {module} {task} {fqcn} {simple} {classes}
     tests_filter_from: str = ""          # where it came from
@@ -443,6 +450,13 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
     s.dead_code_exclude += [g for g in data.get("dead_code", {}).get("exclude", [])
                             if isinstance(g, str) and g]
     s.concept_attributes += list(data.get("concepts", {}).get("attributes", []))
+    cu = data.get("cucumber", {})
+    if isinstance(cu.get("run"), str) and cu["run"]:
+        s.cucumber_run = cu["run"]
+    if isinstance(cu.get("run_features"), str) and cu["run_features"]:
+        s.cucumber_run_features = cu["run_features"]
+    if isinstance(cu.get("exclude_tags"), list):
+        s.cucumber_exclude_tags = [t for t in cu["exclude_tags"] if isinstance(t, str)]
     t = data.get("tests", {})
     if t.get("filter"):
         s.tests_filter = t["filter"]

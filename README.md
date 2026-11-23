@@ -151,6 +151,7 @@ query, and pinned sessions upgrade when you choose, not all at once mid-day.
 | `tests(symbol)` | test classes that use a symbol directly, with a ready `--tests` / `-Dtest` filter | — |
 | `index_status()` | shards per task, stale and uncompiled files, tracked files without a shard, what to recompile | — |
 | `compare(other_root, scope, api_only)` | this checkout against another (e.g. two worktrees): definitions only in one side or with another signature, maybe-renamed pairs; with shared git history, members changed on both sides since the merge base and what merging one into the other would break (the other side's uses of what one removed or changed) | — |
+| `steps(query, check)` | Cucumber-JVM: a step definition's feature steps and the scenarios to run; a .feature's steps and the method each runs; a step's text and its method; `check=True`: undefined, ambiguous, not understood and unused step definitions | — |
 | `batch(queries)` | several of the above in one call | — |
 
 All tools are read-only and take an optional `project_root`. Lists take `offset`/`limit` and
@@ -260,6 +261,19 @@ The repository does not run anything by itself. `.scipq.toml` is treated as untr
 it is ignored when larger than 256 KiB or a link out of the checkout, lists and strings are
 capped, globs must be relative and stay inside the checkout, keys such as the cache directory
 cannot be set from it, and `tests.filter` is only text the tools print for you to run.
+
+Cucumber: `tests(transitive=true)` and `changed` list the scenarios affected (through the
+step definitions reached, or changed `.feature` lines) and a command to run them, from
+`[cucumber]`: `run` with `{names}` (an anchored regex of the scenario names, `\Q…\E` each) or
+`{features}` (`path:line,…`), and `run_features` with `{tags}` (one tag of its own per feature),
+used when whole features are affected. Scenarios carrying one of `exclude_tags` (default
+`@pending`, `@ignore`, `@wip`, `@skip`) are reported: the build leaves them out.
+
+```toml
+[cucumber]
+run = "./gradlew :app:cucumber -Pname='{names}'"
+run_features = "./gradlew :app:cucumber -Ptags='{tags}'"
+```
 
 Everyone on the team also needs the shards: the init script from `scipq-mcp gradle-init` in
 `~/.gradle/init.d/` (or the Maven snippet from `setup`), then a compilation.

@@ -1,0 +1,10 @@
+ö
+1shop/src/test/java/io/cucumber/java/en/Given.javajava/B
+java/lang/Bjava/lang/annotation/B)java/lang/annotation/Retention#B%java/B
+java/lang/Bjava/lang/annotation/B/%java/lang/annotation/RetentionPolicy#B+)java/lang/annotation/Retention#B
+/%java/lang/annotation/RetentionPolicy#B7-java/lang/annotation/RetentionPolicy#RUNTIME.B".io/cucumber/java/en/Given#BZ	 java/lang/String#B
+6"io/cucumber/java/en/Given#value().BRÝ
+io/cucumber/java/en/Given#KStand-in for Cucumber's annotation (the fixture compiles without its jar). "$
+ java/lang/annotation/Annotation#(2Given:C"java*;@Retention(RetentionPolicy.RUNTIME)
+public @interface GivenU
+"io/cucumber/java/en/Given#value().(B2value:&"java*public abstract String value()"java

@@ -1,0 +1,10 @@
+×
+-shop/src/main/java/com/example/shop/Cart.java*com/example/shop/Cart#BZ -!com/example/shop/Cart#`<init>`().B0com/example/shop/Cart#items.BR2com/example/shop/Cart#add().BZ local 0BR&com/example/shop/Cart#items.Blocal 0B3com/example/shop/Cart#size().B
+Z
+ &com/example/shop/Cart#items.BN
+com/example/shop/Cart#A shopping cart. (2Cart:"java*public class CartD
+!com/example/shop/Cart#`<init>`().(	2<init>:"java*public Cart()B
+com/example/shop/Cart#items.(2items:"java*private int itemsI
+com/example/shop/Cart#add().(2add:""java*public void add(int count)A
+local 02count:"java*	int countBcom/example/shop/Cart#add().B
+com/example/shop/Cart#size().(2size:"java*public int size()"java

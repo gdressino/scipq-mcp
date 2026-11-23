@@ -56,16 +56,18 @@ trap 'rm -rf "$OUT"; rm -f "$ROOT/core/src/main/java/com/example/model/Gone.java
 
 rm -rf "$ROOT/build/scip-targetroot"
 
-# compile <module> <task> <classes out> <classpath> <source dir>
-compile() {
-  local module="$1" task="$2" classes="$3" classpath="$4" srcdir="$5"
-  local targetroot="$ROOT/build/scip-targetroot/$module/$task"
+# compile_in <project root> <module> <task> <classes out> <classpath> <source dir>
+compile_in() {
+  local root="$1" module="$2" task="$3" classes="$4" classpath="$5" srcdir="$6"
+  local targetroot="$root/build/scip-targetroot/$module/$task"
   mkdir -p "$classes"
   # shellcheck disable=SC2046
   javac -encoding UTF-8 -d "$classes" -cp "$classpath" -processorpath "$PROCESSORPATH" \
-    "-Xplugin:scip -sourceroot:$ROOT -targetroot:$targetroot" \
-    $(find "$ROOT/$srcdir" -name '*.java' | sort)
+    "-Xplugin:scip -sourceroot:$root -targetroot:$targetroot" \
+    $(find "$root/$srcdir" -name '*.java' | sort)
 }
+
+compile() { compile_in "$ROOT" "$@"; }
 
 # Gone.java is compiled and then removed, leaving an orphan shard (the source no longer exists).
 GONE="$ROOT/core/src/main/java/com/example/model/Gone.java"
@@ -75,4 +77,12 @@ rm -f "$GONE"
 compile app compileJava "$OUT/app" "$LOMBOK:$OUT/core" app/src/main/java
 compile app compileTestJava "$OUT/app-test" "$LOMBOK:$OUT/core:$OUT/app" app/src/test/java
 
+# A second, small project: Cucumber glue and features, with stand-ins for Cucumber's
+# annotations (no Cucumber jar needed).
+CROOT="$HERE/cucumber"
+rm -rf "$CROOT/build/scip-targetroot"
+compile_in "$CROOT" shop compileJava "$OUT/shop" "" shop/src/main/java
+compile_in "$CROOT" shop compileTestJava "$OUT/shop-test" "$OUT/shop" shop/src/test/java
+
 find "$ROOT/build/scip-targetroot" -type f -name '*.scip' | sort | sed "s|$ROOT/||"
+find "$CROOT/build/scip-targetroot" -type f -name '*.scip' | sort | sed "s|$HERE/||"

@@ -27,3 +27,20 @@ def sample_copy(tmp_path) -> str:
         for n in files:
             os.utime(os.path.join(d, n), (1_700_000_100, 1_700_000_100))
     return str(dst)
+
+
+CUCUMBER = os.path.join(os.path.dirname(__file__), "fixtures", "cucumber")
+
+
+@pytest.fixture
+def cucumber_root(tmp_path) -> str:
+    """A writable copy of the Cucumber fixture, shards newer than their sources."""
+    dst = tmp_path / "cucumber"
+    shutil.copytree(CUCUMBER, dst)
+    for d, _, files in os.walk(dst):
+        for n in files:
+            os.utime(os.path.join(d, n), (1_700_000_000, 1_700_000_000))
+    for d, _, files in os.walk(dst / "build" / "scip-targetroot"):
+        for n in files:
+            os.utime(os.path.join(d, n), (1_700_000_100, 1_700_000_100))
+    return str(dst)

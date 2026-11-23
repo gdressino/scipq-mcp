@@ -25,6 +25,7 @@ from . import setup as SETUP
 from . import symbols as S
 from . import config as CFG
 from . import compare as CMP
+from . import cucumber as CU
 from . import context as C
 from . import libsrc as L
 from .cachedir import CacheError
@@ -514,14 +515,122 @@ class Service:
                     nodes, _trunc = g.impact(sym, max(1, min(depth, 8)))
                     st = self.settings(nav.ws.root, g)
                     keep = self._test_classes(g, nodes, st)
+                    # Glue methods are test code without @Test: before the filter below.
+                    cuke = self._cucumber_affected(nav, g, st, {sym} | {n.symbol for n in nodes})
                 allowed = {c for cs in keep.values() for c in cs}
                 nodes = [n for n in nodes if not n.test or _fqcn(n.symbol) in allowed]
                 text = render.tests_transitive(sym, nodes, depth, X.test_task, gradle, template)
+                if cuke:
+                    text = (text if "no test reaches" not in text else "") + (
+                        "\n" if text and "no test reaches" not in text else "") + cuke
                 return render.index_note(stats) + note + text, {n.source for n in nodes if n.test}
             sym, note, uses = self._resolved(nav, symbol, lambda s: X.tests_using(nav, s))
             return note + render.tests(sym, uses, X.test_task, gradle, template), \
                 {t.source for t in uses}
         return body
+
+    # --- cucumber ---------------------------------------------------------------------------
+
+    def _b_steps(self, query: str = "", check: bool = False, offset: int = 0,
+                 limit: int = DEFAULT_LIMIT) -> Body:
+        def body(nav: Navigator):
+            with self._graph(nav) as (g, stats):
+                glues = CU.glue(g, nav.ws.root)
+                st = self.settings(nav.ws.root, g)
+            feats = CU.features(nav.ws.root)
+            note = render.index_note(stats)
+            if not glues and not feats:
+                return note + "no Cucumber step definitions or .feature files in this project", \
+                    set()
+            match = CU.matcher(glues)
+            if check or not query:
+                return note + render.steps_check(glues, feats, match, offset, limit), set()
+            if query.endswith(".feature"):
+                src = nav._normalize_source(query)
+                feat = next((f for f in feats if f.source == src), None)
+                if feat is None:  # e.g. under docs/: read it anyway when asked by path
+                    try:
+                        with open(os.path.join(nav.ws.root, src), encoding="utf-8",
+                                  errors="replace") as fh:
+                            feat = CU.parse_feature(fh.read(), src)
+                    except OSError as e:
+                        raise QueryError(f"{query}: {e}") from e
+                if feat is None:
+                    raise QueryError(f"{query}: no feature in it")
+                return note + render.feature_steps(feat, match, offset, limit), set()
+            by_symbol: dict[str, list] = {}
+            for x in glues:
+                by_symbol.setdefault(x.symbol, []).append(x)
+            sym = query if query in by_symbol else None
+            if sym is None:
+                try:
+                    r = nav.resolve(query)
+                    if r.symbol in by_symbol:
+                        sym = r.symbol
+                except (QueryError, WorkspaceError):
+                    pass
+            if sym is not None:
+                uses, affected = [], {}
+                for f in feats:
+                    for s in f.steps:
+                        if any(x.symbol == sym for x in match(s)):
+                            uses.append((f, s))
+                            affected.setdefault(f.source, set()).update(s.pickles)
+                run = self._cucumber_run_lines(nav.ws.root, affected, feats, st)
+                return note + render.glue_uses(by_symbol[sym], uses, run, offset, limit), \
+                    {x.source for x in by_symbol[sym]}
+            found: dict[str, object] = {}
+            for s in CU.text_steps(query):
+                for x in match(s):
+                    found.setdefault(x.symbol + x.text, x)
+            return note + render.step_text(query, list(found.values())), set()
+        return body
+
+    def _cucumber_run_lines(self, root: str, affected: dict[str, set[int]], feats, st) -> list:
+        """The scenarios affected (rows), the commands to run them and warnings."""
+        affected = {k: v for k, v in affected.items() if v}
+        if not affected:
+            return []
+        gradle = "./gradlew" if os.path.exists(os.path.join(root, "gradlew")) else "gradle"
+        cmds = CU.run_commands(affected, feats, st.cucumber_run, st.cucumber_run_features,
+                               gradle)
+        by_source = {f.source: f for f in feats}
+        excluded = []
+        for src, idx in sorted(affected.items()):
+            for k in sorted(idx):
+                sc = by_source[src].scenarios[k]
+                bad = [t for t in sc.tags if t in st.cucumber_exclude_tags]
+                if bad:
+                    excluded.append(f"{src}:{sc.line} {sc.name} ({' '.join(bad)})")
+        return [affected, by_source, cmds, excluded]
+
+    def _cucumber_affected(self, nav: Navigator, g, st, glue_symbols: set[str],
+                           changed_features: dict[str, list] | None = None) -> str:
+        """The Cucumber scenarios a set of glue methods (reached by an impact) and changed
+        .feature lines affect, with the commands to run them; "" when none."""
+        try:
+            glues = CU.glue(g, nav.ws.root)
+        except sqlite3.Error:
+            return ""
+        if not glues and not changed_features:
+            return ""
+        feats = CU.features(nav.ws.root)
+        match = CU.matcher(glues)
+        reached = glue_symbols & {x.symbol for x in glues}
+        affected: dict[str, set[int]] = {}
+        if reached:
+            for f in feats:
+                for s in f.steps:
+                    if reached & {x.symbol for x in match(s)}:
+                        affected.setdefault(f.source, set()).update(s.pickles)
+        for src, ranges in (changed_features or {}).items():
+            f = next((x for x in feats if x.source == src), None)
+            if f is None:
+                continue
+            lines = {ln for start, count in ranges for ln in range(start, start + max(count, 1))}
+            affected.setdefault(src, set()).update(CU.pickles_at(f, lines))
+        run = self._cucumber_run_lines(nav.ws.root, affected, feats, st)
+        return render.cucumber_affected(run, len(reached)) if run else ""
 
     # --- context ----------------------------------------------------------------------------
 
@@ -913,7 +1022,13 @@ class Service:
                         nodes[sym] = G.Node(sym, 0, "", e["source"], e["line"],
                                             G.module_of(mod), True, task_dir=mod)
                 tests = self._test_classes(g, nodes.values(), st)
+                feature_hunks = {p: r for p, r in G.git_diff_hunks(
+                    nav.ws.root, base, staged, paths or []).items() if p.endswith(".feature")}
+                cuke = self._cucumber_affected(
+                    nav, g, st, set(res["definitions"]) | set(nodes), feature_hunks)
             tests_line = self._tests_line(nav.ws.root, tests, st.tests_filter)
+            if cuke:
+                tests_line = (tests_line + "\n" if tests_line else "") + cuke
             text = render.changed(res, base if not staged else f"{base} (staged)",
                                   [n for n in nodes.values() if n.depth > 0], tests_line, depth)
             return render.index_note(stats) + text, {e["source"] for e in
@@ -1068,6 +1183,10 @@ class Service:
         return self._run(project_root, self._b_compare(other_root, scope, api_only, limit,
                                                        all_worktrees), foot_first=True)
 
+    def steps(self, query: str = "", project_root: str | None = None, check: bool = False,
+              offset: int = 0, limit: int = DEFAULT_LIMIT) -> str:
+        return self._run(project_root, self._b_steps(query, check, offset, limit))
+
     def context(self, symbol: str, project_root: str | None = None,
                 token_budget: int = 4000) -> str:
         return self._run(project_root, self._b_context(symbol, token_budget), foot_first=True)
@@ -1161,7 +1280,7 @@ class Service:
         "tests": "_b_tests", "index_status": "_b_index_status",
         "impact": "_b_impact", "path": "_b_path", "changed": "_b_changed", "deps": "_b_deps",
         "dead_code": "_b_dead_code", "census": "_b_census", "cache_status": "_b_cache_status",
-        "context": "_b_context", "compare": "_b_compare",
+        "context": "_b_context", "compare": "_b_compare", "steps": "_b_steps",
     }
 
     def batch(self, queries: list[dict[str, Any]], project_root: str | None = None) -> str:

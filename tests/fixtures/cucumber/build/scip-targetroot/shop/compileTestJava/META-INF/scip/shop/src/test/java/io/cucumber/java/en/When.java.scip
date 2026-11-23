@@ -1,0 +1,10 @@
+ï
+0shop/src/test/java/io/cucumber/java/en/When.javajava/B
+java/lang/Bjava/lang/annotation/B)java/lang/annotation/Retention#B%java/B
+java/lang/Bjava/lang/annotation/B/%java/lang/annotation/RetentionPolicy#B+)java/lang/annotation/Retention#B
+/%java/lang/annotation/RetentionPolicy#B7-java/lang/annotation/RetentionPolicy#RUNTIME.B"-io/cucumber/java/en/When#BZ	 java/lang/String#B
+5!io/cucumber/java/en/When#value().BRÚ
+io/cucumber/java/en/When#KStand-in for Cucumber's annotation (the fixture compiles without its jar). "$
+ java/lang/annotation/Annotation#(2When:B"java*:@Retention(RetentionPolicy.RUNTIME)
+public @interface WhenT
+!io/cucumber/java/en/When#value().(B2value:&"java*public abstract String value()"java

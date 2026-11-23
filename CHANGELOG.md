@@ -3,6 +3,27 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Added
+
+- Cucumber-JVM (V3): `steps(query, check)`. Step definitions come from the auxiliary index
+  (annotations of `io.cucumber.java.<language>`, and old `cucumber.api.java`), their text read
+  from the source (literals concatenated, `value =`); Cucumber Expressions (`{int}`,
+  `{string}`, `{word}`, `{float}`, `{}`…, `@ParameterType` ones, optional `(s)`,
+  alternatives `a/b`, escapes) and regexes become Python regexes. `.feature` files are read
+  with Gherkin's keywords for their `# language:` (en, es, pt, fr, de, it, nl; English by
+  default), the keyword removed exactly; each Examples row is a scenario, tags are inherited
+  (feature, rule, examples), and a Background's steps belong to every scenario of its feature
+  or rule. For a step definition: its steps and the scenarios to run; for a .feature: each
+  step's method (undefined, ambiguous); for a step's text: its method; `check=True`: undefined,
+  ambiguous, not understood and unused step definitions.
+- `tests(transitive=true)` and `changed` list the Cucumber scenarios affected (glue reached,
+  changed `.feature` lines) and how to run them: `[cucumber] run` with `{names}` /
+  `{features}`, `run_features` with `{tags}` (whole features with a tag of their own); more
+  than 150 scenarios: whole features by tag, or the whole suite. Scenarios carrying an
+  `exclude_tags` tag are reported.
+
 ## 0.3.0 — 2026-11-22
 
 ### Added
