@@ -138,37 +138,43 @@ class Graph:
         stems = concept_terms(query)
         if not stems:
             return []
-        q = " OR ".join(f'"{t}"*' for t in stems)
         cond = ("" if include_tests else " AND s.test = 0") + \
             ("" if include_generated else " AND m.generated = 0")
         join = ("JOIN concept_map m ON m.rowid = {t}.rowid JOIN shards s ON s.id = m.shard_id "
                 "AND s.orphan = 0")
-        def scores(table: str, weights: str) -> list:
+
+        def scores(table: str, weights: str, q: str) -> list:
             return list(self.con.execute(
                 f"SELECT m.symbol_id, bm25({table}{weights}) FROM {table} "
                 f"{join.format(t=table)} WHERE {table} MATCH ?{cond}", (q,)))
+        # One query per word (its family of prefixes), to know how many of the words each
+        # definition holds: a definition with all of them beats one word in a name.
+        total: dict[int, float] = {}
+        covered: dict[int, int] = {}
         try:
-            by_name = scores("concept_names", "")
-            by_text = scores("concepts", ", 5.0, 2.0, 4.0")       # ann, sig, calls
-            by_doc = scores("concept_docs", "")
+            for stem_ in stems:
+                q = " OR ".join(f'"{v}"*' for v in prefix_family(stem_))
+                name_of: dict[int, float] = {}
+                for sid, score in scores("concept_names", "", q):
+                    name_of[sid] = max(name_of.get(sid, 0.0), -score)
+                text_of: dict[int, list[float]] = {}
+                for sid, score in scores("concepts", ", 5.0, 2.0, 4.0", q):   # ann, sig, calls
+                    text_of.setdefault(sid, []).append(-score)
+                doc_of: dict[int, float] = {}
+                for sid, score in scores("concept_docs", "", q):
+                    doc_of[sid] = max(doc_of.get(sid, 0.0), -score)
+                for sid in set(name_of) | set(text_of) | set(doc_of):
+                    v = sorted(text_of.get(sid, []), reverse=True)
+                    # The name weighs most; then the best text row and a capped share of the
+                    # others (labels from many call sites); then the javadoc.
+                    total[sid] = total.get(sid, 0.0) + 3.0 * name_of.get(sid, 0.0) + \
+                        (v[0] if v else 0.0) + 0.2 * sum(v[1:4]) + 0.5 * doc_of.get(sid, 0.0)
+                    covered[sid] = covered.get(sid, 0) + 1
         except sqlite3.OperationalError:
             return []
-        name_of: dict[int, float] = {}
-        for sid, score in by_name:
-            name_of[sid] = max(name_of.get(sid, 0.0), -score)
-        text_of: dict[int, list[float]] = {}
-        for sid, score in by_text:
-            text_of.setdefault(sid, []).append(-score)
-        doc_of: dict[int, float] = {}
-        for sid, score in by_doc:
-            doc_of[sid] = max(doc_of.get(sid, 0.0), -score)
-        total: dict[int, float] = {}
-        for sid in set(name_of) | set(text_of) | set(doc_of):
-            v = sorted(text_of.get(sid, []), reverse=True)
-            # The name weighs most; then the best text row and a capped share of the others
-            # (labels from many call sites); then the javadoc.
-            total[sid] = (3.0 * name_of.get(sid, 0.0) + (v[0] if v else 0.0)
-                          + 0.2 * sum(v[1:4]) + 0.5 * doc_of.get(sid, 0.0))
+        n_terms = len(stems)
+        for sid in total:
+            total[sid] *= (covered[sid] / n_terms) ** 2
         names = self.names(total)
         excl = [x.replace("**", "*") for x in exclude or []]
         scored = []
@@ -179,8 +185,9 @@ class Graph:
             k = S.kind_of(sym)
             if kind and {"field": "term"}.get(kind, kind) != k:
                 continue
-            owner = " ".join(words_of_symbol_owner(sym))
-            in_owner = sum(1 for t in stems if re.search(r"(?:^|\s)" + re.escape(t), owner))
+            owner = " ".join(words_of_symbol_owner(sym, packages=True))
+            in_owner = sum(1 for t in stems if any(re.search(r"(?:^|\s)" + re.escape(v), owner)
+                                                   for v in prefix_family(t)))
             score *= 1 + 0.4 * in_owner / len(stems)
             score *= (1.6 if k == "type" else 1.25 if k == "method" else
                       0.7 if re.fullmatch(r"[A-Z0-9_$]+", S.name_of(sym) or "") else 1.0)
@@ -1019,6 +1026,8 @@ que se su sus es son como entre sobre the of a an to in for on and or with is ar
 from as into via""".split())
 
 
+_WHOLE: set[str] = set()       # stems that are whole words (nothing was taken off)
+_KEEP_BASE: set[str] = set()   # stems also searched bare (none for now)
 _SUFFIXES = ("aciones", "iciones", "acion", "icion", "ciones", "cion", "adores", "adoras",
              "ador", "adora", "adas", "ados", "ada", "ado", "ando", "iendo", "ings", "ing",
              "ions", "ion", "ers", "er", "ed", "ar", "ir")
@@ -1030,20 +1039,40 @@ def stem(word: str) -> str:
     enviadas -> envi."""
     w = "".join(c for c in unicodedata.normalize("NFD", word.lower())
                 if unicodedata.category(c) != "Mn")
-    if len(w) > 4 and w.endswith("es"):
+    # Plurals: -es after a consonant that takes it in Spanish (factores, funciones,
+    # ordenes), else -s (clases, states, tickets).
+    if len(w) > 4 and w.endswith("es") and w[-3] in "lnrdzj":
         w = w[:-2]
     elif len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
         w = w[:-1]
     for suf in _SUFFIXES:
         if w.endswith(suf) and len(w) - len(suf) >= 4:
             return w[:-len(suf)]
+    _WHOLE.add(w)        # no ending taken off: the word itself, as a prefix
     return w
 
 
-def words_of_symbol_owner(symbol: str) -> list[str]:
+def words_of_symbol_owner(symbol: str, packages: bool = False) -> list[str]:
+    """Words of the types around a symbol (and, with packages, of its last three package
+    segments: a service in …billing.invoices is about invoices even if its name is not)."""
     from .index import words_of
-    return [w for d in S.parse(symbol)[:-1] if d.suffix == S.TYPE for w in words_of(d.name)
-            .split()]
+    parts = S.parse(symbol)[:-1]
+    out = [w for d in parts if d.suffix == S.TYPE for w in words_of(d.name).split()]
+    if packages:
+        pkgs = [d.name for d in parts if d.suffix == S.NAMESPACE][-3:]
+        out += [w for p in pkgs for w in words_of(p).split()]
+    return out
+
+
+def prefix_family(stem_: str) -> list[str]:
+    """The prefixes a stem stands for: the stem itself when it is a whole word, else the
+    stem followed by the starts of its usual endings (import -> importac, importar, importad,
+    importer…), so that it does not match words that only share the start (importe)."""
+    base = stem_
+    if len(base) < 4 or base in _WHOLE:
+        return [base]
+    fam = [base + x for x in ("ac", "ar", "ad", "er", "ing", "ion", "ed", "or", "ab", "ib")]
+    return fam + [base] if base in _KEEP_BASE else fam
 
 
 def concept_terms(query: str) -> list[str]:
