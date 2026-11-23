@@ -746,6 +746,7 @@ def test_check_refs_reads_line_lists_getters_and_neighbouring_numbers(sample_cop
                  f"- Elsewhere: (v4 `Entity.rewind()`, en main `Entity#wind`); the main `Entity#run`.\n"
                  f"- A field of the type: `com.example.model.Ghost.total`.\n"
                  f"- {e}:19 — the only caller of `findById`.\n"
+                 f"- `getState()` reads and `findById(1)` finds\n  (`{e}:2` and `:10`).\n"
                  f"- En main el alta (`{e}:3` `setState(int)`) era otra.\n"
                  f"- `setState(int)` and `getState()` ({e}:15/:18).\n"
                  f"- `getState()` + `findById(1)` ({e}:18-19) read it.\n"
@@ -756,9 +757,12 @@ def test_check_refs_reads_line_lists_getters_and_neighbouring_numbers(sample_cop
     with open(os.path.join(sample_copy, ".scipq.toml"), "w") as fh:
         fh.write('[check_refs]\nother_versions = ["v4", ""]\n')
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
-    assert "8 problems: 6 lines no longer in the symbol named, 1 members not found, 1 types " \
+    assert "10 problems: 8 lines no longer in the symbol named, 1 members not found, 1 types " \
         "not found" in out, out
     assert "line 19 no longer mentions findById" in out          # a member alone in backticks
+    # respectively, over a wrapped line: getState at 2 (no), findById at 10 (no)
+    assert f"{e}:2  — line 2 no longer mentions getState" in out
+    assert f"{e}:10  — line 10 no longer mentions findById" in out
     assert "com.example.model.Ghost  — no such type" in out
     assert "line 18 no longer mentions findById" in out          # each name of a list
     assert "Entity#run  — Entity has no member run" in out and "wind" not in out

@@ -15,6 +15,12 @@ version and date when releasing.
   in the branch; "en main" in an earlier clause ("… en main no. — evidencia: `X`") does not
   count. Quoted code: before the path (`` `a.b()` (File:N) ``), up to an ellipsis, inherited
   by "idéntico en File:N", and matched over line breaks.
+- `check_refs` reads a paragraph or list item wrapped over several lines as one (names on
+  the line before a path, line lists on the next one), and reports each problem at the
+  line of its mention.
+- `check_refs` pairs calls and line ranges respectively when the lines together do not
+  hold the names: "`execute()` … y `close()` … (`F.java:403-421` y `:383-401`)" checks
+  `execute` at 403-421 and `close` at 383-401, and says which one moved or changed.
 
 ## 0.7.0 — 2026-11-23
 

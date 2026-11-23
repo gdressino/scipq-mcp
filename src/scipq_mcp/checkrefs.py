@@ -508,20 +508,19 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                 text = fh.read()
         except OSError:
             continue
-        fence = None                 # the language of the fenced block we are in
         # Path abbreviations the document declares: `I/` = `core/src/…/billing/`
         abbrev = {k: v for k, v in re.findall(r"`([\w.-]+/)`\s*=\s*`([^`\s]+/)`", text)}
         prev = ""
-        for ln, line in enumerate(text.split("\n"), 1):
+        # A paragraph or list item wrapped over several lines is read as one line; problems
+        # are reported at the physical line of their mention.
+        for lns, starts, line in _logical_lines(text):
             before_line, prev = prev, line
-            f = _FENCE.match(line)
-            if f:
-                fence = None if fence is not None else f.group(2).lower()
-                continue
-            if fence is not None and fence not in _JAVA_FENCES:
-                continue
+
+            def ln_of(pos: int, lns=lns, starts=starts) -> int:
+                return lns[bisect.bisect_right(starts, pos) - 1]
             code = [mo.span() for mo in _CODE.finditer(line)]
-            gone = _GONE.search(line) is not None
+            gone_lines = {lns[k] for k, a_ in enumerate(starts)
+                          if _GONE.search(line[a_:starts[k + 1] if k + 1 < len(starts) else None])}
             examples = [e.end() for e in _EXAMPLE.finditer(line)]
             at = [0]
 
@@ -531,7 +530,8 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
             def add(mention: str, what: str, kind: str, **extra) -> None:
                 hypothetical = any(e <= at[0] <= e + 60 for e in examples) and \
                     kind in ("no-type", "no-member", "no-file")
-                if not gone and not hypothetical and \
+                ln = ln_of(at[0])
+                if ln not in gone_lines and not hypothetical and \
                         not elsewhere.search(line[max(0, at[0] - 40):at[0]]) and \
                         not labelled(line, at[0], before_line):
                     problems.append(Problem(path, ln, mention, what, kind, **extra))
@@ -593,6 +593,52 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
 _GIT_CONFIG = ("-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "-c",
                "core.quotePath=false", "-c", "diff.relative=false", "-c", "color.ui=false",
                "-c", "log.showSignature=false")
+
+
+_BLOCK_START = re.compile(r"\s*(?:[-*+]\s|\d+[.)]\s|#|\||>|<)")
+
+
+def _logical_lines(text: str):
+    """(physical line numbers, where each starts in the joined text, the joined text) of a
+    Markdown text: a paragraph or a list item wrapped over several lines is one; table rows,
+    headings and lines of fenced code are one each; fenced blocks in other languages are
+    left out."""
+    out = []
+    block: list[tuple[int, str]] = []
+
+    def flush() -> None:
+        if block:
+            lns, starts, parts, k = [], [], [], 0
+            for ln, raw in block:
+                piece = raw if not parts else raw.lstrip()
+                lns.append(ln)
+                starts.append(k)
+                parts.append(piece)
+                k += len(piece) + 1
+            out.append((lns, starts, " ".join(parts)))
+            block.clear()
+    fence = None
+    for ln, raw in enumerate(text.split("\n"), 1):
+        f = _FENCE.match(raw)
+        if f:
+            flush()
+            fence = None if fence is not None else f.group(2).lower()
+            continue
+        if fence is not None:
+            if fence in _JAVA_FENCES:
+                out.append(([ln], [0], raw))
+            continue
+        if not raw.strip():
+            flush()
+            continue
+        if _BLOCK_START.match(raw) or (block and _BLOCK_START.match(block[0][1]) and
+                                       block[0][1].lstrip()[:1] in "#|<"):
+            flush()
+        block.append((ln, raw))
+        if raw.lstrip()[:1] in "#|":
+            flush()             # a heading or a table row stands alone
+    flush()
+    return out
 
 
 def _git(root: str, *args: str, data: bytes | None = None) -> bytes | None:
@@ -1440,6 +1486,31 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
             src=src, lines=(n, end_n), names=tuple(names), tight=tight,
             recheck=lambda n2, m2, also=(): n2 <= count_lines(src) and
             verdict(n2, m2, [src], also) is None)
+        return
+    # As many calls written before the path as line ranges listed with it ("`execute()` …
+    # y `close()` … (`F.java:403-421` y `:383-401`)"): respectively, each call at its lines.
+    ordered = list(dict.fromkeys(
+        g.group(1) for p, q in code if oa <= p < mo.start() and ours(p) for g in
+        re.finditer(r"(?<![\w$])([a-z_$][\w$]*)\s*\(", line[p:q])
+        if g.group(1) not in _IMPLICIT or any(m.member_syms.get((t, g.group(1)))
+                                               for f in fits for t in m.types_in.get(f, []))))
+    # A guess: only when the lines together do not hold the names, and it claims nothing
+    # about the doc's own version.
+    if more and len(ordered) == len(more) + 1 and verdict(n, end_n, fits, more) is not None:
+        src = fits[0]
+        for x, (lo, hi) in zip(ordered, [(n, end_n), *more]):
+            bad = _verdict_in(m, root, src, lo, hi, [x], as_code, text_cache)
+            if bad in (None, "unchecked"):
+                continue
+            span = f"{lo}" if lo == hi else f"{lo}-{hi}"
+            shown = mo.group(0) if lo == n else f"{mo.group(1)}:{span}"
+            what = f"line {lo} no longer mentions {x} ({'; '.join(bad[1])})" if bad[1] else \
+                f"line {lo} no longer calls {x} (no code in this file calls it now)"
+            add(shown, what, "line-moved", src=src, lines=(lo, hi), name=x, names=(x,),
+                hint="; ".join(bad[1]), tight=False,
+                recheck=lambda n2, m2, also=(), x=x: _verdict_in(
+                    m, root, src, n2, m2, [x], as_code, text_cache, follow=True)
+                in (None, "unchecked"), span=_span_of(m, root, src, x, text_cache))
         return
     # A statement the doc quotes right after the line number (`obj.setOwner(user)`): when
     # the lines have it, they are right; else git decides whether the doc's version had it
