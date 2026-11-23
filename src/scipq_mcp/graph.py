@@ -1473,6 +1473,9 @@ def concept_terms(query: str) -> list[list[str]]:
     for tok in query.split():
         if "|" in tok:
             group = [v for v in dict.fromkeys(_plain(x) for x in tok.split("|")) if v]
+            # A form another one is a prefix of adds nothing (factura covers facturas) and
+            # would count the same word twice.
+            group = [v for v in group if not any(v != w and v.startswith(w) for w in group)]
             if group and group not in out:
                 out.append(group)
             continue

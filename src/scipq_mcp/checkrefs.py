@@ -428,7 +428,7 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                     kind in ("no-type", "no-member", "no-file")
                 if not gone and not hypothetical:
                     problems.append(Problem(path, ln, mention, what, kind))
-            named_here: list[str] = []      # symbols this line names, for its line numbers
+            named_here: list[tuple[str, int]] = []   # (symbol, where the line names it)
             spans = []
             for mo in _HASH.finditer(line):
                 spans.append(mo.span())
@@ -436,23 +436,24 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                     continue
                 checked += 1
                 at[0] = mo.start()
-                named_here += _check_member(m, mo.group(0), mo.group(1), mo.group(2),
-                                            mo.group(4) if mo.group(3) else None, True, add)
+                named_here += [(x, mo.start()) for x in _check_member(
+                    m, mo.group(0), mo.group(1), mo.group(2),
+                    mo.group(4) if mo.group(3) else None, True, add)]
             for mo in _DOT_CALL.finditer(line):
                 if any(a <= mo.start() < b for a, b in spans) or mo.group(2) in _NOT_MEMBERS:
                     continue
                 spans.append(mo.span())
                 checked += 1
                 at[0] = mo.start()
-                named_here += _check_member(m, mo.group(0).rstrip(), mo.group(1),
-                                            mo.group(2), mo.group(3), in_code(mo.start()),
-                                            add, call=True)
+                named_here += [(x, mo.start()) for x in _check_member(
+                    m, mo.group(0).rstrip(), mo.group(1), mo.group(2), mo.group(3),
+                    in_code(mo.start()), add, call=True)]
             for mo in _FQN.finditer(line):
                 if any(a <= mo.start() < b for a, b in spans) or not in_code(mo.start()):
                     continue
                 checked += 1
                 at[0] = mo.start()
-                named_here += _check_qualified(m, mo.group(1), add)
+                named_here += [(x, mo.start()) for x in _check_qualified(m, mo.group(1), add)]
             for mo in _PATH.finditer(line):
                 checked += 1
                 at[0] = mo.start()
@@ -552,18 +553,34 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         add(mo.group(0), f"line {n} is past the end ("
             + ", ".join(f"{s}: {count_lines(s)} lines" for s in hits[:3]) + ")", "past-end")
         return
-    # What the line names in these files: its Type#member mentions, and method names next to
-    # the path (`File.java:120` (`run()`), in the same or an adjacent code span) that the
-    # files' types declare. The line number must fall in one of them.
+    # What the mention's own part of the line names (its sentence, table cell or · item; a
+    # name glued to the path first: `name (File:N)`, `File:N — name`, `File:N (name)`):
+    # Type#member mentions and method names in its code spans that the files' types declare.
+    # The line number must fall in one of them, or be a call of it.
+    a, b = _segment(line, mo.start(), mo.end())
+    glued = _glued_names(line[a:b], mo.group(0))
+    near = [(x, y) for x, y in code if a <= x < b]
+    bare_names = glued or {x for p, q in near for x in
+                           re.findall(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q])}
+    constructor = re.search(r"\bconstructor\b", line[a:b], re.I) is not None
     spans_here = []
-    near = [(a, b) for a, b in code if b >= mo.start() - 40 and a <= mo.end() + 40]
-    bare_names = {x for a, b in near for x in re.findall(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(",
-                                                         line[a:b])}
     for src in fits:
-        syms = [x for x in named_here if m.where.get(x, ("",))[0] == src]
+        syms = [x for x, at in named_here if a <= at < b and m.where.get(x, ("",))[0] == src
+                and (not glued or S.name_of(x) in glued)]
         for t in m.types_in.get(src, []):
             for name in bare_names:
                 syms += [x for x in m.member_syms.get((t, name), []) if S.is_method(x)]
+            if constructor:
+                syms += m.member_syms.get((t, S.name_of(t)), [])
+        lines = text_cache.get(src) or []
+        if not lines:
+            _with_header(root, src, 1, text_cache)
+            lines = text_cache.get(src) or []
+        called = {S.name_of(x) for x in syms if any(
+            re.search(r"(?<![\w$])" + re.escape(S.name_of(x)) + r"\s*\(", lines[k])
+            for k in range(max(0, n - 3), min(len(lines), n + 2)))}
+        if called:
+            return          # the line is a call of the name: the doc points at the call
         for sym in syms:
             w = m.where.get(sym)
             if w is None or w[0] != src:
@@ -575,6 +592,37 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         sym, lo, hi = min(spans_here, key=lambda x: min(abs(n - x[1]), abs(n - x[2])))
         add(mo.group(0), f"line {n} is not in {S.short(sym)} any more (now lines {lo}–{hi})",
             "line-moved")
+
+
+_SEPARATORS = re.compile(r" · |;\s|\|(?!\|)|(?<=[.!?])\s+(?=[A-Z¿¡`(])")
+
+
+def _segment(line: str, start: int, end: int) -> tuple[int, int]:
+    """The part of a doc line a mention belongs to: between separators (" · ", "; ", a table
+    cell's "|", a sentence end)."""
+    a, b = 0, len(line)
+    for sep in _SEPARATORS.finditer(line):
+        if sep.end() <= start:
+            a = sep.end()
+        elif sep.start() >= end:
+            b = sep.start()
+            break
+    return a, b
+
+
+def _glued_names(segment: str, path_mention: str) -> set[str]:
+    """Member names written right next to a path: `name (File:N)`, `File:N — name`,
+    `File:N (name)`."""
+    p = re.escape(path_mention)
+    out = set()
+    for rx in (r"([A-Za-z_$][\w$]*)\s*(?:\(\s*\))?`?\s*\(\s*`?" + p,
+               p + r"`?\s*(?:—|–|:|-)\s*`?(?:[\w$]+[#.])?([A-Za-z_$][\w$]*)",
+               p + r"`?\s*\(\s*`?(?:[\w$]+[#.])?([A-Za-z_$][\w$]*)"):
+        for m_ in re.finditer(rx, segment):
+            name = m_.group(1)
+            if name[:1].islower() or name == "constructor":
+                out.add(name)
+    return out - {"constructor", "el", "la", "the", "line", "linea", "líneas", "lines"}
 
 
 def _in_order(want: list[str], have: list[str]) -> bool:

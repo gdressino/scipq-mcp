@@ -509,7 +509,7 @@ def test_concepts(sample_copy, tmp_path):
     assert "no words to search" in svc.concepts("de la")
     # Alternatives: each group is one word of the query, its forms searched as written.
     out = svc.concepts("lifecycle|lifecycles state|status")
-    assert "definitions about lifecycle*|lifecycles* state*|status*" in out
+    assert "definitions about lifecycle* state*|status*" in out   # lifecycles: one word
     assert out.index("Entity#setState()") < out.index("Entity#getState()")
     assert "write a word's forms" not in out and "write a word's forms" in svc.concepts("state")
 
@@ -523,12 +523,13 @@ def test_concept_stems_and_prefix_families():
     fam = prefix_family("export")
     assert "exportac" in fam and "exporter" in fam and "export" not in fam   # not "exporte"
     assert prefix_family(stem("entities")) == ["entity", "entitie"]
+    assert concept_terms("factura|facturas pedido|pedidos") == [["factura"], ["pedido"]]
     assert prefix_family(stem("series")) == ["sery", "serie"]
     assert concept_terms("envío de la facturaPendiente") == [["envio"], ["factura"], ["pendiente"]]
     # Forms given as alternatives are searched as written (one word of the query each).
     assert concept_terms("Pago|pagar|payment de pedidos") == [
         ["pago", "pagar", "payment"], ["pedido"]]
-    assert concept_terms("exportación|export") == [["exportacion", "export"]]
+    assert concept_terms("exportación|export") == [["export"]]   # export covers both
 
 
 def test_generated_headers_only_in_the_banner_or_an_annotation():

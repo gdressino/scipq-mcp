@@ -1318,6 +1318,10 @@ class Service:
                 for sym, d in nav._definitions_of({r[0] for r in page_rows}).items():
                     text = " ".join(x.strip() for x in (d.info.documentation if d.info else [])
                                     if x.strip())
+                    # One line: before the tags and lists, no markup, whitespace flattened.
+                    text = re.split(r"(?:^|\s)@[a-z]+\b|<(?:ul|ol|p|pre|table)\b", text,
+                                    maxsplit=1)[0]
+                    text = " ".join(re.sub(r"<[^>]+>|\{@\w+\s+([^}]*)\}", r"\1", text).split())
                     if text:
                         docs[sym] = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0][:160]
             except (QueryError, OSError):

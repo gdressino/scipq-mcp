@@ -3,6 +3,8 @@ and the line of code where it helps. Written for agents: few tokens, no decorati
 
 from __future__ import annotations
 
+import os
+
 import re
 import time
 from collections import OrderedDict
@@ -1317,10 +1319,17 @@ def concepts(query: str, terms: list[str], rows, docs: dict, offset: int, limit:
              more: bool, hints: dict | None = None) -> str:
     if not terms:
         return f"no words to search in {query!r}"
-    searched = " ".join("|".join(v + "*" for v in grp) for grp in terms)
+    def shown(grp: list[str]) -> str:
+        if len(grp) > 2 and "|" not in query:   # a stem and its usual endings
+            base = os.path.commonprefix(grp)
+            if len(base) >= 3:
+                return base + "…*"
+        return "|".join(v + "*" for v in grp)
+    searched = " ".join(shown(grp) for grp in terms)
     tip = "" if "|" in query else (
-        "\n(each word was reduced to a stem; write a word's forms and synonyms as "
-        "alternatives to search exactly those: pago|pagar|payment)")
+        "\n(each word was reduced to a stem and its usual endings; write a word's forms and "
+        "synonyms as alternatives to search those instead, each as a prefix: "
+        "pago|pagar|payment)")
     if not rows:
         return (f"no definition mentions {searched} (in names, owners, annotations, "
                 "signatures or javadoc; tests left out unless include_tests)" + tip)
