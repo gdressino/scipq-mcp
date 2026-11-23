@@ -380,18 +380,55 @@ def test_check_refs(sample_copy, tmp_path):
 - `Entity#setState(int)` changes it; see core/src/main/java/com/example/model/Entity.java:14.
 - `Entity#setState(String)` takes a reason.
 - Call `Entity.findById(id)` and then `Entity.reload()`.
-- `com.example.model.Ghost` was removed; `Nope#run` too.
+- `com.example.model.Ghost` and `Nope#run` are missing.
 - `Entity.setState(...)` lives at core/src/main/java/com/example/model/Entity.java:3.
 - Old file: core/.../model/Gone.java; core/.../model/Account.java is fine; `Session.find(1)`.
 - Prose: Logger.info("x"), List.of(1), Account.class and Group.feature are not members.
+- `com.example.Old` was removed; `Gone#run` no longer exists.
+- Placeholders and the like: `Foo.bar()`, `Entity.getX()`, `LOG.info(x)`, `Entity.hashCode()`,
+  `Entity.dnGetState()`, `java.util.Lizt`, `java/util/Lizt.java`, `X.java`.
+- Partial and wrong packages: `model.Account#uid`, `com.example.Account`, `Outer$Inner#run()`.
+- Again: `Entity.reload()`.
+- Constants, nested types, examples: `Service.DEFAULT.getState()`, `Service.NOPE.get()`,
+  `Account.build()`, por ejemplo `Fulano.prefix()`; `Gone.java` borrado.
+```python
+svc = Client.__init__(url=None)  # Python: Entity.get_connection(x)
+```
 """)
-    out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
-    assert "6 problems" in out, out
+    os.makedirs(os.path.join(sample_copy, "docs", "archive"))
+    with open(os.path.join(sample_copy, "docs", "archive", "old.md"), "w") as fh:
+        fh.write("`Entity#ancient`\n")
+    svc = Service(sample_copy, cache_dir=str(tmp_path / "c"))
+    out = svc.check_refs()
+    assert "9 problems: " in out and "2 members not found" in out, out
+    assert "Service.NOPE.get()  — Service has no member NOPE" in out
+    for x in ("DEFAULT", "Account.build", "Fulano", "borrado", "__init__", "get_connection", "ancient"):
+        assert x not in out, x
+    assert "1 files under archive folders" in out
     assert "no setState(String) in Entity: its overloads take (int)" in out
-    assert "Entity has no member reload" in out and "no type Nope" in out
-    assert "com.example.model.Ghost  — no such type" in out
-    assert "line 3 is not in Entity#setState() any more (now lines 14–16)" in out
+    assert "line 4 ×2 (also 13)  Entity.reload()  — Entity has no member reload" in out
+    assert "no type Nope" in out and "com.example.model.Ghost  — no such type" in out
+    assert "line 3 is not in Entity#setState() any more (now lines 9–16)" in out
     assert "Gone.java  — no such file" in out and "Account.java  —" not in out
+    assert "Old" not in out and "Gone#run" not in out             # said to be gone
+    for x in ("Foo", "getX", "LOG", "hashCode", "dnGetState", "Lizt", "X.java", "uid"):
+        assert x not in out, x
+    assert "com.example.Account  — no such type (Account is at com.example.model.Account)" \
+        in out
+    assert "no type Outer$Inner" in out
+    md = svc.check_refs(fmt="md")
+    assert "| file | line | mention | problem |" in md and "| NOTES.md | 4, 13 |" in md
+    with open(os.path.join(sample_copy, "docs", "a.md"), "w") as fh:
+        fh.write("`Entity#nothing`\n")
+    with open(os.path.join(sample_copy, "docs", "b.txt"), "w") as fh:
+        fh.write("`Entity#nothing`\n")
+    only = svc.check_refs(files=["docs"])
+    assert "in 2 files" in only and "Entity has no member nothing" in only   # archive too
+    assert "Entity has no member ancient" in only
+    with open(os.path.join(sample_copy, ".scipq.toml"), "w") as fh:
+        fh.write('[check_refs]\nexclude = ["docs/**"]\n')
+    assert "NOTES.md" in Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs() and \
+        "docs/a.md" not in Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
 
 
 def test_impact_lists_the_entry_points_reached(sample_copy, tmp_path):

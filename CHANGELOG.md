@@ -26,12 +26,21 @@ version and date when releasing.
   (with their pid), the Gradle build cache, indexes of deleted checkouts and cache entries
   left without an index (`cache prune` removes both), configuration warnings, the JDK for
   library sources, and what refactoring would use.
-- `check_refs(files, exclude)`: the code Markdown mentions (docs, skills, agent instructions),
-  checked against the index at once: `Type#member`, `Type.method(…)`, qualified names,
-  `{@link}`s and `File.java:N` paths (also abbreviated with `.../`). Reports types and members
-  not there (with the closest names), parameter lists no overload has, ambiguous names,
-  missing files, lines past the end and line numbers that no longer fall in the symbol named
-  next to them, by folder.
+- `check_refs(files, exclude, format)`: the code Markdown mentions (docs, skills, agent
+  instructions), checked against the index at once: `Type#member`, `Type.method(…)`,
+  qualified names (packages may have upper-case segments), `{@link}`s and `File.java:N`
+  paths (abbreviated with `.../` or with folders left out). Reports types and members not
+  there (with the closest names, and where a type or member of that name lives now),
+  parameter lists no overload has, names none of the same-named types has, missing files,
+  lines past the end and line numbers that no longer fall in the symbol named next to them
+  (its javadoc and annotations count as its lines); counts by kind, then by file with
+  repeats merged, or as a Markdown table. Left alone: library types (from the library
+  index, under the packages the project uses), placeholders (`Foo`, `getX`), constants as
+  receivers, members of nested builders, Object/Class/enum and JDO-enhancer members, Python
+  snippets and names, examples ("por ejemplo", "e.g."), and mentions the line says are gone
+  ("removed", "borrado"). Folders of closed docs (`archive/`, `done/`, `archivo/`…) are left
+  out unless `files` names them; `[check_refs] exclude` in `.scipq.toml` adds globs; a
+  folder in `files` means its Markdown files.
 - `impact` and `changed` list the entry points the change reaches, by kind (screens,
   endpoints, jobs, servlets, steps…), one row per type with its reached members, their depth
   and what identifies them (an endpoint's verb and route from the type's and the method's

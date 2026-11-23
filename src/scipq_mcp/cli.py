@@ -62,7 +62,8 @@ def _query_parser(sub) -> None:
     add("persistence", symbol={"default": ""}, scope={"default": ""},
         offset={"type": int, "default": 0}, limit={"type": int, "default": 100})
     add("check-refs", files={"nargs": "*", "default": None}, exclude={"nargs": "*", "default": None},
-        offset={"type": int, "default": 0}, limit={"type": int, "default": 200})
+        offset={"type": int, "default": 0}, limit={"type": int, "default": 200},
+        format={"choices": ["text", "md"], "default": "text"})
     add("concepts", "query", offset={"type": int, "default": 0},
         limit={"type": int, "default": 20}, kind={"default": ""}, scope={"default": ""},
         tests={"action": "store_true"})
@@ -128,7 +129,7 @@ def _run_query(a) -> str:
         return svc.persistence(a.symbol, scope=a.scope, offset=a.offset, limit=a.limit)
     if t == "check-refs":
         return svc.check_refs(files=a.files, exclude=a.exclude, offset=a.offset,
-                              limit=a.limit)
+                              limit=a.limit, fmt=a.format)
     if t == "concepts":
         return svc.concepts(a.query, kind=a.kind, scope=a.scope, include_tests=a.tests,
                             offset=a.offset, limit=a.limit)

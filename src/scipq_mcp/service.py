@@ -1265,14 +1265,17 @@ class Service:
         return body
 
     def _b_check_refs(self, files: list[str] | None = None, exclude: list[str] | None = None,
-                      offset: int = 0, limit: int = 200) -> Body:
+                      offset: int = 0, limit: int = 200, fmt: str = "text") -> Body:
         def body(nav: Navigator):
             from . import checkrefs as CR
             globs = files or ["**/*.md"]
             with self._graph(nav) as (g, stats):
-                problems, checked, nfiles = CR.check(g, nav.ws.root, globs, exclude or [])
+                st = self.settings(nav.ws.root, g)
+                problems, checked, nfiles, archived = CR.check(
+                    g, nav.ws.root, globs, list(exclude or []) + list(st.check_refs_exclude),
+                    self.cache_dir, skip_archives=not files)
             return render.index_note(stats) + CR.render(problems, checked, nfiles, offset,
-                                                        limit), set()
+                                                        limit, fmt, archived), set()
         return body
 
     def _b_doctor(self) -> Body:
@@ -1416,8 +1419,9 @@ class Service:
         return self._run(project_root, self._b_persistence(symbol, scope, offset, limit))
 
     def check_refs(self, project_root: str | None = None, files: list[str] | None = None,
-                   exclude: list[str] | None = None, offset: int = 0, limit: int = 200) -> str:
-        return self._run(project_root, self._b_check_refs(files, exclude, offset, limit))
+                   exclude: list[str] | None = None, offset: int = 0, limit: int = 200,
+                   fmt: str = "text") -> str:
+        return self._run(project_root, self._b_check_refs(files, exclude, offset, limit, fmt))
 
     def doctor(self, project_root: str | None = None) -> str:
         return self._run(project_root, self._b_doctor())
