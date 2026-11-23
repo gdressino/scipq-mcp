@@ -459,6 +459,23 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
                                  limit)
 
     @tool
+    def check_refs(
+        project_root: ProjectRoot = "",
+        files: Annotated[list[str] | None, Field(
+            description="Globs of the files to check (default ['**/*.md']: docs, skills, "
+                        "agent instructions)")] = None,
+        exclude: Annotated[list[str] | None, Field(
+            description="Globs to leave out (archived docs…)")] = None,
+        offset: Offset = 0, limit: Limit(200, 2000) = 200,
+    ) -> str:
+        """The code that docs mention, checked against the index: Type#member, Type.method(…),
+        qualified type names, {@link}s and File.java:N paths. Reports types and members not
+        there (with the closest names), parameter lists no overload has, ambiguous names,
+        missing files, and line numbers that no longer fall in the symbol named next to
+        them; grouped by folder."""
+        return service.check_refs(project_root, files, exclude, offset, limit)
+
+    @tool
     def doctor(project_root: ProjectRoot = "") -> str:
         """What can make the index wrong or the tools weak here, as a checklist with what to do:
         the plugin's setup, tracked .java files without shards, classes built without the

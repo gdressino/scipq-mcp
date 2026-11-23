@@ -339,3 +339,25 @@ def test_doctor(sample_copy, tmp_path):
     assert "WARN [plugin] core/compileJava: classes compiled at" in out
     assert "shards have no class file" in out                 # Store, Session… are missing
     assert "[refactor]" in out and "[cache]" in out and "version " in out
+
+
+def test_check_refs(sample_copy, tmp_path):
+    import os
+    from scipq_mcp.service import Service
+    with open(os.path.join(sample_copy, "NOTES.md"), "w", encoding="utf-8") as fh:
+        fh.write("""# Notes
+- `Entity#setState(int)` changes it; see core/src/main/java/com/example/model/Entity.java:14.
+- `Entity#setState(String)` takes a reason.
+- Call `Entity.findById(id)` and then `Entity.reload()`.
+- `com.example.model.Ghost` was removed; `Nope#run` too.
+- `Entity.setState(...)` lives at core/src/main/java/com/example/model/Entity.java:3.
+- Old file: core/.../model/Gone.java; core/.../model/Account.java is fine; `Session.find(1)`.
+- Prose: Logger.info("x"), List.of(1), Account.class and Group.feature are not members.
+""")
+    out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
+    assert "6 problems" in out, out
+    assert "no setState(String) in Entity: its overloads take (int)" in out
+    assert "Entity has no member reload" in out and "no type Nope" in out
+    assert "com.example.model.Ghost  — no such type" in out
+    assert "line 3 is not in Entity#setState() any more (now lines 14–16)" in out
+    assert "Gone.java  — no such file" in out and "Account.java  —" not in out

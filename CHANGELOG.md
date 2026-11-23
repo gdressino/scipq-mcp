@@ -20,6 +20,12 @@ version and date when releasing.
   classes (javac failed), stale files and running builds (with their pid), the Gradle build
   cache, indexes of deleted checkouts, configuration warnings, the JDK for library sources,
   and what refactoring would use.
+- `check_refs(files, exclude)`: the code Markdown mentions (docs, skills, agent instructions),
+  checked against the index at once: `Type#member`, `Type.method(…)`, qualified names,
+  `{@link}`s and `File.java:N` paths (also abbreviated with `.../`). Reports types and members
+  not there (with the closest names), parameter lists no overload has, ambiguous names,
+  missing files, lines past the end and line numbers that no longer fall in the symbol named
+  next to them, by folder.
 
 ## 0.5.0 — 2026-11-23
 
