@@ -1,6 +1,9 @@
 # Changelog
 
-One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased
+One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
+version and date when releasing.
+
+## Unreleased
 
 ### Changed
 

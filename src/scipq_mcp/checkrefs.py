@@ -434,6 +434,7 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
     skip_archives, files under folders of closed or historical docs (archive/, done/…) are
     left out."""
     m = Model(g, cache_base)
+    other_versions = [v.strip() for v in other_versions if v and v.strip()]
     sources = {v[0] for v in m.where.values()}
     by_suffix: dict[str, list[str]] = {}
     for s in sources:
@@ -462,8 +463,10 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
     text_cache: dict[str, list[str]] = {}
     # A mention right after a branch's name or label (main `X.foo()`, v4 `X.foo`): that
     # branch's code, not this one's.
-    elsewhere = re.compile(r"(?<![\w-])(?:main|master" + "".join(
-        "|" + re.escape(v) for v in other_versions) + r")\s+`?$")
+    elsewhere = re.compile(r"(?:\b(?:en|in|on|de)\s+(?:main|master)|(?<![\w-])(?:main|master)\s+"
+                           r"[0-9a-f]{7,40}" + "".join("|(?<![\\w-])" + re.escape(v)
+                                                       for v in other_versions) + r")\s+`?$",
+                           re.I)
     # A configured label covers the rest of its sentence or list, up to another version
     # word (v4 `A`, `B`; v5 `C`), across a line break too.
     label = re.compile(r"(?<![\w/.-])(?:" + "|".join(map(re.escape, other_versions)) +
@@ -548,9 +551,9 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
             # attribute): reported only when git shows the type had that member.
             for p_, q_ in code:
                 mo = _DOT_MEMBER.fullmatch(line, p_ + 1, q_ - 1)
-                if mo is None or mo.group(2) in _NOT_MEMBERS or \
+                if mo is None or mo.group(2) in _NOT_MEMBERS or mo.group(1)[:1].islower() or \
                         m.is_package(mo.group(0).replace(".", "/")):
-                    continue
+                    continue        # com.x.Type.member: the qualified-name check's
                 spans.append(mo.span())
                 checked += 1
                 at[0] = mo.start()
@@ -585,10 +588,16 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
             (not p.loose or "gone from" in p.what)], checked, len(files), archived
 
 
+# Output that does not depend on the user's git configuration (prefixes, quoting, colors).
+_GIT_CONFIG = ("-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "-c",
+               "core.quotePath=false", "-c", "diff.relative=false", "-c", "color.ui=false",
+               "-c", "log.showSignature=false")
+
+
 def _git(root: str, *args: str, data: bytes | None = None) -> bytes | None:
     try:
-        r = subprocess.run(["git", "-C", root, *args], input=data, capture_output=True,
-                           timeout=120)
+        r = subprocess.run(["git", *_GIT_CONFIG, "-C", root, *args], input=data,
+                           capture_output=True, timeout=120)
     except (OSError, subprocess.SubprocessError):
         return None
     return r.stdout if r.returncode == 0 else None
@@ -662,10 +671,13 @@ def _gone(root: str, problems: list[Problem]) -> None:
                 _c, sha, d = row.split()
                 commit = (sha, d)
             elif row and commit and os.path.basename(row) in names:
-                last.setdefault(os.path.basename(row), commit)     # newest first
+                last.setdefault(row, commit)        # newest first, by path
         for p in files:
-            if p.name in last:
-                sha, d = last[p.name]
+            # The doc's path (its end, after a "…/"), or its file name when it wrote just that
+            hit = next((c for row, c in last.items() if row == p.src or row.endswith("/" + p.src)),
+                       None)
+            if hit:
+                sha, d = hit
                 p.what = f"no such file (deleted {d}, {sha[:8]})"
             elif log is not None:
                 p.what = "no such file, nor deleted since the doc was written (planned, or " \
@@ -899,7 +911,8 @@ def _since_written(root: str, problems: list[Problem]) -> None:
     for vs in versions.values():
         vs.sort(key=lambda v: v[1])         # oldest first, across the doc's paths
     blobs = sorted({b for vs in versions.values() for *_x, b in vs})
-    doc_texts = {b: set(t.split("\n")) for b, t in _blobs(root, blobs).items()}
+    doc_texts = {b: {x.rstrip("\r") for x in t.split("\n")}       # CRLF docs too
+                 for b, t in _blobs(root, blobs).items()}
     doc_lines: dict[str, list[str]] = {}
     written: list[tuple[Problem, str, int]] = []           # (problem, commit, time)
     for p in todo:
@@ -920,16 +933,18 @@ def _since_written(root: str, problems: list[Problem]) -> None:
         return
     # The version just before each of those commits (the doc written, then committed with
     # the code it describes).
-    parents: dict[str, tuple[str, int]] = {}
-    for (sha, _ts), row in commits(_git(root, "log", "--no-walk", "--format=C %H %ct %cs%n%P",
-                                        *sorted({c for _p, c, _t in written}))):
-        for parent in row.split()[:1]:
-            parents[sha] = (parent, 0)
-    for (sha, ts), _row in commits(_git(root, "log", "--no-walk", "--format=C %H %ct %cs%n",
-                                        *sorted({x for x, _t in parents.values()}))):
-        for k, v in parents.items():
-            if v[0] == sha:
-                parents[k] = (sha, ts)
+    first_parent: dict[str, str] = {}
+    out = _git(root, "log", "--no-walk", "--format=%H %P", *sorted({c for _p, c, _t in written}))
+    for row in (out or b"").decode(errors="replace").splitlines():
+        if len(row.split()) > 1:
+            first_parent[row.split()[0]] = row.split()[1]
+    times: dict[str, int] = {}
+    out = _git(root, "log", "--no-walk", "--format=%H %ct %cs", *sorted(set(first_parent.values())))
+    for row in (out or b"").decode(errors="replace").splitlines():
+        if len(row.split()) == 3:
+            sha, ts, day = row.split()
+            times[sha], days[sha] = int(ts), day
+    parents = {c: (pa, times[pa]) for c, pa in first_parent.items() if pa in times}
     olds = _blobs(root, sorted({f"{c}:{top}{p.src}" for p, c, _t in written} |
                                {f"{parents[c][0]}:{top}{p.src}" for p, c, _t in written
                                 if c in parents}))
@@ -1028,10 +1043,10 @@ def _since_written(root: str, problems: list[Problem]) -> None:
                 if was and len(at) == 1 and abs(at[0] - was[0]) > 2:
                     d = at[0] - was[0]
                     # The doc's lines decide (intact: moved); the code quoted only places them.
-                    same = _block_at(old, now_lines(p.src), n, end, n + d) == (n + d, end + d) \
-                        if n != end else old[n - 1].strip() == \
-                        (now_lines(p.src)[n + d - 1] if 0 < n + d <= len(now_lines(p.src))
-                         else "").strip()
+                    cur = now_lines(p.src)
+                    same = _block_at(old, cur, n, end, n + d) == (n + d, end + d) \
+                        if n != end else 0 < n <= len(old) and 0 < n + d <= len(cur) and \
+                        old[n - 1].strip() == cur[n + d - 1].strip()
                     if same and n != end:
                         p.what = f"lines {n}-{end} are now {n + d}-{end + d} (the code quoted; " \
                                  f"moved since the doc's version of {day})"
@@ -1248,7 +1263,8 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
             return          # another project's or a library's package path
         same = sorted({s for s in sources if os.path.basename(s) == base})
         add(mo.group(0), "no such file" + (f" (a {base} is at {', '.join(same[:2])})"
-                                          if same else ""), "no-file", name="" if same else base)
+                                          if same else ""), "no-file", name="" if same else base,
+            src="" if same else re.split(r"(?:\.\.\.|…)/", bare)[-1])
         return
     if n0 is None:
         return
@@ -1257,11 +1273,14 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     before = line[max(0, mo.start() - 80):mo.start()].rstrip("`")
     if re.search(r"(?:[0-9a-f]{7,40}|[\w./~^-]*(?:main|master|HEAD|origin/[\w./-]+)[\w~^]*):$"
                  r"|\bgit show\b[^`]*$|(?:^|[\s(`])/(?:home|Users|tmp|mnt|var)/\S*$"
-                 r"|(?<![\w-])(?:[0-9a-f]{7,40}|main|master" +
-                 "".join("|" + re.escape(v) for v in other_versions) + r")\s+`?$", before):
+                 r"|(?<![\w-])[0-9a-f]{7,40}\s+`?$|\b(?:en|in|on|de)\s+(?:main|master)\s+`?$" +
+                 "".join("|(?<![\\w-])" + re.escape(v) + r"\s+`?$" for v in other_versions),
+                 before, re.I):
         return      # another version: <ref>:path, git show, an absolute path elsewhere
-    if re.match(r"`?\s*\((?:en |in |de |on |at )?(?:main|master|[0-9a-f]{7,40})\)", line[mo.end():]):
-        return      # File.java:12 (main): another branch's
+    if re.match(r"`?\s*\((?:en |in |de |on |at )?(?:main|master|[0-9a-f]{7,40})\)",
+                line[mo.end():]) and not any(m.member_syms.get((t, "main")) for f in hits
+                                             for t in m.types_in.get(f, [])):
+        return      # File.java:12 (main): another branch's (unless the file has a main)
     clause = line[_segment(line, mo.start(), mo.end(), parens=False)[0]:mo.start()]
     if re.search(r"\b(?:en|in|on|de)\s+`?(?:main|master" + "".join(
             "|" + re.escape(v) for v in other_versions) + r")\b(?!\.)", clause, re.I):
@@ -1857,7 +1876,8 @@ def _check_member(m: Model, mention: str, written_type: str, name: str, params,
                 if "(" in s]
         # A shorter list than every overload is shorthand (put(Date): the value's type).
         if have and want not in have and not any(h[:len(want)] == want for h in have) and \
-                not all(len(want) < len(h) for h in have):
+                not any(len(want) < len(h) and all(w in h or "Object" in h for w in want)
+                        for h in have):
             shown = "; ".join(dict.fromkeys("(" + ", ".join(h) + ")" for h in have[:6]))
             add(mention, f"no {name}({', '.join(want)}) in {S.short(t)}: its overloads take "
                 f"{shown}", "params")

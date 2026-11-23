@@ -282,8 +282,9 @@ def sanitize_repo_config(data: dict) -> tuple[dict, list[str]]:
         cr["exclude"] = [g for g in _as_list(cr["exclude"], "check_refs.exclude", warnings)
                          if _relative_glob(g, "check_refs.exclude", warnings)]
     if isinstance(cr, dict) and "other_versions" in cr:
-        cr["other_versions"] = _as_list(cr["other_versions"], "check_refs.other_versions",
-                                        warnings)
+        cr["other_versions"] = [v for v in _as_list(cr["other_versions"],
+                                                    "check_refs.other_versions", warnings)
+                                if v.strip()]
     dc = out.get("dead_code")
     if isinstance(dc, dict) and "exclude" in dc:
         dc["exclude"] = [g for g in _as_list(dc["exclude"], "dead_code.exclude", warnings)

@@ -689,8 +689,10 @@ def test_check_refs_follows_lines_through_git_history(sample_copy, tmp_path):
                  f"- `findById` ({e}:19-25) and, further, `Entity.reset`.\n"
                  f"- `getState` ({e}:15-17) returns it.\n"
                  f"- The class starts at {e}:4, and somewhere below it the `findById(1)` helper.\n"
-                 f"| `{e}:12` | `this.state = state` |\n")
+                 f"| `{e}:12` | `this.state = state` |\n"
+                 f"- Never there: core/src/main/java/com/example/other/Legacy.java\n")
     _git(sample_copy, "init", "-q")
+    _git(sample_copy, "config", "diff.mnemonicPrefix", "true")     # c/ w/ instead of a/ b/
     _git(sample_copy, "add", "-A")
     _git(sample_copy, "commit", "-qm", "a", date="2026-01-02T10:00:00Z")
     with open(entity, "w") as fh:
@@ -704,7 +706,8 @@ def test_check_refs_follows_lines_through_git_history(sample_copy, tmp_path):
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
     assert f"{e}:15  — line 15 is now 18 (moved since the doc's version of 2026-01-02)" in out, out
     assert f"{e}:25  — line 25 changed since the doc named setState (2026-01-02, " in out
-    assert "Legacy.java  — no such file (deleted 2026-01-05, " in out
+    assert "model/Legacy.java  — no such file (deleted 2026-01-05, " in out
+    assert "other/Legacy.java  — no such file, nor deleted since" in out
     assert "Planned.java  — no such file, nor deleted since the doc was written" in out
     assert "Entity has no member reset (reset is in TestSupport; gone from Entity.java since " \
         "2026-01-05, " in out
@@ -740,7 +743,8 @@ def test_check_refs_reads_line_lists_getters_and_neighbouring_numbers(sample_cop
                  f"- v4 `{e}:3` — `setState(int)` there; `Entity.nothing` and `Entity.state`.\n"
                  f"- Calls `Entity.getState()`\n(`{e}:4`).\n"
                  f"- `setState(1)` runs and `add` ({e}:23) adds.\n"
-                 f"- Elsewhere: (v4 `Entity.rewind()`, main `Entity#wind`).\n"
+                 f"- Elsewhere: (v4 `Entity.rewind()`, en main `Entity#wind`); the main `Entity#run`.\n"
+                 f"- A field of the type: `com.example.model.Ghost.total`.\n"
                  f"- En main el alta (`{e}:3` `setState(int)`) era otra.\n"
                  f"- `setState(int)` and `getState()` ({e}:15/:18).\n"
                  f"- `getState()` + `findById(1)` ({e}:18-19) read it.\n"
@@ -749,10 +753,13 @@ def test_check_refs_reads_line_lists_getters_and_neighbouring_numbers(sample_cop
                  f"`setState(int)`.\n"
                  f"- En v4 el alta\n  usa `{e}:25` — `setState(int)`.\n")
     with open(os.path.join(sample_copy, ".scipq.toml"), "w") as fh:
-        fh.write('[check_refs]\nother_versions = ["v4"]\n')
+        fh.write('[check_refs]\nother_versions = ["v4", ""]\n')
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
-    assert "5 problems: 5 lines no longer in the symbol named" in out, out
+    assert "7 problems: 5 lines no longer in the symbol named, 1 members not found, 1 types " \
+        "not found" in out, out
+    assert "com.example.model.Ghost  — no such type" in out
     assert "line 18 no longer mentions findById" in out          # each name of a list
+    assert "Entity#run  — Entity has no member run" in out and "wind" not in out
     assert "line 24 no longer mentions setState" in out and "line 4 no longer mentions setState" \
         not in out
     assert "line 6  " in out and "line 3 no longer mentions setState" in out
