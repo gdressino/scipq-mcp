@@ -323,3 +323,19 @@ def test_typed_annotations_and_throws(nav):
     assert X._THROWS_BEFORE.search("public void load(String p) throws IOException, ")
     assert X._THROWS_BEFORE.search("        throws ")              # on the next line
     assert not X._THROWS_BEFORE.search("throw new ")
+
+
+def test_doctor(sample_copy, tmp_path):
+    import os
+    from scipq_mcp.service import Service
+    with open(os.path.join(sample_copy, "gradle.properties"), "w") as fh:
+        fh.write("org.gradle.caching=true\n")
+    classes = os.path.join(sample_copy, "core/build/classes/java/main/com/example/model")
+    os.makedirs(classes)
+    for name in ("Entity.class", "Account.class"):
+        open(os.path.join(classes, name), "wb").close()    # now: after every shard
+    out = Service(sample_copy, cache_dir=str(tmp_path / "c")).doctor()
+    assert out.startswith("doctor: ") and "WARN [build] the Gradle build cache is on" in out
+    assert "WARN [plugin] core/compileJava: classes compiled at" in out
+    assert "shards have no class file" in out                 # Store, Session… are missing
+    assert "[refactor]" in out and "[cache]" in out and "version " in out

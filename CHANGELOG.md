@@ -3,6 +3,24 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Added
+
+- `concepts(query)`: definitions found by the words they are about, for when their names are
+  not known. The auxiliary index (schema 8) keeps one FTS5 row per definition: its name split
+  into words, its owner, its annotations' texts, its signature, its javadoc, and the labels
+  other code gives a type where it registers it (the strings of a call that names `X.class`).
+  Stopwords left out, words also as prefixes and in a light singular, ranked by bm25 (the name
+  first, types before methods before fields, constants last); tests, files whose header says
+  they are generated and `[concepts] exclude` paths are left out unless asked.
+- `doctor()`: a checklist of what can make the index wrong or the tools weak: the plugin's
+  setup, tracked `.java` files without shards (next to compiled ones, or where nothing
+  compiles), classes built after the shards (an IDE build, the plugin off) and shards without
+  classes (javac failed), stale files and running builds (with their pid), the Gradle build
+  cache, indexes of deleted checkouts, configuration warnings, the JDK for library sources,
+  and what refactoring would use.
+
 ## 0.5.0 — 2026-11-23
 
 ### Fixed

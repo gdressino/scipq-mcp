@@ -459,6 +459,15 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
                                  limit)
 
     @tool
+    def doctor(project_root: ProjectRoot = "") -> str:
+        """What can make the index wrong or the tools weak here, as a checklist with what to do:
+        the plugin's setup, tracked .java files without shards, classes built without the
+        plugin (an IDE build) or shards whose javac failed, stale files and running builds,
+        the Gradle build cache, the cache (and indexes of deleted worktrees), configuration
+        warnings, the JDK for library sources, and what refactoring would use."""
+        return service.doctor(project_root)
+
+    @tool
     def concepts(
         query: Annotated[str, Field(description="Words for what you look for, in the code's "
                                                 "language: 'alta de cliente', 'retry "

@@ -85,6 +85,18 @@ def build_running(root: str) -> bool | None:
     """Whether a Gradle or Maven command runs in this checkout, from /proc (Linux); None when
     it cannot be told (other systems, or a build process whose directory cannot be read).
     Builds started from an IDE (through a Gradle daemon) are not seen."""
+    found = build_processes(root)
+    if found is None:
+        return None
+    procs, unknown = found
+    if procs:
+        return True
+    return None if unknown else False
+
+
+def build_processes(root: str) -> tuple[list[tuple[int, str]], bool] | None:
+    """([(pid, command line)] of Gradle/Maven commands in this checkout, whether some build
+    process could not be inspected); None where /proc is not there."""
     if not sys.platform.startswith("linux") or not os.path.isdir("/proc/self"):
         return None
     real = os.path.realpath(root)
@@ -93,6 +105,7 @@ def build_running(root: str) -> bool | None:
     except OSError:
         return None
     unknown = False
+    out: list[tuple[int, str]] = []
     for pid in pids:
         try:
             with open(f"/proc/{pid}/cmdline", "rb") as fh:
@@ -107,8 +120,8 @@ def build_running(root: str) -> bool | None:
             unknown = True
             continue
         if any(_overlaps(d, real) for d in _build_dirs(cmd, cwd)):
-            return True
-    return None if unknown else False
+            out.append((int(pid), cmd.replace(b"\0", b" ").decode("utf-8", "replace")[:200]))
+    return out, unknown
 
 
 def _build_dirs(cmdline: bytes, cwd: str) -> list[str]:

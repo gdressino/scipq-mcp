@@ -1212,6 +1212,14 @@ class Service:
                                                                       suppressed, weak), set()
         return body
 
+    def _b_doctor(self) -> Body:
+        def body(nav: Navigator):
+            from . import doctor as DR
+            report = DR.run(nav.ws, self._settings_if_indexed(nav), self.cache_dir,
+                            nav.ws.freshness())
+            return DR.render(report), set()
+        return body
+
     def _b_concepts(self, query: str, kind: str = "", scope: str = "",
                     include_tests: bool = False, offset: int = 0, limit: int = 20,
                     include_generated: bool = False) -> Body:
@@ -1336,6 +1344,9 @@ class Service:
                 api_only: bool = True, limit: int = 50, all_worktrees: bool = False) -> str:
         return self._run(project_root, self._b_compare(other_root, scope, api_only, limit,
                                                        all_worktrees), foot_first=True)
+
+    def doctor(self, project_root: str | None = None) -> str:
+        return self._run(project_root, self._b_doctor())
 
     def concepts(self, query: str, project_root: str | None = None, kind: str = "",
                  scope: str = "", include_tests: bool = False, offset: int = 0,
