@@ -61,7 +61,11 @@ version and date when releasing.
   it (`:1258/1282/1349`) where each of them went.
 - `check_refs` places a line whose text repeats in the file (a try-with-resources in every
   method) only in the same method, by its order there when the method has as many copies
-  then as now; else the lines are said to have changed. A path that stands for a file of
+  then as now; else the lines are said to have changed. Lines no longer in the method that
+  held them say so in that method's terms: where it calls the name now, that it no longer
+  names it (and which method it calls does, after an extract-method), where the same code
+  went when one copy is left, or that the method is no longer in the file. In `md`, a row
+  lists all the doc's lines. A path that stands for a file of
   the checkout is shown as that file's path. A word that opens a sentence in parentheses
   ("(form bound to …)") is not taken for a name, and a call followed by the next line
   number ("+ tx.commit() at :1373") is that number's.

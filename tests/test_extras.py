@@ -1101,3 +1101,20 @@ def test_repeated_lines_are_placed_only_in_their_method():
                "  }", "}"]
     assert _block_at(two, two_now, 5, 5, 5) == (6, 6)
     assert _block_at(two, ["class A {", "  void m() {", "    x = 1;", "  }", "}"], 5, 5, 5) is None
+
+
+def test_lines_no_longer_in_their_method_say_where_it_went():
+    from scipq_mcp.checkrefs import _in_its_method
+    old = ["class A {", "  void save() {", "    pm.makePersistent(x);", "  }", "  void other() {",
+           "  }", "}"]
+    moved = ["class A {", "  void save() {", "    store(x);", "  }", "  void store(X x) {",
+             "    pm.makePersistent(x);", "  }", "}"]
+    assert _in_its_method(old, moved, 3, 3, "makePersistent") == \
+        ": the same code is now at 6, in store, which save calls at 3"
+    edited = ["class A {", "  void save() {", "    helper(x);", "  }", "  void helper(X x) {",
+              "    pm.makePersistent(y);", "  }", "}"]
+    assert _in_its_method(old, edited, 3, 3, "makePersistent") == \
+        ": save no longer names makePersistent; helper, which it calls at 3, does at 6"
+    gone = ["class A {", "  void other() {", "  }", "}"]
+    assert _in_its_method(old, gone, 3, 3, "makePersistent") == \
+        ": save, which held them, is no longer in the file"

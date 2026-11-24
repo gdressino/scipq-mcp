@@ -1689,7 +1689,8 @@ def _since_written(root: str, problems: list[Problem]) -> None:
                         f"; the others listed with it: {others}" if others and
                         len(also) == len(p.more) else "") + ")"
                 p.kind = "line-shifted"
-            elif edited:
+            elif edited or _repeats(old, now_lines(p.src), n, end):
+                # (a text that repeats and could not be placed: not known where it went)
                 mapped = n2 is not None and end2 is not None
                 now = (n2, end2) if mapped else _edited_to(h, n, end)
                 if now and p.recheck(*now, also, at=p.src) and _specific(p.names or (p.name,)):
@@ -1703,7 +1704,8 @@ def _since_written(root: str, problems: list[Problem]) -> None:
                     # declared there then, not now: its name elsewhere is someone else's
                     where = f": {p.name} is no longer declared in {os.path.basename(p.src)}"
                 else:
-                    where = f": {p.hint}" if p.hint else ""
+                    where = _in_its_method(old, now_lines(p.src), n, end, p.name) or (
+                        f": {p.hint}" if p.hint else "")
                 p.what = (f"{span} changed since the doc named {p.name or 'them'} ({day}, "
                           f"{sha[:8]})" + where)
                 p.kind = "line-changed"
@@ -1717,6 +1719,62 @@ def _since_written(root: str, problems: list[Problem]) -> None:
     for p, _c, _t in written:
         if p.kind == "line-moved" and not p.tight:
             p.kind = "drop"     # git settled nothing, and the name is from further away
+
+
+def _copies(lines: list[str], block: list[str]) -> list[int]:
+    """The 1-based lines where the stripped block starts in lines."""
+    if not block:
+        return []
+    return [i + 1 for i, x in enumerate(lines) if x.strip() == block[0] and
+            [y.strip() for y in lines[i:i + len(block)]] == block]
+
+
+def _repeats(old: list[str], cur: list[str], n: int, end: int) -> bool:
+    """The text of lines n..end of old is in old or cur more than once."""
+    block = [x.strip() for x in old[n - 1:end]]
+    return any(len(x) > 3 for x in block) and \
+        (len(_copies(old, block)) > 1 or len(_copies(cur, block)) > 1)
+
+
+def _in_its_method(old: list[str], cur: list[str], n: int, end: int, name: str) -> str:
+    """For lines n..end of old that are no longer where they were: the method that held
+    them, as it is now. Where its calls of name are, or where the same code went when only
+    one copy is left, in a method it calls (an extract-method); "" when not known."""
+    was = _enclosing(old, n)
+    spans = _declared(cur, was) if was else []
+    if was and not spans and _declared(old, was):
+        return f": {was}, which held them, is no longer in the file"
+    if not spans:
+        return ""
+    lo, hi = spans[0][1], spans[0][2]
+    block = [x.strip() for x in old[n - 1:end]]
+    there = [c for c in _copies(cur, block) if not lo <= c <= hi]
+    left = [c for c in _copies(cur, block) if lo <= c <= hi]
+    if not left and len(there) == 1 and (other := _enclosing(cur, there[0])) and other != was:
+        call = re.compile(r"(?<![\w$])" + re.escape(other) + r"\s*\(")
+        at = [k + 1 for k in range(lo, min(hi, len(cur))) if call.search(cur[k])]
+        return f": the same code is now at {there[0]}, in {other}" + (
+            f", which {was} calls at {at[0]}" if at else "")
+    if name:
+        for verb, rx in (("calls", r"\s*\("), ("names", r"(?![\w$])")):
+            word = re.compile(r"(?<![\w$])" + re.escape(name) + rx)
+            at = [k + 1 for k in range(lo - 1, min(hi, len(cur))) if word.search(cur[k])]
+            if at:
+                return f": {was} {verb} {name} at " + ", ".join(map(str, at[:4])) + (
+                    " …" if len(at) > 4 else "")
+        # moved to a method it calls (an extract-method): that one, and where
+        word = re.compile(r"(?<![\w$])" + re.escape(name) + r"(?![\w$])")
+        for k in range(lo - 1, min(hi, len(cur))):
+            for c in re.findall(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", cur[k]):
+                if c in (was, name) or c in _HEADS:
+                    continue
+                for _top, d, e in _declared(cur, c)[:1]:
+                    got = [j + 1 for j in range(d - 1, min(e, len(cur))) if word.search(cur[j])]
+                    if got:
+                        return (f": {was} no longer names {name}; {c}, which it calls at "
+                                f"{k + 1}, does at {got[0]}")
+        return f": {was} no longer names {name}"
+    return ""
 
 
 def _trivial(lines: list[str], n: int, end: int) -> bool:
@@ -1843,8 +1901,11 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     if written.startswith(("/", "~/")):
         if not hits:
             return          # an absolute path to a file this repository does not have
-        if len(hits) == 1:  # shown as the checkout's path it stands for
-            shown = shown.replace(mo.group(1), hits[0], 1)
+        if len(hits) == 1:  # shown as the checkout's path it stands for (`shown` itself
+            absolute, add_abs = mo.group(1), add    # tells a path from a `:N` after it)
+
+            def add(mention, *a, **e):
+                add_abs(mention.replace(absolute, hits[0], 1), *a, **e)
     if not hits:
         for base_dir in ("", doc_dir):      # from the checkout, or from the document
             p = os.path.normpath(os.path.join(base_dir, written)).replace(os.sep, "/")
@@ -1910,8 +1971,8 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
                        for x, y in _neighbour_cells(line, mo.start())
                        if re.match(r"\s*(?:`|[A-Za-z_$][\w$.#]*\()", line[x:y])]  # code, not a remark
     glued = _glued_names(line[oa:ob], mo.group(0))
-    loose = {x[1:] for x in glued if x[:1] == "~"}      # glued, but not surely the line's
-    glued = {x for x in glued if x[:1] != "~"} | loose
+    loose = {x[1:].lstrip("?") for x in glued if x[:1] == "~"}  # glued, not surely the line's
+    glued = {x for x in glued if x[:1] != "~"} | {x[1:] for x in glued if x[:1] == "~"}
     # `a()` + `b()` (File:N): a list of names, each of them at the lines
     need_all = {x[1:] for x in glued if x[:1] == "+"}
     glued = {x for x in glued if x[:1] != "+"} | need_all
@@ -1997,7 +2058,7 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
                   for c in _glued_calls(line, mo, code, oa, ob, tight=True)}
     tight = shown == mo.group(0) and (      # a `:N` alone after a path is a guess
         bool(glued - loose) or
-        bool(extra_spans and names and not flow_cell and not (bare and not glued)) or
+        bool(extra_spans and set(names) - loose and not flow_cell and not (bare and not glued)) or
         bool(glued_here & set(names)))
     if not names and re.fullmatch(r"\s*[(\[]?\s*`?", line[:mo.start()]):
         # `Type.query(…)`\n(`Type.java:719`): the paragraph goes on from the line before.
@@ -2626,8 +2687,11 @@ def _glued_names(segment: str, path_mention: str) -> set[str]:
             if k == 2 and not (re.search(r"[a-z][A-Z]|[_$]", name) or
                                segment[max(0, m_.start(1) - 1):m_.start(1)] in ("`", ".", "#") or
                                re.match(r"[\w$]+\s*[(=]", tail)):
-                if re.match(r"\s+[^\W\d_]{2,}\s+[^\W\d_]{2,}", segment[m_.end(1):]):
-                    continue    # "(form bindeado a …)": a sentence, not a name
+                if re.match(r"\s+[^\W\d_]{2,}\s+[^\W\d_]+", segment[m_.end(1):]):
+                    # "(detach ya no cierra …)", "(form bindeado a …)": a sentence's subject
+                    # may be the line's member, but no claim that the doc was wrong
+                    out.add("~?" + name)
+                    continue
                 name = "?" + name   # "(aforo)": a word; code only if the file declares it
             # After a dash, prose follows unless the word looks like code; before the path's
             # parenthesis, likewise (`foo` (File:N), foo() (File:N), not "por eval (File:N)").
@@ -2842,7 +2906,7 @@ def render(problems: list[Problem], checked: int, scope: Scope, offset: int, lim
         for f in sorted(by_file):
             for key in by_file[f]:
                 lines = merged[key]
-                cell = ", ".join(str(x) for x in lines[:6]) + (" …" if len(lines) > 6 else "")
+                cell = ", ".join(str(x) for x in lines)       # all of them: a table to use
                 rows.append(f"| {f} | {cell} | `{_cut(key[1])}` | {key[2].replace('|', '/')} |")
         shown = rows[:2] + rows[2:][offset:offset + limit]
         more = offset + limit < len(rows) - 2
