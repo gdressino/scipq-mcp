@@ -5,6 +5,16 @@ version and date when releasing.
 
 ## Unreleased
 
+### Fixed
+
+- In a file changed after its compilation, the lines quoted for its sites (`references`,
+  the callers in `context`, the uses in `family`) were read at their compiled numbers, so
+  they could quote other code: each site moves with its container, found again as `source`
+  finds it, and is shown where it is now (`(compiled at N)`); when its line does not show it
+  now, the answer says the text may be other code.
+- `source` of a method no longer in its file suggests the method with the same parameters
+  where it was (renamed?).
+
 ### Changed
 
 - README: which version a server runs, by what follows `uvx`: `scipq-mcp` (the one cached

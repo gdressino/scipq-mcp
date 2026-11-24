@@ -1188,6 +1188,8 @@ def test_source_of_a_file_changed_after_its_compilation(sample_copy, tmp_path):
     os.utime(path, (1_700_000_600, 1_700_000_600))
     out = svc.source("Entity#setState")
     assert "was not found in it as it is now: these are lines 14–16 of the current file" in out
+    assert "renamed? a method with the same parameters is there now: changeState(int) at " \
+           "lines 17–19" in out, out
 
 
 def _edit(root, rel, old, new, when):
@@ -1235,4 +1237,25 @@ def test_members_of_a_class_inside_a_method_are_not_looked_for(tmp_path):
     from scipq_mcp.queries import Definition, Location
     from scipq_mcp.scip import Range
     d = Definition("com/x/Foo#bar().Local#baz().", Location("Foo.java", Range(3, 4, 3, 7)), None)
-    assert _locate_now(str(tmp_path), d) == ("", None)
+    assert _locate_now(str(tmp_path), d) == ("", None, "")
+
+
+def test_quoted_lines_of_a_changed_file_are_found_again(sample_copy, tmp_path):
+    from scipq_mcp.service import Service
+    # Two lines above the calls of setState in Service, not compiled.
+    _edit(sample_copy, "app/src/main/java/com/example/app/Service.java", "public class Service",
+          "// one\n// two\npublic class Service", 1_700_000_500)
+    svc = Service(sample_copy, cache_dir=str(tmp_path / "c"))
+    out = svc.references("Entity#setState")
+    assert "  22: e.setState(3);  [Service#notArchived]  (compiled at 20)" in out, out
+    assert "  8: e.setState(0);  [TestSupport#reset(Entity)]\n" in out   # unchanged file
+    out = svc.context("Entity#setState")
+    assert "app/src/main/java/com/example/app/Service.java:22: e.setState(3);  (compiled at 20)" \
+        in out, out
+    # A call removed: its compiled line is said to be what it may be.
+    _edit(sample_copy, "app/src/main/java/com/example/app/Service.java", "e.setState(3);",
+          "e.hashCode();", 1_700_000_600)
+    out = svc.references("Entity#setState")
+    assert "  22: e.hashCode();  [Service#notArchived]  (compiled at 20; the file changed since " \
+           "and this line does not show it: the text may be other code)" in out, out
+    assert "  27: e.setState(1);  [Service#activate(Entity)]  (compiled at 25)" in out

@@ -183,25 +183,27 @@ def body_section(nav: Navigator, d: Definition, short: str) -> Section | None:
 
 def _call_lines(nav: Navigator, nodes) -> tuple[list[str], int, int]:
     """One line per caller (its first call site and the call's text), non-test ones first."""
-    wanted: dict[str, set[int]] = {}
+    wanted: dict[str, dict[int, tuple[list[str], str]]] = {}
     for n in nodes:
         if n.sites:
             r = n.sites[0]
-            wanted.setdefault(r.location.source, set()).add(r.location.range.start_line)
-    texts = {src: nav.ws.source_lines(src, ls) for src, ls in wanted.items()}
+            wanted.setdefault(r.location.source, {})[r.location.range.start_line] = \
+                (render.site_names(r.symbol), r.container)
+    texts = {src: X.quote_sites(nav, src, ls) for src, ls in wanted.items()}
     rows = []
     for n in nodes:
         if not n.sites:
             continue
         r = n.sites[0]
         test = X.is_test_reference(r)
-        text = texts.get(r.location.source, {}).get(r.location.range.start_line, "")
+        line = r.location.range.start_line
+        now, text, how = texts.get(r.location.source, {}).get(line, (line, "", ""))
         extra = f"  (+{len(n.sites) - 1} more calls)" if len(n.sites) > 1 else ""
         via = f"  via {S.short(n.via)}" if n.via else ""
         tag = "  [test]" if test else ""
         rows.append((test, f"  {render.container_label(n.symbol) or '(top level)'}  "
-                           f"{r.location.source}:{r.location.line}: {_clip(text, 110)}"
-                           f"{extra}{via}{tag}"))
+                           f"{r.location.source}:{now + 1}: {_clip(text, 110)}"
+                           f"{render.moved_note(line, how)}{extra}{via}{tag}"))
     rows.sort(key=lambda x: x[0])
     files = len({n.sites[0].location.source for n in nodes if n.sites})
     tests = sum(1 for t, _ in rows if t)

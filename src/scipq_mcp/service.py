@@ -398,7 +398,8 @@ class Service:
                 refs = _drop_imports(nav, refs)
             if scope:
                 refs = [r for r in refs if X.in_scope(r.container, r.location.source, scope)]
-            text = render.references(nav.ws, sym, refs, defs, offset, limit, include_definitions)
+            text = render.references(nav.ws, sym, refs, defs, offset, limit, include_definitions,
+                                     quote=lambda src, sites: X.quote_sites(nav, src, sites))
             if scope:
                 text = text.replace(" — ", f" — in {scope}: ", 1)
             if by_name:
@@ -689,7 +690,8 @@ class Service:
             sym, note, fam = self._resolved(nav, symbol, lambda s: X.family(nav, s, lib))
             srcs = {r.location.source for m in fam for r in m.uses}
             return note + "".join(dict.fromkeys(notes)) + \
-                render.family(sym, fam, nav.ws, offset, limit, show_uses), srcs
+                render.family(sym, fam, nav.ws, offset, limit, show_uses,
+                              quote=lambda src, sites: X.quote_sites(nav, src, sites)), srcs
         return body
 
     def library_family(self, nav: Navigator, notes: list[str]) -> Callable:

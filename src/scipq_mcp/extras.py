@@ -36,6 +36,7 @@ class Source:
     # a parameter, a local, a member of a local class…, or the text did not parse).
     compiled: tuple[int, int] | None = None
     located: str = ""
+    hint: str = ""   # when "absent": a method there now with the same parameters (renamed?)
 
 
 def source(nav: Navigator, symbol: str, max_lines: int = 200) -> Source | None:
@@ -49,11 +50,11 @@ def source(nav: Navigator, symbol: str, max_lines: int = 200) -> Source | None:
     first, last = rng.start_line, rng.end_line
     if rng.end_char == 0 and last > first:
         last -= 1  # half-open range ending at column 0 of the next line
-    compiled, located = None, ""
+    compiled, located, hint = None, "", ""
     if not d.generated and nav.ws.freshness_of({d.location.source}).stale:
         compiled = (first + 1, last + 1)
         try:
-            located, now = _locate_now(nav.ws.root, d)
+            located, now, hint = _locate_now(nav.ws.root, d)
         except Exception:   # half-edited code the parser does not expect: not looked for
             located, now = "", None
         if now is not None:
@@ -61,39 +62,40 @@ def source(nav: Navigator, symbol: str, max_lines: int = 200) -> Source | None:
     shown_last = min(last, first + max(1, max_lines) - 1)
     raw = read_raw_lines(nav.ws.root, d.location.source, first, shown_last)
     lines = [(first + 1 + k, t) for k, t in enumerate(raw)]
-    return Source(d, lines, last + 1, shown_last < last, compiled, located)
+    return Source(d, lines, last + 1, shown_last < last, compiled, located, hint)
 
 
-def _locate_now(root: str, d: Definition) -> tuple[str, tuple[int, int] | None]:
+def _locate_now(root: str, d: Definition) -> tuple[str, tuple[int, int] | None, str]:
     """Where a type, method, constructor, field, enum constant or record component is in its
     file now (0-based first and last lines), found by its enclosing types, name and
-    parameter types: ("found", lines), ("absent", None), or ("", None) when it cannot be
-    looked for."""
+    parameter types: ("found", lines, ""), ("absent", None, hint: a method with the same
+    parameters where it was, as it may have been renamed), or ("", None, "") when it cannot
+    be looked for."""
     from .javasrc import JavaSource
     from .libsrc import _type_variables, class_path_of, param_types
     descs = [x for x in S.parse(d.symbol) if x.suffix != S.NAMESPACE]
     kind = S.kind_of(d.symbol)
     if S.is_local_like(d.symbol) or not descs or kind not in (
             "type", "method", "constructor", "term"):
-        return "", None
+        return "", None, ""
     # Only members of types nested in types: not of a class declared inside a method.
     owners = descs if kind == "type" else descs[:-1]
     if not owners or any(x.suffix != S.TYPE for x in owners):
-        return "", None
+        return "", None, ""
     try:
         with open(os.path.join(root, d.location.source), encoding="utf-8",
                   errors="replace") as fh:
             src = JavaSource(fh.read())
     except OSError:
-        return "absent", None
+        return "absent", None, ""
     _path, types = class_path_of(d.symbol)
     decl = src.find_type(types) if types else None
     if decl is None:
-        return "absent", None
+        return "absent", None, ""
     start, body_open, body_close = decl
     if kind == "type":
         return "found", (src.line_of(_annotations_before(src.masked, start)) - 1,
-                         src.line_of(body_close) - 1)
+                         src.line_of(body_close) - 1), ""
     header = " ".join(src.masked[start:body_open].split())
     is_enum = " enum " in f" {header} "
     members = src.members(body_open, body_close, is_enum=is_enum, type_name=types[-1])
@@ -108,7 +110,18 @@ def _locate_now(root: str, d: Definition) -> tuple[str, tuple[int, int] | None]:
             same = [m for m in same if param_types(m.declaration, tvars) == want]
         pick = same[0] if len(same) == 1 else None
         if pick is None and len(same) > 1:
-            return "", None
+            return "", None, ""
+        if pick is None and kind == "method" and want is not None:
+            # Renamed? A method with the same parameters where this one was compiled.
+            rng = d.enclosing or d.location.range
+            near = [m for m in members if m.kind == "method" and m.name != name
+                    and param_types(m.declaration, tvars) == want
+                    and m.start_line - 1 <= rng.end_line + 5
+                    and m.end_line - 1 >= rng.start_line - 5]
+            if len(near) == 1:
+                m = near[0]
+                return "absent", None, f"{m.name}({', '.join(t or 'T' for t in want)}) at " \
+                    f"lines {m.start_line}–{m.end_line}"
     else:
         fields = [m for m in members if m.kind == "field" and m.name == name]
         pick = fields[0] if len(fields) == 1 else None
@@ -119,10 +132,10 @@ def _locate_now(root: str, d: Definition) -> tuple[str, tuple[int, int] | None]:
             for _typ, comp, pos in src.record_components(start, body_open, types[-1]):
                 if comp == name:
                     line = src.line_of(pos) - 1
-                    return "found", (line, line)
+                    return "found", (line, line), ""
     if pick is None:
-        return "absent", None
-    return "found", (pick.start_line - 1, pick.end_line - 1)
+        return "absent", None, ""
+    return "found", (pick.start_line - 1, pick.end_line - 1), ""
 
 
 def _annotations_before(masked: str, pos: int) -> int:
@@ -152,6 +165,63 @@ def _annotations_before(masked: str, pos: int) -> int:
         if i == j or i == 0 or masked[i - 1] != "@":
             return k
         k = i - 1
+
+
+def quote_sites(nav: Navigator, source: str, sites: dict[int, tuple[list[str], str]]
+                ) -> dict[int, tuple[int, str, str]]:
+    """The text of sites (calls, uses) to quote, {compiled 0-based line: (the names the site
+    shows, its container's symbol)} -> {compiled line: (line now, stripped text, how)}. In a
+    file changed after its compilation a site moves with its container (found again as
+    `source` finds it): how is "" (where it was), "moved", or "unsure" (its line does not
+    show it now: the text may be other code)."""
+    ws = nav.ws
+    if not sites:
+        return {}
+    if not ws.freshness_of({source}).stale:
+        text = ws.source_lines(source, sites)
+        return {k: (k, text.get(k, ""), "") for k in sites}
+    try:
+        with open(os.path.join(ws.root, source), encoding="utf-8", errors="replace") as fh:
+            now = fh.read().split("\n")
+    except OSError:
+        return {k: (k, "", "unsure") for k in sites}
+    shifts: dict[str, tuple[int, ...]] = {}
+    out = {}
+    for k, (names, container) in sites.items():
+        if container not in shifts:
+            shifts[container] = _container_shifts(nav, container, source)
+        words = [re.compile(r"(?<![\w$])" + re.escape(n) + r"(?![\w$])") for n in names if n]
+        hits = [k + s for s in shifts[container] if 0 <= k + s < len(now)
+                and any(w.search(now[k + s]) for w in words)]
+        if len(set(hits)) == 1:
+            j = hits[0]
+            out[k] = (j, now[j].strip(), "" if j == k else "moved")
+        else:
+            j = k + shifts[container][0] if shifts[container] else k
+            j = j if 0 <= j < len(now) else k
+            out[k] = (j, now[j].strip() if j < len(now) else "", "unsure")
+    return out
+
+
+def _container_shifts(nav: Navigator, container: str, source: str) -> tuple[int, ...]:
+    """How many lines a definition moved since its compilation: (0,) when it cannot be told,
+    one shift when its first and last lines moved alike, both when the edit is inside it."""
+    if not container or S.is_local(container):
+        return (0,)
+    d = nav.definition(container)
+    if d is None or d.location.source != source or d.generated:
+        return (0,)
+    try:
+        status, now, _hint = _locate_now(nav.ws.root, d)
+    except Exception:
+        return (0,)
+    if status != "found" or now is None:
+        return (0,)
+    rng = d.enclosing or d.location.range
+    last = rng.end_line - 1 if rng.end_char == 0 and rng.end_line > rng.start_line \
+        else rng.end_line
+    first_shift, last_shift = now[0] - rng.start_line, now[1] - last
+    return (first_shift,) if first_shift == last_shift else (first_shift, last_shift)
 
 
 def read_raw_lines(root: str, source: str, first: int, last: int) -> list[str]:

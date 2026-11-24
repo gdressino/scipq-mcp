@@ -126,7 +126,7 @@ def container_label(symbol: str) -> str:
 
 def references(ws: Workspace, symbol: str, refs: list[Reference], defs: list[Definition],
                offset: int, limit: int, include_definitions: bool,
-               show_containers: bool = True) -> str:
+               show_containers: bool = True, quote=None) -> str:
     files = {r.location.source for r in refs}
     shown, suffix = page(refs, offset, limit)
     head = (f"{S.short(symbol)} — {len(refs)} reference{'s' if len(refs) != 1 else ''} "
@@ -142,10 +142,15 @@ def references(ws: Workspace, symbol: str, refs: list[Reference], defs: list[Def
         by_file.setdefault(r.location.source, []).append(r)
     for source, rs in by_file.items():
         lines.append(source)
-        text = ws.source_lines(source, {r.location.range.start_line for r in rs})
         rows: OrderedDict[int, list[Reference]] = OrderedDict()
         for r in rs:
             rows.setdefault(r.location.range.start_line, []).append(r)
+        sites = {line: (site_names(g[0].symbol), g[0].container) for line, g in rows.items()}
+        if quote is not None:   # extras.quote_sites: finds them again in a changed file
+            quoted = quote(source, sites)
+        else:
+            text = ws.source_lines(source, sites)
+            quoted = {k: (k, text.get(k, ""), "") for k in sites}
         for line, group in rows.items():
             mult = f" (×{len(group)})" if len(group) > 1 else ""
             where = ""
@@ -154,8 +159,27 @@ def references(ws: Workspace, symbol: str, refs: list[Reference], defs: list[Def
                 if group[0].via_local:
                     c += f" › {group[0].via_local}"
                 where = f"  [{c}]" if c else ""
-            lines.append(f"  {line + 1}: {text.get(line, '')[:160]}{mult}{where}")
+            now, text, how = quoted.get(line, (line, "", ""))
+            lines.append(f"  {now + 1}: {text[:160]}{mult}{where}{moved_note(line, how)}")
     return "\n".join(lines)
+
+
+def site_names(symbol: str) -> list[str]:
+    """The names a site of `symbol` shows in the code: a constructor's is its type's (or the
+    `this`/`super` that calls it)."""
+    if S.kind_of(symbol) == "constructor":
+        return [S.name_of(S.parent(symbol)), "this", "super"]
+    return [S.name_of(symbol)]
+
+
+def moved_note(compiled: int, how: str) -> str:
+    """After a quoted line of a file changed since its compilation (extras.quote_sites)."""
+    if how == "moved":
+        return f"  (compiled at {compiled + 1})"
+    if how == "unsure":
+        return (f"  (compiled at {compiled + 1}; the file changed since and this line does not "
+                "show it: the text may be other code)")
+    return ""
 
 
 def definition(ws: Workspace, d: Definition | None, symbol: str) -> str:
@@ -382,7 +406,9 @@ def source(src, symbol: str) -> str:
         elif src.located == "absent":
             out.append(f"-- {d.location.source} changed after its compilation and the "
                        f"definition was not found in it as it is now: these are lines {a}–{b} "
-                       "of the current file, which may hold other code")
+                       "of the current file, which may hold other code"
+                       + (f"; renamed? a method with the same parameters is there now: "
+                          f"{src.hint}" if src.hint else ""))
         else:
             out.append(f"-- {d.location.source} changed after its compilation: these are the "
                        f"compiled lines {a}–{b}, read from the file as it is now (they may have "
@@ -536,7 +562,7 @@ def typed(type_symbol: str, uses, categories: list[str] | None, offset: int, lim
 
 
 def family(method: str, fam, ws: Workspace, offset: int, limit: int,
-           show_uses: bool = True) -> str:
+           show_uses: bool = True, quote=None) -> str:
     if not fam:
         return f"{S.short(method)}: no override family found"
     total_uses = sum(len(m.uses) for m in fam)
@@ -550,18 +576,27 @@ def family(method: str, fam, ws: Workspace, offset: int, limit: int,
         flat = [(m, r) for m in fam for r in m.uses]
         shown, suffix = page(flat, offset, limit)
         lines.append(f"uses{suffix}:")
-        texts: dict[str, dict[int, str]] = {}
+        sites: dict[str, dict[int, tuple[list[str], str]]] = {}
         for _m, r in shown:
-            texts.setdefault(r.location.source, set()).add(r.location.range.start_line)
-        texts = {s: ws.source_lines(s, ls) for s, ls in texts.items()}
+            sites.setdefault(r.location.source, {})[r.location.range.start_line] = \
+                (site_names(r.symbol), r.container)
+        texts = {}
+        for s, ls in sites.items():
+            if quote is not None:   # extras.quote_sites: finds them again in a changed file
+                texts[s] = quote(s, ls)
+            else:
+                raw = ws.source_lines(s, ls)
+                texts[s] = {k: (k, raw.get(k, ""), "") for k in ls}
         current = None
         for m, r in shown:
             if m.symbol != current:
                 current = m.symbol
                 lines.append(f"  {member_name(m)}:")
-            t = texts[r.location.source].get(r.location.range.start_line, "")
-            lines.append(f"    {r.location.source}:{r.location.line}: {t[:140]}"
-                         + (f"  [{container_label(r.container)}]" if r.container else ""))
+            line = r.location.range.start_line
+            now, t, how = texts[r.location.source].get(line, (line, "", ""))
+            lines.append(f"    {r.location.source}:{now + 1}: {t[:140]}"
+                         + (f"  [{container_label(r.container)}]" if r.container else "")
+                         + moved_note(line, how))
     return "\n".join(lines)
 
 
