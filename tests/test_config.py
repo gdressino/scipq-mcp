@@ -73,6 +73,10 @@ def test_check_refs_scope_from_the_checkout_or_the_user(tmp_path):
     st = CFG.settings_for(str(root), home=str(home))
     assert st.check_refs_files == ["docs/guides"] and st.check_refs_files_from == ".scipq.toml"
     assert sum("check_refs.files" in w and "must be relative" in w for w in st.warnings) == 2
+    (root / ".scipq.toml").write_text('[check_refs]\nfiles = ["/etc/*.md"]\n')
+    st = CFG.settings_for(str(root), home=str(home))
+    assert st.check_refs_files is None          # every glob rejected: the default applies
+    (root / ".scipq.toml").write_text('[check_refs]\nfiles = ["docs/guides"]\n')
     write(str(home / "config.toml"), '[[project]]\nmatch = { root_project = "shop" }\n'
           '[project.check_refs]\nfiles = []\n')
     st = CFG.settings_for(str(root), home=str(home))

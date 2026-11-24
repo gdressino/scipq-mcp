@@ -755,8 +755,10 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
     files = _files(root, globs, exclude, listed, nocase=sc.how == "default")
     if sc.how != "given":
         lic = {os.path.dirname(f) for f in listed if _LICENSE.match(os.path.basename(f))} - {""}
-        third = [f for f in files if _vendored(f, lic)]
-        sc.vendored, files = len(third), [f for f in files if f not in set(third)]
+        third = {f for f in files if _vendored(f, lic)}
+        sc.vendored, files = len(third), [f for f in files if f not in third]
+    else:
+        third = set()
     # Each file once (CLAUDE.md as a link to AGENTS.md), none from outside the checkout.
     real_root, seen_real, aliases = os.path.realpath(root), set(), set()
     for f in list(files):
@@ -788,10 +790,10 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
     excluded = {f for f in listed if _is_md(f) and is_excluded(f)}
     if skip_archives and sc.how != "given":     # the checkout's, not only the globs' ones
         archived |= {f for f in listed if _is_md(f) and f not in in_scope and in_archive(f)}
-    archived -= excluded
+    archived -= excluded | third
     sc.total, sc.archived, sc.excluded = len(in_scope), len(archived), len(excluded)
-    sc.others = sum(1 for f in listed if _is_md(f) and f not in in_scope and f not in archived
-                    and f not in excluded and f not in aliases) - sc.vendored
+    sc.others = len({f for f in listed if _is_md(f)} - in_scope - archived - excluded - aliases -
+                    third)
     citing_only: set[str] = set()       # docs read only for their mentions of changed code
     java_set: set[str] = set()
     if since:
@@ -1374,10 +1376,29 @@ def _enclosing(lines: list[str], n: int) -> str | None:
                 head = " ".join(masked[max(0, j - 3):j] + [row[:k]]).rstrip()
                 if re.search(r"\b(?:class|interface|enum|record)\b[^;{}()]*$", head):
                     return None
-                mo = re.search(r"([\w$]+)\s*\([^;{}]*\)\s*(?:throws\s+[\w$.,\s<>]+)?$", head)
-                if mo and mo.group(1) not in _HEADS and not head.endswith("->"):
-                    return mo.group(1)
+                name = _called_before_brace(head)
+                if name is not None:
+                    return name or None     # "": an anonymous class's body
     return None
+
+
+def _called_before_brace(head: str) -> str | None:
+    """The method name a header ends with (`void get(A a) throws E`), its parameter list
+    matched from the end (annotations with arguments before it are not it); "" for
+    `new Foo(…)` (an anonymous class); None when it is not a method's header."""
+    h = re.sub(r"\s*throws\s+[\w$.,\s<>]+$", "", head)
+    if not h.endswith(")"):
+        return None
+    depth, i = 0, len(h) - 1
+    while i >= 0:
+        depth += {")": 1, "(": -1}.get(h[i], 0)
+        if depth == 0:
+            break
+        i -= 1
+    mo = re.search(r"(?:\b(new)\s+[\w$.<>,\s]*?)?([\w$]+)\s*(?:<[^<>()]*>\s*)?$", h[:max(i, 0)])
+    if not mo or mo.group(2) in _HEADS or head.endswith("->"):
+        return None
+    return "" if mo.group(1) else mo.group(2)
 
 
 def _block_at(old: list[str], cur: list[str], n: int, end: int, near: int):

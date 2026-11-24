@@ -484,7 +484,7 @@ class Graph:
     # impact / tests / path -------------------------------------------------------------------
 
     def _runs_given(self, caller: int, shard_id: int, line: int, col: int, root: str,
-                    masked: dict, cache: dict, depth: int = 0) -> bool:
+                    masked: dict, cache: dict, depth: int = 0, arg: int = 0) -> bool:
         """The method called at line:col of caller's code (in that shard) is the project's
         and runs the lambda or method reference it is given before returning (a helper
         that opens a transaction and calls it): the call is direct, not kept for later."""
@@ -496,7 +496,7 @@ class Graph:
         sid = cache[key].get(f"{line}:{col}")
         if sid is None:
             return False
-        if ("body", sid) not in cache:
+        if ("body", sid, arg) not in cache:
             row = self.con.execute("SELECT shard_id, body_start, body_end, signature FROM defs "
                                    "WHERE symbol_id = ? AND body_start IS NOT NULL", (sid,)
                                    ).fetchone()
@@ -505,15 +505,15 @@ class Graph:
             if row and row[0] in sh and row[2] is not None and row[2] - row[1] < 400:
                 text, starts = _masked(root, sh[row[0]][0], masked)
                 lo, hi = row[1], min(row[2] + 1, len(starts) - 1)
-                cache[("body", sid)] = False        # while it is looked at (recursion)
+                cache[("body", sid, arg)] = False       # while it is looked at (recursion)
 
-                def passed(k: int, base=starts[lo], shard=row[0]) -> bool:
+                def passed(k: int, at: int, base=starts[lo], shard=row[0]) -> bool:
                     n = bisect.bisect_right(starts, base + k) - 1
                     return depth < 3 and self._runs_given(sid, shard, n, base + k - starts[n],
-                                                          root, masked, cache, depth + 1)
-                ok = _runs_its_argument(text[starts[lo]:starts[hi]], passed)
-            cache[("body", sid)] = ok
-        return cache[("body", sid)]
+                                                          root, masked, cache, depth + 1, at)
+                ok = _runs_its_argument(text[starts[lo]:starts[hi]], passed, arg)
+            cache[("body", sid, arg)] = ok
+        return cache[("body", sid, arg)]
 
     def impact(self, symbol: str, depth: int = 3, include_overridden: bool = True,
                max_nodes: int = 20000, root: str = "", lifecycle: set[str] | None = None
@@ -659,8 +659,9 @@ class Graph:
                                      bool(test), _lines(sites), mod,
                                      inner=all(_deferred_site(
                                          root, src, x, masked,
-                                         lambda ln, col, c=caller, s_=shard_id:
-                                         self._runs_given(c, s_, ln, col, root, masked, given))
+                                         lambda ln, col, arg, c=caller, s_=shard_id:
+                                         self._runs_given(c, s_, ln, col, root, masked, given,
+                                                          arg=arg))
                                          for x in sites.split(",") if x))
                 if len(nodes) >= max_nodes:
                     truncated = True
@@ -1511,6 +1512,7 @@ def _in_lambda(t: str, pos: int, limit: int = 30000, runs_at=None) -> bool:
     paren = brace = 0
     arrow_ok = True         # an arrow at this level still holds pos (no , or ; since)
     pending = t[max(0, pos - 2):pos] == "::"   # in a lambda: to whom is it given?
+    arg = 0                 # and as which argument (the commas before it)
     i, stop = pos - 1, max(0, pos - limit)
     while i >= stop:
         c = t[i]
@@ -1524,9 +1526,10 @@ def _in_lambda(t: str, pos: int, limit: int = 30000, runs_at=None) -> bool:
                     head = t[max(0, i - 200):i]
                     name = re.search(r"([\w$]+)\s*(?:<[^<>()]*>\s*)?$", head)
                     if not (name and (name.group(1) in _RUNS_NOW or runs_at is not None and
-                                      runs_at(i - len(head) + name.start(1)))):
+                                      runs_at(i - len(head) + name.start(1), arg))):
                         return True     # an argument of a call that keeps it
                     pending = False     # run in place: what holds that call decides
+                    arg = 0
                 arrow_ok = True     # out of an argument list, into the expression holding it
         elif c == "}":
             brace += 1
@@ -1551,6 +1554,8 @@ def _in_lambda(t: str, pos: int, limit: int = 30000, runs_at=None) -> bool:
         elif c in ",;" and not paren and not brace:
             if pending and c == ";":
                 return True
+            if pending:
+                arg += 1
             arrow_ok = False
         i -= 1
     return pending
@@ -1574,9 +1579,10 @@ def _masked(root: str, source: str, cache: dict) -> tuple[str, list[int]]:
     return got
 
 
-def _call_named_before(t: str, k: int) -> int | None:
-    """Where the name of the call whose argument list holds t[k] starts."""
-    depth, i = 0, k - 1
+def _call_named_before(t: str, k: int) -> tuple[int, int] | None:
+    """Where the name of the call whose argument list holds t[k] starts, and which argument
+    t[k] is (0 for the first)."""
+    depth, i, arg = 0, k - 1, 0
     while i >= 0:
         if t[i] in ")]":
             depth += 1
@@ -1585,20 +1591,33 @@ def _call_named_before(t: str, k: int) -> int | None:
                 if t[i] != "(":
                     return None
                 name = re.search(r"([\w$]+)\s*$", t[max(0, i - 200):i])
-                return i - len(t[max(0, i - 200):i]) + name.start(1) if name else None
+                return (i - len(t[max(0, i - 200):i]) + name.start(1), arg) if name else None
             depth -= 1
+        elif t[i] == "," and not depth:
+            arg += 1
         elif t[i] in ";{}" and not depth:
             return None
         i -= 1
     return None
 
 
-def _runs_its_argument(body: str, runs_at=None) -> bool:
+def _runs_its_argument(body: str, runs_at=None, arg: int | None = None) -> bool:
     """A method body that runs a parameter it is given before returning: the parameter is
     only called (p.accept(…), p.get()) or handed as it is to a call that runs it
     (runs_at(offset of that call's name in body)), never kept or returned, and not from a
-    lambda kept for later (executor.submit(() -> p.run()))."""
-    k = body.find("(")
+    lambda kept for later (executor.submit(() -> p.run())). arg: the parameter that gets the
+    lambda (by position; the last one for a varargs' later ones); None: any."""
+    k = 0
+    while (ann := re.match(r"\s*@[\w$.]+\s*", body[k:])):     # annotations come first
+        k += ann.end()
+        if body[k:k + 1] == "(":
+            depth = 0
+            while k < len(body):
+                depth += {"(": 1, ")": -1}.get(body[k], 0)
+                k += 1
+                if depth == 0:
+                    break
+    k = body.find("(", k)
     if k < 0:
         return False
     depth, j = 0, k
@@ -1625,6 +1644,8 @@ def _runs_its_argument(body: str, runs_at=None) -> bool:
     if open_ < 0:
         return False            # abstract, or an interface's: no body here
     inner = body[open_:]
+    if arg is not None:
+        names = names[min(arg, len(names) - 1):][:1] if names else []
     for p_ in names:
         uses = [mo.start() for mo in re.finditer(r"(?<![\w$.])" + re.escape(p_) + r"(?![\w$])",
                                                  inner)]
@@ -1632,10 +1653,10 @@ def _runs_its_argument(body: str, runs_at=None) -> bool:
                                                   r"\s*\.\s*[A-Za-z_$][\w$]*\s*\(", inner)]
         handed = [u for u in uses if u not in calls]
         on = [(u, _call_named_before(inner, u)) for u in handed]
-        if (calls or handed) and not any(_in_lambda(inner, c) for c in calls) and all(
+        if (calls or handed) and not any(_in_lambda(inner, c) for c in calls + handed) and all(
                 c is not None and re.search(r"[(,]\s*$", inner[max(0, u - 50):u]) and
                 re.match(r"\s*[,)]", inner[u + len(p_):])
-                and runs_at is not None and runs_at(open_ + c) for u, c in on):
+                and runs_at is not None and runs_at(open_ + c[0], c[1]) for u, c in on):
             return True
     return False
 
@@ -1655,9 +1676,9 @@ def _deferred_site(root: str, source: str, site: str, cache: dict, runs_at=None)
     except ValueError:
         return False
 
-    def at(k: int) -> bool:
+    def at(k: int, arg: int = 0) -> bool:
         n = bisect.bisect_right(starts, k) - 1
-        return runs_at is not None and runs_at(n, k - starts[n])
+        return runs_at is not None and runs_at(n, k - starts[n], arg)
     return ln < len(starts) - 1 and _in_lambda(text, starts[ln] + c, runs_at=at)
 
 

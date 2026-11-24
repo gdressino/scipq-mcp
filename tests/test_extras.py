@@ -917,6 +917,7 @@ def test_check_refs_default_scope_is_what_agents_read(sample_copy, tmp_path):
     put("app/src/main/webapp/lib/README.md", "- `Entity#a7`\n")       # someone else's
     put("sdk/LICENSE", "MIT\n")
     put("sdk/README.md", "- `Entity#a8`\n")                           # our own package
+    put("app/src/main/webapp/lib/old/README.md", "- `Entity#a9`\n")   # theirs, and archived
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
     for x in ("a1", "a8"):
         assert f"Entity has no member {x}" in out, (x, out)
@@ -925,7 +926,7 @@ def test_check_refs_default_scope_is_what_agents_read(sample_copy, tmp_path):
     assert out.count("Entity has no member a1") == 1
     assert "scope: the default, files agents read (CLAUDE.md, AGENTS.md, .claude/**, " \
         ".github/**, README*.md): 2 files; not checked: 5 other .md files of the checkout" \
-        in out and "; 1 file of third-party code" in out, out
+        in out and "; 2 files of third-party code" in out and "archive folders" not in out, out
 
 
 def test_check_refs_since_a_commit(sample_copy, tmp_path):
@@ -1078,10 +1079,17 @@ def test_project_helpers_that_run_the_lambda_they_are_given():
         assert _runs_its_argument(mask(body)), body
     for body in keeps:
         assert not _runs_its_argument(mask(body)), body
-    # handed as it is to an overload: as that one does
+    # handed as it is to an overload: as that one does, for that argument
     one = "<T> T get(Function<Pm, T> f) {\n  return get(DEFAULT, f);\n}"
-    assert _runs_its_argument(mask(one), lambda k: True)
-    assert not _runs_its_argument(mask(one), lambda k: False)
+    assert _runs_its_argument(mask(one), lambda k, i: i == 1)
+    assert not _runs_its_argument(mask(one), lambda k, i: False)
+    # only the parameter that gets the lambda counts; annotations before the method
+    two = "void later(Runnable task, Duration d) {\n  queue.add(task);\n  log(d.toMillis());\n}"
+    assert not _runs_its_argument(mask(two), arg=0)
+    tx = "@Transactional(readOnly = true)\nvoid inTx(Runnable r) {\n  r.run();\n}"
+    assert _runs_its_argument(mask(tx), arg=0)
+    kept = "void later(Runnable r) {\n  submit(() -> helper(r));\n}"
+    assert not _runs_its_argument(mask(kept), lambda k, i: True, arg=0)
 
 
 def test_repeated_lines_are_placed_only_in_their_method():

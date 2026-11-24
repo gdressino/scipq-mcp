@@ -1118,8 +1118,8 @@ class Service:
                     skip={S.owner_type(e.node.symbol) for e in entries + itself})
                 # Calls made only from inside an anonymous class or a lambda: they run when
                 # whoever receives that object calls it (a library, often).
-                deferred = list({n.symbol: n for n in every if n.inner and
-                                 not n.test}.values())
+                deferred = list({n.symbol: n for n in nodes if n.inner and
+                                 not n.test}.values())      # of the rows shown
             text = render.impact(sym, nodes, trunc, d, group_by, offset, limit, entries,
                                  itself, deep)
             text += render.library_callbacks(callbacks, deferred)

@@ -282,8 +282,10 @@ def sanitize_repo_config(data: dict) -> tuple[dict, list[str]]:
                          if _relative_glob(g, "concepts.exclude", warnings)]
     cr = out.get("check_refs")
     if isinstance(cr, dict) and "files" in cr:
-        cr["files"] = [g for g in _as_list(cr["files"], "check_refs.files", warnings)
-                       if _relative_glob(g, "check_refs.files", warnings)]
+        given = _as_list(cr["files"], "check_refs.files", warnings)
+        cr["files"] = [g for g in given if _relative_glob(g, "check_refs.files", warnings)]
+        if given and not cr["files"]:
+            del cr["files"]         # all of them rejected: the default scope, not nothing
     if isinstance(cr, dict) and "exclude" in cr:
         cr["exclude"] = [g for g in _as_list(cr["exclude"], "check_refs.exclude", warnings)
                          if _relative_glob(g, "check_refs.exclude", warnings)]
