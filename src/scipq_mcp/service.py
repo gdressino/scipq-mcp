@@ -62,11 +62,15 @@ class OverloadLabels:
     """For S.short while a request runs: a method that takes parameters is written with them
     (`Service#process(String)`) instead of SCIP's numbering, since a name reads `process()` as
     the method without parameters, as Java does. The signatures come from the index (when it
-    exists already), the file of the method's top-level type, or a library's sources jar; a
-    few hundred methods at most per request."""
+    exists already), the file of the method's top-level type, or a library's sources jar.
+    A method whose parameters are not read (a library without sources or not mapped yet, or
+    over the limits below) is written `m(…)`, which reads back as the method whatever it takes,
+    never `m()`; note() says how many."""
 
-    MAX_GROUPS = 400
-    MAX_SECONDS = 3.0   # spent looking labels up, per request: then the plain names
+    UNKNOWN = "…"
+    MAX_GROUPS = 1000
+    MAX_SECONDS = 8.0       # spent looking labels up, per request
+    LIBRARY_SECONDS = 3.0   # of which in sources jars (the slow part in a cold process)
 
     def __init__(self, svc: "Service", nav: Navigator):
         self.svc, self.nav = svc, nav
@@ -74,7 +78,23 @@ class OverloadLabels:
         self.files: dict[str, dict[tuple[str, str], list]] = {}
         self._con: sqlite3.Connection | None | bool = None   # False: no usable index
         self._spent = 0.0
+        self._library_spent = 0.0
         self._shard_ok: dict[str, bool] = {}
+        self.unread: dict[str, set[str]] = {"time": set(), "sources": set()}
+
+    def note(self) -> str:
+        """A line for the answer when some methods were written `m(…)`."""
+        timed, nosrc = self.unread["time"], self.unread["sources"] - self.unread["time"]
+        if not timed and not nosrc:
+            return ""
+        why = []
+        if nosrc:
+            why.append(f"{len(nosrc)} whose sources jar was not read (none here, or not "
+                       "mapped yet)")
+        if timed:
+            why.append(f"{len(timed)} past the time for names (asked again, they are read)")
+        return (f"-- {len(timed | nosrc)} methods are written m(…), their parameters not read: "
+                + "; ".join(why) + ". m(…) names the method whatever it takes")
 
     def _index(self) -> sqlite3.Connection | None:
         """The auxiliary index, read-only and only if it exists already (a label never builds
@@ -107,7 +127,8 @@ class OverloadLabels:
         group = self.groups.get(key)
         if group is None:
             if len(self.groups) >= self.MAX_GROUPS or self._spent >= self.MAX_SECONDS:
-                return None
+                self.unread["time"].add(symbol)
+                return self.UNKNOWN
             self.groups[key] = {}   # while computing: S.short inside prints the plain name
             t0 = time.perf_counter()
             try:
@@ -116,7 +137,10 @@ class OverloadLabels:
                 group = {}
             self._spent += time.perf_counter() - t0
             self.groups[key] = group
-        return group.get(symbol)
+        label = group.get(symbol, group.get(""))
+        if label == self.UNKNOWN:
+            self.unread[group.get("why", "sources")].add(symbol)
+        return label
 
     def _fresh(self, path: str, mtime_ns: int, size: int) -> bool:
         """The shard is as the index read it (else its overloads may be numbered otherwise)."""
@@ -166,9 +190,15 @@ class OverloadLabels:
         return self._library_group(symbol)
 
     def _library_group(self, symbol: str) -> dict[str, str]:
-        lib = self.svc._library(symbol, self.nav.ws.root, wait=False)   # a label never waits
+        if self._library_spent >= self.LIBRARY_SECONDS:
+            return {"": self.UNKNOWN, "why": "time"}
+        t0 = time.perf_counter()
+        try:
+            lib = self.svc._library(symbol, self.nav.ws.root, wait=False)   # never waits
+        finally:
+            self._library_spent += time.perf_counter() - t0
         if lib is None or lib.member is None or not lib.overloads:
-            return {}
+            return {"": self.UNKNOWN, "why": "sources"}
         return _labels({S.overload_symbol(symbol, k): R._param_types(m.declaration)
                         for k, m in enumerate(lib.overloads)})
 
@@ -245,7 +275,9 @@ class Service:
         labeler = OverloadLabels(self, nav)
         labels = S.METHOD_LABELS.set(labeler)
         try:
-            return self._run_bodies(nav, ws, check, bodies, foot_first)
+            text = self._run_bodies(nav, ws, check, bodies, foot_first)
+            note = labeler.note()
+            return text + ("\n" + note if note else "")
         finally:
             S.METHOD_LABELS.reset(labels)
             labeler.close()
@@ -741,6 +773,14 @@ class Service:
                 returns[m] = self._library_return(nav, m)
             return returns[m]
 
+        def field_of(f: str) -> str:
+            if f not in returns:
+                try:
+                    returns[f] = L.field_type(self._library_index(nav.ws.root), f)
+                except (CacheError, OSError, sqlite3.Error):
+                    returns[f] = ""
+            return returns[f]
+
         def exists(written: str) -> bool:
             """A type written in where types: a primitive, a type the index knows (declared,
             used or a supertype of one) or a library class with sources."""
@@ -761,7 +801,7 @@ class Service:
                                  "LIMIT 1", (f"*/{name}#", f"*#{name}#")).fetchone() is not None
 
         return {"defined": is_defined, "ancestors": ancestors_of, "returns": return_of,
-                "exists": exists}
+                "fields": field_of, "exists": exists}
 
     def _type_ancestors(self, nav: Navigator, type_symbol: str,
                         defined: Callable) -> list[str] | None:

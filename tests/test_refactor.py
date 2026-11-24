@@ -483,3 +483,21 @@ def test_where_types_name_single_captures(refactor_root, javaparser_cache):
                                  "where": {"pattern": "foo($$x)", "types": {"$x": "List"}}},
                       "do": {"replace": "$this"}}], dry_run=True)
     assert "$x is not a capture of the pattern" in out
+
+
+def test_where_types_of_constants_array_elements_and_class_literals(refactor_root,
+                                                                   javaparser_cache):
+    svc = _jdk_service(refactor_root, javaparser_cache)
+
+    def lines(typ):
+        out = plan(svc, [{"select": {"in": "Equals#all", "kind": "MethodCallExpr",
+                                     "where": {"pattern": "$x.equals($y)",
+                                               "types": {"$x": typ}}},
+                          "do": {"replace": "java.util.Objects.equals($x, $y)"}}], dry_run=True)
+        assert "could not be told" not in out, out
+        return sorted(int(m) for m in re.findall(r"Equals\.java:(\d+)  MethodCallExpr", out))
+
+    assert lines("String") == [8, 12, 13]     # names[0], File.separator, grid[0][1]
+    assert lines("java.lang.Enum") == [9]     # a project enum's constant
+    assert lines("Boolean") == [10]           # a library constant
+    assert lines("Class") == [11]             # String.class

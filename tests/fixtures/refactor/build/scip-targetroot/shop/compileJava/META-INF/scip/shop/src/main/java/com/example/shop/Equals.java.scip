@@ -1,0 +1,22 @@
+õ
+/shop/src/main/java/com/example/shop/Equals.javajavax/B
+javax/jdo/B javax/jdo/annotations/B0&javax/jdo/annotations/VersionStrategy#B,,com/example/shop/Equals#BZ /#com/example/shop/Equals#`<init>`().B4com/example/shop/Equals#all().BZ java/lang/String#Blocal 0BRjava/lang/String#B &local 1B+/R /java/lang/Object#B17local 2B89R19local 3BR)local 0B$java/lang/String#equals().B#local 4BR30&javax/jdo/annotations/VersionStrategy#B#5+javax/jdo/annotations/VersionStrategy#NONE.B$("java/lang/Enum#equals().B)/local 2B01local 5B	R	+java/lang/Boolean#B	!java/lang/Boolean#TRUE.B	 %java/lang/Boolean#equals().B	!'local 2B	()local 6B
+R
+6java/lang/String#B
+!java/lang/String#class.B
+ $java/lang/Object#equals().B
+!'local 2B
+()&java/lang/Object#getClass().B
+*2local 7BR7java/Bjava/io/Bjava/io/File#B !java/io/File#separator.B!*$java/lang/String#equals().B+1local 8BR+local 1B$java/lang/String#equals().B%local 3Blocal 4Blocal 5Blocal 6Blocal 7B#$local 8B()Ž
+com/example/shop/Equals#Kequals() on constants, array elements and class literals, for where types. (2Equals:"java*public class EqualsH
+#com/example/shop/Equals#`<init>`().(	2<init>:"java*public Equals()g
+com/example/shop/Equals#all().(2all:>"java*6boolean all(String[] names, String[][] grid, Object o)H
+local 02names:"java*String[] namesBcom/example/shop/Equals#all().H
+local 12grid:"java*String[][] gridBcom/example/shop/Equals#all().>
+local 22o:"java*Object oBcom/example/shop/Equals#all().A
+local 3(=2a:"java*	boolean aBcom/example/shop/Equals#all().A
+local 4(=2b:"java*	boolean bBcom/example/shop/Equals#all().A
+local 5(=2c:"java*	boolean cBcom/example/shop/Equals#all().A
+local 6(=2d:"java*	boolean dBcom/example/shop/Equals#all().A
+local 7(=2e:"java*	boolean eBcom/example/shop/Equals#all().A
+local 8(=2f:"java*	boolean fBcom/example/shop/Equals#all()."java

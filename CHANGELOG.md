@@ -10,7 +10,8 @@ version and date when releasing.
 - `refactor`: `where` takes the types its captures must be: `{"pattern": "$x.size() == 0",
   "types": {"$x": "java.util.Collection"}}` keeps the sites where `$x` is that type or a
   subtype, told from the index (names, fields, parameters, `var`, calls by their return type,
-  `new`, casts, literals). A site whose capture's type cannot be told is left out and listed.
+  `new`, casts, literals, constants such as an enum's or `Boolean.TRUE`, array elements,
+  `X.class`). A site whose capture's type cannot be told is left out and listed.
   A select by kind whose `where` calls a method on a capture without `types` gets a note:
   the shape alone does not tell a list's `isEmpty()` from a table's.
 - `family` on a library method (and `refactor`'s `family: true` on one, in a select or in
@@ -38,7 +39,9 @@ version and date when releasing.
 - Answers write a method that takes parameters with them (`Entity#setState(int)`,
   `Overloaded#pick(String, int)`) instead of SCIP's numbering (`setState()`, `pick(+2)`), in
   every list, heading and label: it reads back as the same method. A method without
-  parameters keeps `m()`; the exact symbol is in the `--` line.
+  parameters keeps `m()`; the exact symbol is in the `--` line. A method whose parameters
+  are not read (a library without its sources jar, or past the time a request spends on
+  names, a few seconds) is written `m(…)`, never `m()`, and a line says how many.
 - `refactor` says which overload a parameter list picked (as the `--` line of a query does),
   which types `where` types left out (`Sizes.Box 1`), and which methods `family: true` added
   to a library method.

@@ -239,6 +239,7 @@ class LibraryIndex:
         self._parsed: OrderedDict[tuple, JavaSource] = OrderedDict()
         self._cache_lock = threading.Lock()
         self._absent: dict[str, float] = {}  # class -> when the whole map last lacked it
+        self._absent_quick: set[str] = set()  # not in its likely jars (find_class wait=False)
 
     def source(self, lib: LibClass) -> JavaSource | None:
         """The parsed .java of a class, from a jar kept open (keyed by path, mtime and size, so
@@ -289,6 +290,7 @@ class LibraryIndex:
             ensure_private_dir(os.path.dirname(self.path))
             self._schema_ready = False
             self._absent.clear()
+            self._absent_quick.clear()
         con = sqlite3.connect(self.path, timeout=30)
         con.execute("PRAGMA busy_timeout=30000")
         if getattr(self, "_schema_ready", False):
@@ -479,7 +481,26 @@ class LibraryIndex:
         finally:
             con.close()
         if not rows and not wait:
-            return None
+            # Only the likely jars (the JDK for java/…), and only if nobody holds the lock.
+            if class_path in self._absent or class_path in self._absent_quick:
+                return None
+            try:
+                with self._lock(wait=0):
+                    con = self._connect()
+                    try:
+                        self._index_jars(con, self._likely_jars(class_path))
+                        rows = self._query(con, class_path)
+                    finally:
+                        con.close()
+            except LibraryBusy:
+                return None
+            if not rows:   # not in its likely jars; a lookup that waits still lists the rest
+                self._absent_quick.add(class_path)
+                return None
+            rows.sort(key=lambda r: (not r[0].endswith("src.zip"), _version_key(r[2])),
+                      reverse=True)
+            jar, entry, coords = rows[0]
+            return LibClass(jar, entry, coords, len(rows) - 1)
         missed = self._absent.get(class_path)
         if not rows and missed is not None and time.time() - missed < REFRESH_SECONDS \
                 and self._likely_jars_known(class_path):
@@ -831,6 +852,43 @@ def return_type(index: LibraryIndex, symbol: str) -> str:
         return ""
     pkg, single, wildcards = _names_in(d.source)
     return _resolve_type_name(index, typ, pkg, single, wildcards, types)
+
+
+def field_type(index: LibraryIndex, symbol: str) -> str:
+    """The type of a library field or enum constant: a SCIP type symbol (with `[]` per array
+    dimension), a primitive, or "" (a type variable, or sources not found)."""
+    d = lookup(index, symbol)
+    if d is None or d.member is None:
+        return ""
+    if d.member.kind == "enum constant":
+        return S.parent(symbol)
+    if d.member.kind != "field":
+        return ""
+    decl = S.without_annotations(d.member.declaration).split("=", 1)[0]
+    while "<" in decl:
+        erased = re.sub(r"<[^<>]*>", " ", decl)
+        if erased == decl:
+            break
+        decl = erased
+    decl = re.sub(r"\s*\[\s*\]", "[]", decl)
+    words = [w for w in decl.replace(",", " ").split()
+             if w not in ("public", "protected", "private", "static", "final", "transient",
+                          "volatile")]
+    at = next((k for k, w in enumerate(words) if w.replace("[]", "") == d.member.name), -1)
+    if at <= 0:
+        return ""
+    dims = words[at - 1].count("[]") + words[at].count("[]")
+    typ = words[at - 1].replace("[]", "")
+    if typ in S.PRIMITIVES:
+        return typ + "[]" * dims
+    _path, types = class_path_of(symbol)
+    if typ in _type_variables(" ".join(d.type_declaration.split()), types[-1] if types else ""):
+        return ""
+    if S.is_qualified_type(typ):
+        return S.type_symbol(typ) + "[]" * dims
+    pkg, single, wildcards = _names_in(d.source)
+    found = _resolve_type_name(index, typ, pkg, single, wildcards, types)
+    return found + "[]" * dims if found else ""
 
 
 def _resolve_type_name(index: LibraryIndex, name: str, pkg: str, single: dict,

@@ -2371,6 +2371,20 @@ _LITERAL_TYPES = {"StringLiteralExpr": "java/lang/String#", "TextBlockLiteralExp
                   "DoubleLiteralExpr": "double"}
 
 
+def _top_level_brackets(text: str, start: int, end: int) -> int:
+    """How many `[…]` groups follow at the top level of text[start:end] (`[i][j]`: 2)."""
+    n, depth = 0, 0
+    for k in range(start, end):
+        ch = text[k]
+        if ch in "([{":
+            if ch == "[" and depth == 0:
+                n += 1
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+    return n
+
+
 def _top_level(text: str, start: int, end: int, stops: str) -> int:
     """The first of `stops` in text[start:end] outside `<…>`, or end."""
     depth = 0
@@ -2395,6 +2409,7 @@ class CaptureTypes:
         self.p = p
         self.ancestors = facts.get("ancestors") or (lambda _t: [])
         self.returns = facts.get("returns") or (lambda _m: "")
+        self.fields = facts.get("fields") or (lambda _f: "")
         self.defined = facts.get("defined") or (lambda sym: p.nav.definition(sym) is not None)
         self.exists = facts.get("exists") or (lambda _written: True)
         self._docs: dict = {}
@@ -2429,6 +2444,20 @@ class CaptureTypes:
             inner = fs.text.text[lo:hi].strip()
             if inner.startswith("(") and inner.endswith(")"):
                 return ""   # (x): not looked into
+        if kind == "ClassExpr":
+            return "java/lang/Class#"
+        if kind == "ArrayAccessExpr":   # a[i], a[i][j]: the element type of what is indexed
+            text = fs.text.text
+            k = _top_level(text, lo, hi, "[")
+            end = lo + len(text[lo:k].rstrip())
+            base = [x for x in occs if x[1] == end and x[0] >= lo]
+            if not base:
+                return ""
+            sym = base[-1][2]
+            typ = self._declared(source, sym) if S.kind_of(sym) != "method" or \
+                self.defined(sym) else self.returns(sym)
+            n = _top_level_brackets(text, k, hi)
+            return typ[:-2 * n] if n and typ.endswith("[]" * n) else ""
         if kind == "NameExpr":
             hit = [x for x in occs if x[0] == lo]
             return self._declared(source, hit[0][2]) if hit else ""
@@ -2504,11 +2533,13 @@ class CaptureTypes:
             info = v.info(sym) if v else None
         else:
             d = self.p.nav.definition(sym) if self.defined(sym) else None
-            if d is None:
-                return ""   # a library field: not looked up
+            if d is None:   # a library field or enum constant (Boolean.TRUE)
+                return self.fields(sym) if S.kind_of(sym) == "term" else ""
             info, where = d.info, d.location.source
         if info is None or not info.signature:
             return ""
+        if "/* ordinal " in info.signature:   # an enum constant: `State.OPEN /* ordinal 0 */`
+            return S.parent(sym)
         sig = S.without_annotations(info.signature)
         if S.is_method(sym):
             at = re.search(r"\b" + re.escape(S.name_of(sym)) + r"\s*\(", sig)
@@ -2522,17 +2553,18 @@ class CaptureTypes:
             if erased == head:
                 break
             head = erased
+        head = re.sub(r"\s*\[\s*\]", "[]", head.replace("...", "[]"))
         words = head.split()
-        if not words or "[" in words[-1] or words[-1].endswith("..."):
+        if not words:
             return ""
-        typ = words[-1]
+        dims = words[-1].count("[]")   # an array: its element type and dimensions
+        typ = words[-1].replace("[]", "")
         if typ in S.PRIMITIVES:
-            return typ
-        if "." in typ and typ[:1].islower():
-            parts = typ.split(".")
-            pkg = [x for x in parts if x[:1].islower()]
-            return "/".join(pkg) + "/" + "".join(x + "#" for x in parts[len(pkg):])
-        return self._type_named(where, typ)
+            return typ + "[]" * dims
+        if S.is_qualified_type(typ):
+            return S.type_symbol(typ) + "[]" * dims
+        base = self._type_named(where, typ)
+        return base + "[]" * dims if base else ""
 
     def _type_named(self, source: str, name: str) -> str:
         """A simple type name as the file that wrote it means it: the type (or constructor)
@@ -2560,10 +2592,15 @@ class CaptureTypes:
         """`typ` is `want` or one of its subtypes; `want` written qualified (java.util.List)
         or simple (List: any type of that name); primitives only match themselves. None when
         typ is not it and its supertypes cannot be read (a library type without sources)."""
+        if want in ("Object", "java.lang.Object"):
+            return typ not in S.PRIMITIVES and typ != "void"
+        if typ.endswith("[]") or want.endswith("[]"):   # arrays: same dimensions, then the
+            dims, wdims = typ.count("[]"), want.count("[]")   # element types
+            if dims != wdims:
+                return False
+            return self.is_a(typ.replace("[]", ""), want.replace("[]", ""))
         if typ in S.PRIMITIVES or typ == "void":
             return typ == want
-        if want in ("Object", "java.lang.Object"):
-            return True
         if "." in want and want[:1].islower():
             parts = want.split(".")
             pkg = [x for x in parts if x[:1].islower()]

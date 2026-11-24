@@ -345,3 +345,21 @@ def test_a_type_variable_written_reads_back_as_that_overload():
     declared = {"a/Box#put().": (None,), "a/Box#put(+1).": ("String",)}.get
     assert by_params(items, (None,), declared) == ["a/Box#put()."]        # put(T)
     assert by_params(items, ("String",), declared) == ["a/Box#put(+1)."]
+
+
+def test_methods_whose_parameters_are_not_read_are_written_with_an_ellipsis(refactor_root,
+                                                                            tmp_path,
+                                                                            monkeypatch):
+    from scipq_mcp import libsrc as L
+    from scipq_mcp import service as SV
+    if not L.jdk_src_zip():
+        pytest.skip("no JDK src.zip on this machine")
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"), library_roots=[L.jdk_src_zip()])
+    svc.definition("java.util.Map#of()")      # maps the JDK's sources
+    out = svc.callees("Overloaded#use()")
+    assert "Map#of()" in out and "(…)" not in out
+    monkeypatch.setattr(SV.OverloadLabels, "LIBRARY_SECONDS", 0.0)
+    out = svc.callees("Overloaded#use()")
+    assert "Map#of(…)" in out and "Overloaded#pick(String, int)" in out
+    assert "methods are written m(…), their parameters not read" in out
+    assert "past the time for names" in out
