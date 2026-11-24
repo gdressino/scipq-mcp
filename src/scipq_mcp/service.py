@@ -66,12 +66,15 @@ class OverloadLabels:
     few hundred methods at most per request."""
 
     MAX_GROUPS = 400
+    MAX_SECONDS = 3.0   # spent looking labels up, per request: then the plain names
 
     def __init__(self, svc: "Service", nav: Navigator):
         self.svc, self.nav = svc, nav
         self.groups: dict[tuple[str, str], dict[str, str]] = {}
         self.files: dict[str, dict[tuple[str, str], list]] = {}
         self._con: sqlite3.Connection | None | bool = None   # False: no usable index
+        self._spent = 0.0
+        self._shard_ok: dict[str, bool] = {}
 
     def _index(self) -> sqlite3.Connection | None:
         """The auxiliary index, read-only and only if it exists already (a label never builds
@@ -103,15 +106,27 @@ class OverloadLabels:
         key = (S.parent(symbol), S.name_of(symbol))
         group = self.groups.get(key)
         if group is None:
-            if len(self.groups) >= self.MAX_GROUPS:
+            if len(self.groups) >= self.MAX_GROUPS or self._spent >= self.MAX_SECONDS:
                 return None
             self.groups[key] = {}   # while computing: S.short inside prints the plain name
+            t0 = time.perf_counter()
             try:
                 group = self._group(symbol, key)
             except Exception:   # a label is never worth an error
                 group = {}
+            self._spent += time.perf_counter() - t0
             self.groups[key] = group
         return group.get(symbol)
+
+    def _fresh(self, path: str, mtime_ns: int, size: int) -> bool:
+        """The shard is as the index read it (else its overloads may be numbered otherwise)."""
+        if path not in self._shard_ok:
+            try:
+                st = os.stat(path)
+                self._shard_ok[path] = st.st_mtime_ns == mtime_ns and st.st_size == size
+            except OSError:
+                self._shard_ok[path] = False
+        return self._shard_ok[path]
 
     def _group(self, symbol: str, key: tuple[str, str]) -> dict[str, str]:
         top = S.top_level_type_name(symbol)
@@ -122,16 +137,19 @@ class OverloadLabels:
             owner, name = key
             lo = owner + S._format_name(name) + "("
             rows = con.execute(
-                "SELECT s.symbol, d.signature FROM symbols s JOIN defs d ON d.symbol_id = s.id "
+                "SELECT s.symbol, d.signature, sh.path, sh.mtime_ns, sh.size FROM symbols s "
+                "JOIN defs d ON d.symbol_id = s.id JOIN shards sh ON sh.id = d.shard_id "
                 "WHERE s.symbol >= ? AND s.symbol < ?", (lo, lo[:-1] + ")")).fetchall()
-            sigs = {sym: sig for sym, sig in rows if S.is_method(sym) and S.parent(sym) == owner
-                    and S.name_of(sym) == name}
-            if sigs:
-                return _labels({sym: R._param_types(sig) for sym, sig in sigs.items() if sig})
-            if con.execute("SELECT 1 FROM symbols s JOIN defs d ON d.symbol_id = s.id "
-                           "WHERE s.symbol = ? LIMIT 1", (owner,)).fetchone():
-                return {}   # a project type: the method is inherited or implicit
-            return self._library_group(symbol)
+            rows = [r for r in rows if S.is_method(r[0]) and S.parent(r[0]) == owner
+                    and S.name_of(r[0]) == name]
+            if all(self._fresh(path, mt, size) for _s, _g, path, mt, size in rows):
+                if rows:
+                    return _labels({sym: R._param_types(sig) for sym, sig, *_r in rows if sig})
+                if con.execute("SELECT 1 FROM symbols s JOIN defs d ON d.symbol_id = s.id "
+                               "WHERE s.symbol = ? LIMIT 1", (owner,)).fetchone():
+                    return {}   # a project type: the method is inherited or implicit
+                return self._library_group(symbol)
+            # The file was compiled again since the index read it: from its shard below.
         if top not in self.files:
             methods: dict[tuple[str, str], list] = {}
             for v in self.nav._views(self.nav.ws.shards_by_basename({top + ".java"})):
@@ -148,7 +166,7 @@ class OverloadLabels:
         return self._library_group(symbol)
 
     def _library_group(self, symbol: str) -> dict[str, str]:
-        lib = self.svc._library(symbol, self.nav.ws.root)
+        lib = self.svc._library(symbol, self.nav.ws.root, wait=False)   # a label never waits
         if lib is None or lib.member is None or not lib.overloads:
             return {}
         return _labels({S.overload_symbol(symbol, k): R._param_types(m.declaration)
@@ -383,12 +401,12 @@ class Service:
                 self._lib_indexes[key] = ix
         return ix
 
-    def _library(self, symbol: str, root: str = ""):
+    def _library(self, symbol: str, root: str = "", wait: bool = True):
         if S.is_local(symbol):
             return None
         try:
             ix = self._library_index(root)
-            d = L.lookup(ix, symbol)
+            d = L.lookup(ix, symbol, wait)
             note = self._jdk_choice(root)[1]
             if d is not None and d.lib.jar.endswith("src.zip") and note:
                 d.note = note

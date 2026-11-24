@@ -337,3 +337,11 @@ def test_m_without_parameters_when_none_is_says_so(nav):
     assert "(none without parameters: the constructor, which takes (String))" in r.note
     r = nav.resolve("Service#process()")
     assert r.symbol is None and "no overload of 'Service#process' is without parameters" in r.note
+
+
+def test_a_type_variable_written_reads_back_as_that_overload():
+    from scipq_mcp.queries import by_params
+    items = ["a/Box#put().", "a/Box#put(+1)."]
+    declared = {"a/Box#put().": (None,), "a/Box#put(+1).": ("String",)}.get
+    assert by_params(items, (None,), declared) == ["a/Box#put()."]        # put(T)
+    assert by_params(items, ("String",), declared) == ["a/Box#put(+1)."]

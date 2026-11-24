@@ -464,3 +464,22 @@ def test_plan_says_which_overload_a_parameter_list_picked(refactor_root, javapar
     assert "Overloaded#pick() → com/example/shop/Overloaded#pick(+1). (the overload without " \
            "parameters; SCIP numbers it pick(+1), and SCIP's pick() is another one: public int " \
            "pick(int n))" in out
+
+
+def test_outer_call_of_a_capture_with_calls_in_its_arguments():
+    from scipq_mcp.refactor import CaptureTypes
+    text = "repo.findAll(spec(x))"
+    occs = [(0, 4, "local 1"), (5, 12, "a/Repo#findAll()."), (13, 17, "a/Specs#spec().")]
+    assert CaptureTypes._outer_call(text, occs, len(text)) == "a/Repo#findAll()."
+    text = "list.stream().filter(v -> v.ok())"
+    occs = [(0, 4, "local 1"), (5, 11, "java/util/Collection#stream()."),
+            (14, 20, "java/util/stream/Stream#filter()."), (28, 30, "a/V#ok().")]
+    assert CaptureTypes._outer_call(text, occs, len(text)) == "java/util/stream/Stream#filter()."
+
+
+def test_where_types_name_single_captures(refactor_root, javaparser_cache):
+    svc = Service(refactor_root, cache_dir=javaparser_cache)
+    out = plan(svc, [{"select": {"in": "Sizes#empties", "kind": "MethodCallExpr",
+                                 "where": {"pattern": "foo($$x)", "types": {"$x": "List"}}},
+                      "do": {"replace": "$this"}}], dry_run=True)
+    assert "$x is not a capture of the pattern" in out

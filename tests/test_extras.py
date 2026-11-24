@@ -1126,3 +1126,9 @@ def test_lines_no_longer_in_their_method_say_where_it_went():
     gone = ["class A {", "  void other() {", "  }", "}"]
     assert _in_its_method(old, gone, 3, 3, "makePersistent") == \
         ": save, which held them, is no longer in the file"
+
+
+def test_family_of_an_implicit_member_has_no_library_note(sample_root, tmp_path):
+    svc = Service(sample_root, cache_dir=str(tmp_path / "c"))
+    out = svc.family("Point#x()")          # a record's implicit accessor
+    assert "Point#x() — family of 1 methods" in out and "sources were not found" not in out

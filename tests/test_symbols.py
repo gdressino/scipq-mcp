@@ -111,3 +111,12 @@ def test_annotations_nested_to_any_depth_are_left_out():
         "public Res login( Req account, HttpServletRequest request)"
     assert S.without_annotations("public @interface Foo") == "public @interface Foo"
     assert S.without_annotations("@A('(') int g(char c)").split() == ["int", "g(char", "c)"]
+
+
+def test_review_fixes_in_names():
+    # C-style arrays in a written parameter list.
+    assert S.written_params("int a[], String s[][]") == ("int[]", "String[][]")
+    # A string spanning lines (scip-javac writes \n as a line break), then 'quotes'.
+    sig = "@Operation(description = \"a (b).\n\n'estado' x\")\npublic R run(String id, boolean f)"
+    assert S.without_annotations(sig).split() == ["public", "R", "run(String", "id,", "boolean",
+                                                  "f)"]

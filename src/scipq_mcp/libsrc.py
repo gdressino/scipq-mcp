@@ -32,7 +32,6 @@ REFRESH_SECONDS = 600
 LOCK_WAIT_SECONDS = 45  # how long to wait for another session that is building the map
 OPEN_ZIPS = 8           # jars kept open: opening the JDK's src.zip alone reads ~15,000 entries
 PARSED_SOURCES = 64     # parsed .java files kept (hierarchies read the same files repeatedly)
-SUPERTYPES_VERSION = "2"  # of the cached supertypes rows: bumped when their parsing changes
 
 
 class LibraryBusy(Exception):
@@ -302,16 +301,11 @@ class LibraryIndex:
             CREATE TABLE IF NOT EXISTS classes (name TEXT NOT NULL, jar_id INTEGER NOT NULL,
                 entry TEXT NOT NULL, PRIMARY KEY (name, jar_id)) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS classes_jar ON classes(jar_id);
-            CREATE TABLE IF NOT EXISTS supertypes (symbol TEXT PRIMARY KEY,
+            CREATE TABLE IF NOT EXISTS supertypes_v2 (symbol TEXT PRIMARY KEY,
                 jar TEXT NOT NULL, supers TEXT NOT NULL) WITHOUT ROWID;
         """)
-        # The supertypes rows are a cache of library_supertypes: dropped when it changes.
-        row = con.execute("SELECT value FROM meta WHERE key = 'supertypes'").fetchone()
-        if row is None or row[0] != SUPERTYPES_VERSION:
-            con.execute("DELETE FROM supertypes")
-            con.execute("INSERT OR REPLACE INTO meta VALUES ('supertypes', ?)",
-                        (SUPERTYPES_VERSION,))
-            con.commit()
+        # (supertypes_v2: a cache of library_supertypes. A table per version, as sessions of
+        # an older scipq-mcp may share this file and keep writing theirs.)
         self._schema_ready = True
         return con
 
@@ -475,14 +469,17 @@ class LibraryIndex:
             "ON j.id = c.jar_id WHERE c.name = ?", (class_path,))
         return [r for r in rows if not r[0].endswith("src.zip") or r[0] == self.jdk_zip]
 
-    def find_class(self, class_path: str) -> LibClass | None:
+    def find_class(self, class_path: str, wait: bool = True) -> LibClass | None:
         """The jar holding `com/example/Foo` (highest version first). Looks at the likely jars
-        first; lists every cached jar only when those do not have it."""
+        first; lists every cached jar only when those do not have it. Without wait, only what
+        the map holds already (no lock, no listing: for what must not block, as labels)."""
         con = self._connect()
         try:
             rows = self._query(con, class_path)
         finally:
             con.close()
+        if not rows and not wait:
+            return None
         missed = self._absent.get(class_path)
         if not rows and missed is not None and time.time() - missed < REFRESH_SECONDS \
                 and self._likely_jars_known(class_path):
@@ -553,12 +550,13 @@ def class_path_of(symbol: str) -> tuple[str, list[str]]:
     return "/".join(pkg + [types[0]]), types
 
 
-def lookup(index: LibraryIndex, symbol: str) -> LibDefinition | None:
-    """The library definition of an external symbol, read from its sources jar."""
+def lookup(index: LibraryIndex, symbol: str, wait: bool = True) -> LibDefinition | None:
+    """The library definition of an external symbol, read from its sources jar (without
+    wait, only from a class the map holds already: see find_class)."""
     class_path, types = class_path_of(symbol)
     if not class_path:
         return None
-    lib = index.find_class(class_path)
+    lib = index.find_class(class_path, wait)
     if lib is None:
         return None
     src = index.source(lib)
@@ -764,7 +762,7 @@ def library_supertypes(index: LibraryIndex, type_symbol: str) -> list[str]:
         return []
     con = index._connect()
     try:
-        row = con.execute("SELECT jar, supers FROM supertypes WHERE symbol = ?",
+        row = con.execute("SELECT jar, supers FROM supertypes_v2 WHERE symbol = ?",
                           (type_symbol,)).fetchone()
         if row and row[0] == lib.jar:
             return [x for x in row[1].split(" ") if x]
@@ -781,7 +779,7 @@ def library_supertypes(index: LibraryIndex, type_symbol: str) -> list[str]:
         for name in _declared_names(header):
             supers.append(_resolve_type_name(index, name, pkg, single, wildcards, types))
         supers = [x for x in supers if x]
-        con.execute("INSERT OR REPLACE INTO supertypes VALUES (?, ?, ?)",
+        con.execute("INSERT OR REPLACE INTO supertypes_v2 VALUES (?, ?, ?)",
                     (type_symbol, lib.jar, " ".join(supers)))
         con.commit()
         return supers

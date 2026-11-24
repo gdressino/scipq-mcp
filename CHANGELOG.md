@@ -63,8 +63,8 @@ version and date when releasing.
   type, overloads, labels).
 - Library supertypes read from a sources jar missed those of a type whose type parameters
   have bounds (`class Nodes<T extends Node> extends ArrayList<T>`: none instead of
-  `ArrayList`), in `members(inherited)`, `typed(subtypes)` and the rest. The cached rows are
-  dropped once.
+  `ArrayList`), in `members(inherited)`, `typed(subtypes)` and the rest. They are cached in
+  a new table, read again once.
 - `overloads` of a library constructor: the symbols were built without SCIP's backquotes
   (`` `<init>` ``), so their uses were not found.
 

@@ -256,7 +256,9 @@ def _literal_end(text: str, i: int) -> int:
         if text[j] == "\\":
             j += 2
             continue
-        if text[j] == quote or text[j] == "\n":
+        # A string may span lines here (scip-javac writes `\n` as a line break); a char
+        # literal cannot.
+        if text[j] == quote or (text[j] == "\n" and quote == "'"):
             return j + 1
         j += 1
     return len(text)
@@ -409,9 +411,10 @@ def written_params(text: str) -> tuple:
             c = d
         c = re.sub(r"\s*\[\s*\]", "[]", c.replace("...", "[]"))
         words = [w for w in c.split() if w != "final"]
-        if len(words) >= 2 and re.fullmatch(r"[a-z_$][\w$]*", words[-1]) and \
-                words[-1] not in PRIMITIVES:
-            words.pop()  # the parameter's name
+        if len(words) >= 2 and re.fullmatch(r"[a-z_$][\w$]*(?:\[\])*", words[-1]) and \
+                words[-1].rstrip("[]") not in PRIMITIVES:
+            dims_after = words.pop().count("[]")   # the parameter's name (`int a[]`)
+            words[-1] += "[]" * dims_after
         typ = "".join(words)
         dims = typ.count("[]")
         full = typ.replace("[]", "")

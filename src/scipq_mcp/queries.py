@@ -61,6 +61,10 @@ def by_params(items: list, params: tuple, declared, qualified=None) -> list:
         hits = [(it, t) for it, t, q in zip(group, types, quals) if S.same_params(params, t, q)]
         # Exact types win over a type variable (`m(String)`: m(String s), not <T> m(T x)).
         exact = [it for it, t in hits if None not in t and None not in params]
+        if not exact and None in params:
+            # `m(T)` as answers write <T> m(T x): the overload with a type variable there.
+            exact = [it for it, t in hits if all((w is None) == (d is None)
+                                                 for w, d in zip(params, t))]
         unknown = [it for it, t in zip(group, types) if t is None]
         per.append((group, exact or [it for it, _t in hits], unknown))
     if not params and not any(hits for _g, hits, _u in per):

@@ -360,7 +360,7 @@ class Planner:
     def _resolution_note(self, r) -> None:
         """A parameter list that picked one overload among several, or an inherited one:
         said in the plan, as the -- line of a query says it."""
-        if r.note and ("(the overload " in r.note or "inherited" in r.note):
+        if r.note and ("(the overload " in r.note or "(none without parameters" in r.note):
             self.notes.append(r.note)
 
     def file(self, path: str) -> FileState:
@@ -2311,7 +2311,7 @@ def _where_types(where) -> dict:
         if cap.startswith("$$"):
             raise PlanError(f"where types: {cap} captures a list; only $name captures have a "
                             "type")
-        if not re.search(re.escape(cap) + r"(?![\w$])", pattern):
+        if not re.search(r"(?<![\w$])" + re.escape(cap) + r"(?![\w$])", pattern):
             raise PlanError(f"where types: {cap} is not a capture of the pattern {pattern!r}")
         out[cap] = typ.strip()
     return out
@@ -2326,8 +2326,10 @@ def _check_types(p: Planner, op: Op) -> None:
         ok = True
         for cap, want in op.where_types.items():
             c = (loc.captures or {}).get(cap)
-            if not isinstance(c, dict):
-                continue
+            if not isinstance(c, dict):   # not bound at this site: its type is unknown
+                op.untyped.append((cap, loc.site))
+                ok = False
+                break
             typ = p.captures.type_of(loc.site.source, c)
             if not typ:
                 op.untyped.append((cap, Site(loc.site.source, c["range"][0] - 1,
@@ -2481,7 +2483,9 @@ class CaptureTypes:
                 elif text[j] == ")":
                     depth -= 1
                     if depth == 0:
-                        return sym if text[j + 1:hi].strip() == "" else ""
+                        if text[j + 1:hi].strip() == "":
+                            return sym
+                        break   # an inner call (`a.find(spec(x))`): the outer one is before
         return ""
 
     def _declared(self, source: str, sym: str) -> str:

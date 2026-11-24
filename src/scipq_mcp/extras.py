@@ -403,7 +403,10 @@ def family(nav: Navigator, method: str, library=None) -> list[FamilyMember]:
         raise QueryError(f"{method} is not a method")
     _d, supers = nav.supertypes(method)
     ancestors = [s.symbol for s in supers]
-    extra = library(method) if library is not None and _d is None else []
+    # (not for a project type's implicit member: a record accessor, values(), a default
+    # constructor)
+    extra = library(method) if library is not None and _d is None and \
+        not nav._implicit_member(method) else []
     top = set(ancestors) | {method} | {m.symbol for m in extra if m.relation == "ancestor"}
     impl: dict[str, tuple[Definition, set[str]]] = {}
     for sym in top:
