@@ -1632,9 +1632,14 @@ def _since_written(root: str, problems: list[Problem]) -> None:
                 (None if edited else (n2, end2))
             if moved and p.recheck(*moved, also, at=p.src):
                 m2, e2 = moved
+                others = ", ".join(f"{a}" + (f"-{b}" if b != a else "") + " → " +
+                                   f"{r[0]}" + (f"-{r[1]}" if r[1] != r[0] else "")
+                                   for (a, b), r in zip(p.more, also))
                 p.what = (f"line {n} is now {m2}" if n == end else
                           f"lines {n}-{end} are now {m2}-{e2}") + \
-                    f" (moved since the doc's version of {day})"
+                    f" (moved since the doc's version of {day}" + (
+                        f"; the others listed with it: {others}" if others and
+                        len(also) == len(p.more) else "") + ")"
                 p.kind = "line-shifted"
             elif edited:
                 mapped = n2 is not None and end2 is not None
@@ -2394,6 +2399,15 @@ def _verdict_in(m: Model, root: str, src: str, n: int, end_n: int, names: list[s
     where = []
     for y in members.get(x, [])[:1]:
         w = m.where.get(y)
+        if w and S.kind_of(y) == "term":
+            # a field: where it is declared, and the lines that use it (what a doc names)
+            word = re.compile(r"(?<![\w$])" + re.escape(x) + r"(?![\w$])")
+            used = [k + 1 for k, c in enumerate(lines) if x in c and k + 1 != w[1] and
+                    word.search(_no_strings(c)) and not re.match(r"\s*(//|\*|/\*)", c)]
+            where.append(f"{x} is declared at {w[1]}" + (
+                f"; named at {', '.join(map(str, used[:4]))}{' …' if len(used) > 4 else ''}"
+                if used else ""))
+            return x, where
         if w:
             lo = min((w[2] + 1) if w[2] is not None else w[1], w[1])
             hi = (w[3] + 1) if w[3] is not None else w[1]
@@ -2721,7 +2735,8 @@ def _rank(p: Problem) -> int:
     """Of several problems for one mention, the one to show: what the code the doc quotes
     says, a new line number, then a hint of where the name is."""
     return 4 if "the code quoted" in p.what else 3 if p.kind == "line-shifted" else \
-        2 if " is at " in p.what else 1 if "called at" in p.what else 0
+        2 if " is at " in p.what or " is declared at " in p.what else \
+        1 if "called at" in p.what or "named at" in p.what else 0
 
 
 def render(problems: list[Problem], checked: int, scope: Scope, offset: int, limit: int,

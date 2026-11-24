@@ -56,6 +56,9 @@ version and date when releasing.
   ("casts it to T (:592)") is not taken for the line's file; a parenthesis with numbers
   besides its path (`(X.java:12 y 30)`, `(:102 → X.java:189)`) ends the run of line numbers
   after it. Far from its path, a line inside the method the doc names also confirms it.
+- `check_refs` says where a field is declared and the lines that use it ("x is declared at
+  59; named at 122, 130"), not "x is at 59", and for a line moved with others listed with
+  it (`:1258/1282/1349`) where each of them went.
 - `check_refs` no longer places a blank or brace-only line by its text, no longer gives
   "now at" for names like `add` or `get`, does not take an older version of the file for a
   name written further from the line number, and reads a path cut at a `/` over two lines
