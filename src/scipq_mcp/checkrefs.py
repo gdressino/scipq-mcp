@@ -720,7 +720,13 @@ _RECORD_DIRS = {"log", "logs", "journal", "journals", "bitacora", "bitácora", "
                 "minutes", "reports", "informes"}
 
 
-def md_folders(root: str, listed: list[str] | None = None, limit: int = 8
+# Files no agent follows (a license) and records by their name (a changelog).
+_NOT_GUIDES = re.compile(r"(?i)(?:license|licence|copying|notice)(?:[-_.][\w.-]*)?\.md$")
+_RECORD_FILES = re.compile(r"(?i)(?:changelog|changes|history|release[-_]?notes)(?:[-_.][\w.-]*)?"
+                           r"\.md$")
+
+
+def md_folders(root: str, listed: list[str] | None = None, limit: int | None = None
                ) -> list[tuple[str, int, int, str]]:
     """Folders with Markdown files out of the default scope: (folder, files, how many look
     like records, "records" / "bundle" / ""), most files first, for init-config to suggest a
@@ -737,13 +743,15 @@ def md_folders(root: str, listed: list[str] | None = None, limit: int = 8
         if not _is_md(p) or p in default:
             continue
         parts = p.split("/")[:-1]
-        if ARCHIVE_DIRS & {d.lower() for d in parts} or _generated(p):
+        if ARCHIVE_DIRS & {d.lower() for d in parts} or _generated(p) or \
+                _NOT_GUIDES.match(os.path.basename(p)):
             continue
         key = next((b for b in sorted(bundles, key=len, reverse=True)
                     if b and p.startswith(b + "/")), None) or "/".join(parts[:2]) or "."
         g_ = groups.setdefault(key, [0, 0])
         g_[0] += 1
-        g_[1] += bool(_DATED.search(p) or _RECORD_DIRS & {d.lower() for d in parts})
+        g_[1] += bool(_DATED.search(p) or _RECORD_DIRS & {d.lower() for d in parts} or
+                      _RECORD_FILES.match(os.path.basename(p)))
     return sorted(((k, v[0], v[1], "bundle" if k in bundles else
                     "records" if v[1] * 2 > v[0] else "") for k, v in groups.items()),
                   key=lambda x: (-x[1], x[0]))[:limit]

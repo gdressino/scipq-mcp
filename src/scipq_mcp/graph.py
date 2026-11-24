@@ -1456,13 +1456,23 @@ def _opens(t: str, k: int) -> str:
     return "member"         # a method's or constructor's body, a class body, an initializer
 
 
+# Methods that run the lambda or method reference they are given before they return
+# (Stream.forEach, Optional.ifPresent, Map.computeIfAbsent…): its code runs in place.
+_RUNS_NOW = {"forEach", "forEachOrdered", "forEachRemaining", "ifPresent", "ifPresentOrElse",
+             "map", "flatMap", "filter", "anyMatch", "allMatch", "noneMatch", "reduce",
+             "collect", "peek", "sorted", "sort", "removeIf", "replaceAll", "computeIfAbsent",
+             "computeIfPresent", "compute", "merge", "orElseGet", "orElseThrow", "mapToInt",
+             "mapToLong", "mapToDouble", "mapToObj", "takeWhile", "dropWhile", "min", "max",
+             "toMap", "groupingBy", "partitioningBy", "or"}
+
+
 def _in_lambda(t: str, pos: int, limit: int = 30000) -> bool:
-    """The code at pos of a masked source (javasrc.mask) runs in a lambda's body, or is a
-    method reference (::name): it runs when whoever receives it calls it."""
-    if t[max(0, pos - 2):pos] == "::":
-        return True
+    """The code at pos of a masked source (javasrc.mask) runs in a lambda's body or is a
+    method reference (::name), handed to code that calls it later: not to a method that
+    runs it in place (forEach, ifPresent, map…), unless that is inside such a lambda too."""
     paren = brace = 0
     arrow_ok = True         # an arrow at this level still holds pos (no , or ; since)
+    pending = t[max(0, pos - 2):pos] == "::"   # in a lambda: to whom is it given?
     i, stop = pos - 1, max(0, pos - limit)
     while i >= stop:
         c = t[i]
@@ -1472,6 +1482,11 @@ def _in_lambda(t: str, pos: int, limit: int = 30000) -> bool:
             if paren:
                 paren -= 1
             else:
+                if pending:
+                    name = re.search(r"([\w$]+)\s*(?:<[^<>()]*>\s*)?$", t[max(0, i - 200):i])
+                    if not (name and name.group(1) in _RUNS_NOW):
+                        return True     # an argument of a call that keeps it
+                    pending = False     # run in place: what holds that call decides
                 arrow_ok = True     # out of an argument list, into the expression holding it
         elif c == "}":
             brace += 1
@@ -1480,21 +1495,25 @@ def _in_lambda(t: str, pos: int, limit: int = 30000) -> bool:
                 brace -= 1
             else:
                 kind = _opens(t, i)
+                if pending and kind != "expression":
+                    return True         # assigned, returned: kept to run later
                 if kind == "lambda":
-                    return True
-                if kind == "member":
+                    pending = True
+                elif kind == "member":
                     return False
-                if kind == "statement":
+                elif kind == "statement":
                     arrow_ok = False
         elif c == ">" and i and t[i - 1] == "-" and not paren and not brace:
-            if arrow_ok and not re.search(r"(?:\bcase\b[^;{}]*|\bdefault\s*)$",
-                                          t[max(0, i - 300):i - 1]):
-                return True
+            if arrow_ok and not pending and not re.search(
+                    r"(?:\bcase\b[^;{}]*|\bdefault\s*)$", t[max(0, i - 300):i - 1]):
+                pending = True
             i -= 1
         elif c in ",;" and not paren and not brace:
+            if pending and c == ";":
+                return True
             arrow_ok = False
         i -= 1
-    return False
+    return pending
 
 
 def _deferred_site(root: str, source: str, site: str, cache: dict) -> bool:

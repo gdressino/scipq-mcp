@@ -1023,7 +1023,7 @@ def test_calls_inside_lambdas_are_told_apart():
         return _in_lambda(mask(code), at)
     head = "class A {\n  void m() {\n"
     yes = ["b.addListener(e -> go(target));",
-           "opt.ifPresent(x -> step(x, go(y)));",
+           "b.addListener(e -> list.forEach(x -> go(x)));",          # run in place, but later
            "b.addListener(e -> {\n    load();\n    go();\n});",
            "Runnable r = () -> { reload.run(); go(); };",
            "b.add((Listener) ev -> {\n  d.open((Confirm.Listener) c -> {\n"
@@ -1031,6 +1031,8 @@ def test_calls_inside_lambdas_are_told_apart():
            "Supplier<X> s = flag ? () -> go() : () -> other();",
            "x -> { for (int i = 0; i < 3; i++) { go(); } }"]
     no = ["go();",
+          "opt.ifPresent(x -> step(x, go(y)));",                   # run in place
+          "list.stream().map(x -> go(x)).forEach(System.out::println);",
           "list.forEach(x -> log(x));\n    go();",
           "foo(x -> a(x), go());",
           "switch (k) {\n  case A -> go();\n  default -> stop();\n}",
@@ -1042,4 +1044,5 @@ def test_calls_inside_lambdas_are_told_apart():
         assert inside(head + code + "\n  }\n}"), code
     for code in no:
         assert not inside(head + code + "\n  }\n}"), code
-    assert inside(head + "list.forEach(this::go);\n  }\n}", "go)")       # a method reference
+    assert inside(head + "b.add(this::go);\n  }\n}", "go)")       # a method reference kept
+    assert not inside(head + "list.forEach(this::go);\n  }\n}", "go)")

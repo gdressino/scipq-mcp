@@ -15,9 +15,9 @@ version and date when releasing.
   mentions and the docs out of the scope that mention the changed code (by folder when
   many, in full with `format="md"`). CLI: `check-refs --since REF`.
 - `init-config` proposes a `[check_refs]` section: the default scope, and the folders with
-  Markdown outside it, those mostly named by date or ticket or in a log folder (`logs/`,
-  `journal/`…) marked as likely records, the folder holding `skills/*/SKILL.md` as one agent
-  bundle, and no generated output folders.
+  Markdown outside it, those mostly named by date or ticket, in a log folder (`logs/`,
+  `journal/`…) or changelogs marked as likely records, the folder holding
+  `skills/*/SKILL.md` as one agent bundle, and no generated output folders or licenses.
 
 - `impact` says where the call chain is handed to a library: overrides of library methods
   it reaches (listeners, `run()`, a servlet's `service()`, Vaadin's `onAttach`…), with where
@@ -28,7 +28,8 @@ version and date when releasing.
 
 - `impact` marks the rows whose calls are all inside a lambda (one line or a block, cast,
   nested in another), a method reference or an anonymous class, and lists every such
-  caller; a helper method of an entry point's type says it "is in a screen"
+  caller; a lambda given to a method that runs it in place (`forEach`, `ifPresent`, `map`,
+  `computeIfAbsent`…) counts as a direct call; a helper method of an entry point's type says it "is in a screen"
   (the type is the entry point), not that it is one itself.
 
 ### Fixed
