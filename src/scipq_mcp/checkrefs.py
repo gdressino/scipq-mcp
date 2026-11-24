@@ -1678,7 +1678,9 @@ def _since_written(root: str, problems: list[Problem]) -> None:
             # when the text is not found.
             moved = _block_at(old, now_lines(p.src), n, end, near) or \
                 (None if edited else (n2, end2))
-            if moved and p.recheck(*moved, also, at=p.src):
+            if moved and (p.recheck(*moved, also, at=p.src) or
+                          not _specific(p.names or (p.name,))):
+                # (only names like commit or get: the text decides where the lines went)
                 m2, e2 = moved
                 others = ", ".join(f"{a}" + (f"-{b}" if b != a else "") + " → " +
                                    f"{r[0]}" + (f"-{r[1]}" if r[1] != r[0] else "")
@@ -1738,37 +1740,42 @@ def _repeats(old: list[str], cur: list[str], n: int, end: int) -> bool:
 
 def _in_its_method(old: list[str], cur: list[str], n: int, end: int, name: str) -> str:
     """For lines n..end of old that are no longer where they were: the method that held
-    them, as it is now. Where its calls of name are, or where the same code went when only
-    one copy is left, in a method it calls (an extract-method); "" when not known."""
+    them, as it is now (all its overloads). Where they call the name, or that they no longer
+    name it (and which method they call does, after an extract-method), or where the same
+    code went when one copy is left in a method they call; "" when not known."""
     was = _enclosing(old, n)
-    spans = _declared(cur, was) if was else []
+    spans = [(d, e) for _t, d, e in _declared(cur, was)] if was else []
     if was and not spans and _declared(old, was):
         return f": {was}, which held them, is no longer in the file"
     if not spans:
         return ""
-    lo, hi = spans[0][1], spans[0][2]
+    rows = sorted({k for d, e in spans for k in range(d - 1, min(e, len(cur)))})
     block = [x.strip() for x in old[n - 1:end]]
-    there = [c for c in _copies(cur, block) if not lo <= c <= hi]
-    left = [c for c in _copies(cur, block) if lo <= c <= hi]
-    if not left and len(there) == 1 and (other := _enclosing(cur, there[0])) and other != was:
-        call = re.compile(r"(?<![\w$])" + re.escape(other) + r"\s*\(")
-        at = [k + 1 for k in range(lo, min(hi, len(cur))) if call.search(cur[k])]
-        return f": the same code is now at {there[0]}, in {other}" + (
-            f", which {was} calls at {at[0]}" if at else "")
+    copies = _copies(cur, block)
+    there = [c for c in copies if c - 1 not in rows]
+
+    def called(c: str) -> list[int]:
+        rx = re.compile(r"(?<![\w$])" + re.escape(c) + r"\s*\(")
+        return [k + 1 for k in rows if rx.search(cur[k])]
+    if copies and len(there) == len(copies) == 1 and \
+            (other := _enclosing(cur, there[0])) and other != was and called(other):
+        return f": the same code is now at {there[0]}, in {other}, which {was} calls at " \
+               f"{called(other)[0]}"
     if name:
-        for verb, rx in (("calls", r"\s*\("), ("names", r"(?![\w$])")):
+        who = f"{was} calls another {was}" if name == was else f"{was} calls {name}"
+        for verb, rx in ((who, r"\s*\("), (f"{was} names {name}", r"(?![\w$])")):
             word = re.compile(r"(?<![\w$])" + re.escape(name) + rx)
-            at = [k + 1 for k in range(lo - 1, min(hi, len(cur))) if word.search(cur[k])]
+            at = [k + 1 for k in rows if word.search(cur[k])]
             if at:
-                return f": {was} {verb} {name} at " + ", ".join(map(str, at[:4])) + (
+                return f": {verb} at " + ", ".join(map(str, at[:4])) + (
                     " …" if len(at) > 4 else "")
         # moved to a method it calls (an extract-method): that one, and where
         word = re.compile(r"(?<![\w$])" + re.escape(name) + r"(?![\w$])")
-        for k in range(lo - 1, min(hi, len(cur))):
+        for k in rows:
             for c in re.findall(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", cur[k]):
                 if c in (was, name) or c in _HEADS:
                     continue
-                for _top, d, e in _declared(cur, c)[:1]:
+                for _top, d, e in _declared(cur, c):
                     got = [j + 1 for j in range(d - 1, min(e, len(cur))) if word.search(cur[j])]
                     if got:
                         return (f": {was} no longer names {name}; {c}, which it calls at "
@@ -2017,9 +2024,23 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     for x0, y0 in extra_spans:          # `getX()` vacío (`:106`) in the next cell
         others |= {x for b_ in _BARE.finditer(line, x0, y0)
                    for x in (y.lstrip("?") for y in _glued_names(line[x0:y0], b_.group(0)))} - glued
-    found = [(S.name_of(x), at) for x, at in named_here if inside(at) and ours(at)] + \
-        [(g.group(1), p + g.start()) for p, q in code if inside(p) for g in
-         re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q]) if ours(p + g.start())] + \
+    elsewhere_at = re.compile(r"\s+(?:en|at|in|on)\s+(?:la\s+|the\s+)?(?:l[ií]neas?\s+|"
+                              r"lines?\s+)?:?\d")
+
+    def placed(k: int) -> bool:
+        """The call at k, or the code span holding it, is followed by a line of its own
+        ("`a()` en 499", "+ tx.commit() en :1373"): that number's, not this mention's."""
+        call = re.match(r"[\w$]*\s*\([^()]*\)", line[k:k + 200])
+        if call and elsewhere_at.match(line, k + call.end()) and k + call.end() <= mo.start() \
+                or call and elsewhere_at.match(line, k + call.end()) and k > mo.end():
+            return True
+        q = next((q for p, q in code if p <= k < q), None)
+        return q is not None and q <= mo.start() and elsewhere_at.match(line, q) is not None
+    found = [(S.name_of(x), at) for x, at in named_here if inside(at) and ours(at) and
+             not placed(at)] + \
+        [(g.group(1), p + g.start()) for p, q in code if inside(p) and not placed(p) for g in
+         re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q]) if ours(p + g.start())
+         and not placed(p + g.start())] + \
         [(g.group(1), p + g.start(1)) for p, q in code if inside(p) and ours(p) for g in
          [re.fullmatch(r"`[A-Z][A-Z0-9_]+\.([a-z_$][\w$]*)`", line[p:q])] if g]
     # (`CONSTANT.member`: the member, the constant's type is not the line's file)
@@ -2037,9 +2058,11 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         return mo.start() - at if at >= 0 else max(0, line.find(x, mo.end(), ob)) + 10_000
     names: list[str] = sorted(glued, key=lambda x: (distance(x), x)) or in_segment
     # When the glued names cannot be checked in the file, those of the mention's clause.
-    clause_found = [(S.name_of(x), at) for x, at in named_here if oa <= at < ob and ours(at)] + \
+    clause_found = [(S.name_of(x), at) for x, at in named_here if oa <= at < ob and ours(at)
+                    and not placed(at)] + \
         [(g.group(1), p + g.start()) for p, q in code if oa <= p < ob for g in
-         re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q]) if ours(p + g.start())]
+         re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q]) if ours(p + g.start())
+         and not placed(p + g.start())]
     in_clause = {x for x, at in clause_found if physical(at) == physical(mo.start())} or \
         {x for x, _at in clause_found}
     fallback = sorted(x for x in in_clause if x not in names and x not in others)
@@ -2565,6 +2588,13 @@ def _no_strings(text: str) -> str:
     return re.sub(r'"(?:[^"\\]|\\.)*"', '""', text)
 
 
+def _before_next_number(text: str) -> str:
+    """Text that ends right before the next line number, without its last item when that is
+    the number's ("… + tx.commit() en :1373")."""
+    cut = re.search(r"(?:\s\+\s|,\s|\s(?:y|and|e)\s)[^+,]*?\s(?:en|at|in|on)\s*`?$", text)
+    return text[:cut.start()] if cut else text
+
+
 def _glued_calls(line: str, mo, code: list, a: int, b: int, tight: bool = False) -> set[str]:
     """Calls written right next to a path: in its own code span, after `File:N —` or
     `File:N (`, before ` (File:N)`, or in the next table cell when that is code; not
@@ -2578,16 +2608,14 @@ def _glued_calls(line: str, mo, code: list, a: int, b: int, tight: bool = False)
         cuts = [c.end() for c in _PATH.finditer(head)] + [c.end() for c in _BARE.finditer(head)]
         head = head[max(cuts, default=0):]
         tail = re.split(r"(?:,|\s(?:y|and|e)\b|\s*\+)\s*`?:\d|\s·\s|;", line[mo.end():own[1]])[0]
-        nxt = _PATH.search(tail)
-        tail = tail[:nxt.start()] if nxt else tail
+        nxt = [x.start() for x in (*_PATH.finditer(tail), *_BARE.finditer(tail)) if x.start() > 0]
+        tail = _before_next_number(tail[:min(nxt)]) if nxt else tail
         pieces.append(head[-40:] + " " + tail[:40] if tight else head + tail)
     after = re.split(r";|\s·\s|\||\s→\s", line[mo.end():b])[0]
     after = re.split(r"(?:,|\s(?:y|and|e))\s*`?:\d", after)[0]
     nxt = [x.start() for x in (*_PATH.finditer(after), *_BARE.finditer(after)) if x.start() > 0]
-    after = after[:min(nxt)] if nxt else after      # up to the next path or line number
-    if nxt:     # "… + tx.commit() en :1373": the last item is the next number's
-        cut = re.search(r"(?:\s\+\s|,\s|\s(?:y|and|e)\s)[^+,]*?\s(?:en|at|in|on)\s*`?$", after)
-        after = after[:cut.start()] if cut else after
+    # up to the next path or line number
+    after = _before_next_number(after[:min(nxt)]) if nxt else after
     if re.match(r"`?\s*(?:—|–|-|:|\()", after):
         pieces.append(after[:40] if tight else after[:160])
     before = line[a:mo.start()]
