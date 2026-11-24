@@ -3,7 +3,7 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
-## Unreleased
+## 0.9.3 — 2026-11-24
 
 ### Fixed
 
