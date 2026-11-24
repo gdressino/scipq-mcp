@@ -467,3 +467,20 @@ def test_likely_jars_by_artifact_name(tmp_path):
     assert str(jar) in ix._likely_jars("javax/jdo/annotations/PersistenceCapable")
     assert str(api) in ix._likely_jars("jakarta/persistence/Entity")
     assert not ix._likely_jars("org/other/Thing")
+
+
+def test_field_type_with_several_declarators(tmp_path):
+    src = tmp_path / "src"
+    (src / "org" / "acme").mkdir(parents=True)
+    (src / "org" / "acme" / "Lib.java").write_text(
+        "package org.acme;\npublic class Lib {\n    public static int a = 1, b[];\n"
+        "    public static final String NAME = \"x\", OTHER = \"y\";\n}\n")
+    import zipfile
+    jar = tmp_path / "files-2.1" / "org.acme" / "lib" / "1.0" / "h" / "lib-1.0-sources.jar"
+    jar.parent.mkdir(parents=True)
+    with zipfile.ZipFile(jar, "w") as z:
+        z.write(src / "org" / "acme" / "Lib.java", "org/acme/Lib.java")
+    ix = L.LibraryIndex(str(tmp_path / "cache"), [str(tmp_path / "files-2.1")])
+    assert L.field_type(ix, "org/acme/Lib#a.") == "int"
+    assert L.field_type(ix, "org/acme/Lib#b.") == "int[]"
+    assert L.field_type(ix, "org/acme/Lib#OTHER.") == "java/lang/String#"

@@ -32,6 +32,7 @@ REFRESH_SECONDS = 600
 LOCK_WAIT_SECONDS = 45  # how long to wait for another session that is building the map
 OPEN_ZIPS = 8           # jars kept open: opening the JDK's src.zip alone reads ~15,000 entries
 PARSED_SOURCES = 64     # parsed .java files kept (hierarchies read the same files repeatedly)
+QUICK_JARS = 12         # likely jars a lookup that must not block may read
 
 
 class LibraryBusy(Exception):
@@ -241,6 +242,7 @@ class LibraryIndex:
         self._absent: dict[str, float] = {}  # class -> when the whole map last lacked it
         self._absent_quick: set[str] = set()  # not in its likely jars (find_class wait=False)
         self._artifacts: dict[str, dict[str, list[str]]] = {}
+        self._quick_since = time.time()   # _absent_quick and _artifacts expire
 
     def source(self, lib: LibClass) -> JavaSource | None:
         """The parsed .java of a class, from a jar kept open (keyed by path, mtime and size, so
@@ -500,7 +502,8 @@ class LibraryIndex:
     def find_class(self, class_path: str, wait: bool = True) -> LibClass | None:
         """The jar holding `com/example/Foo` (highest version first). Looks at the likely jars
         first; lists every cached jar only when those do not have it. Without wait, only what
-        the map holds already (no lock, no listing: for what must not block, as labels)."""
+        the map holds already, plus a few of the class's likely jars when nobody holds the
+        lock (never waiting for it, never listing every jar): for labels, which must not block."""
         con = self._connect()
         try:
             rows = self._query(con, class_path)
@@ -508,13 +511,19 @@ class LibraryIndex:
             con.close()
         if not rows and not wait:
             # Only the likely jars (the JDK for java/…), and only if nobody holds the lock.
+            if time.time() - self._quick_since > REFRESH_SECONDS:
+                self._absent_quick.clear()
+                self._artifacts.clear()
+                self._quick_since = time.time()
             if class_path in self._absent or class_path in self._absent_quick:
                 return None
+            likely = dict(sorted(self._likely_jars(class_path).items(),
+                                 reverse=True)[:QUICK_JARS])   # newest versions first
             try:
                 with self._lock(wait=0):
                     con = self._connect()
                     try:
-                        self._index_jars(con, self._likely_jars(class_path))
+                        self._index_jars(con, likely)
                         rows = self._query(con, class_path)
                     finally:
                         con.close()
@@ -890,21 +899,34 @@ def field_type(index: LibraryIndex, symbol: str) -> str:
         return S.parent(symbol)
     if d.member.kind != "field":
         return ""
-    decl = S.without_annotations(d.member.declaration).split("=", 1)[0]
+    decl = S.without_annotations(d.member.declaration)
     while "<" in decl:
         erased = re.sub(r"<[^<>]*>", " ", decl)
         if erased == decl:
             break
         decl = erased
     decl = re.sub(r"\s*\[\s*\]", "[]", decl)
-    words = [w for w in decl.replace(",", " ").split()
-             if w not in ("public", "protected", "private", "static", "final", "transient",
-                          "volatile")]
-    at = next((k for k, w in enumerate(words) if w.replace("[]", "") == d.member.name), -1)
-    if at <= 0:
+    # `int a = 1, b[]`: the type is the first declarator's, the dimensions also the name's.
+    parts, depth, cur = [], 0, ""
+    for ch in decl:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    parts.append(cur)
+    names = [p.split("=", 1)[0].split() for p in parts]
+    first = [w for w in names[0] if w not in ("public", "protected", "private", "static",
+                                               "final", "transient", "volatile")]
+    mine = next((p for p in names if p and p[-1].replace("[]", "") == d.member.name), None)
+    if len(first) < 2 or mine is None:
         return ""
-    dims = words[at - 1].count("[]") + words[at].count("[]")
-    typ = words[at - 1].replace("[]", "")
+    dims = first[-2].count("[]") + mine[-1].count("[]")
+    typ = first[-2].replace("[]", "")
     if typ in S.PRIMITIVES:
         return typ + "[]" * dims
     _path, types = class_path_of(symbol)

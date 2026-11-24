@@ -501,3 +501,21 @@ def test_where_types_of_constants_array_elements_and_class_literals(refactor_roo
     assert lines("java.lang.Enum") == [9]     # a project enum's constant
     assert lines("Boolean") == [10]           # a library constant
     assert lines("Class") == [11]             # String.class
+
+
+def test_review_fixes_in_where_types(refactor_root, javaparser_cache):
+    from scipq_mcp.refactor import CaptureTypes, _index_chain
+    for text, base, n in (("lookup(keys[0])[1]", "lookup(keys[0])", 1),
+                          ("rows[0].cells[1]", "rows[0].cells", 1), ("a[i][j]", "a", 2)):
+        k, m = _index_chain(text, 0, len(text))
+        assert (text[:k], m) == (base, n)
+    ct = CaptureTypes(None, {"ancestors": lambda t: []})
+    assert ct.is_a("java/lang/String#[][]", "Object[]") is True       # covariance
+    assert ct.is_a("int[]", "Object[]") is False and ct.is_a("int[][]", "Object[]") is True
+    assert ct.is_a("java/lang/String#[]", "String[]") is True
+    svc = _jdk_service(refactor_root, javaparser_cache)
+    out = plan(svc, [{"select": {"in": "Equals#all", "kind": "MethodCallExpr",
+                                 "where": {"pattern": "$x.equals($y)",
+                                           "types": {"$x": "String[]"}}},
+                      "do": {"replace": "$this"}}], dry_run=True)
+    assert "no type" not in out and "error" not in out.lower(), out   # an array type exists

@@ -120,3 +120,8 @@ def test_review_fixes_in_names():
     sig = "@Operation(description = \"a (b).\n\n'estado' x\")\npublic R run(String id, boolean f)"
     assert S.without_annotations(sig).split() == ["public", "R", "run(String", "id,", "boolean",
                                                   "f)"]
+
+
+def test_an_annotation_never_closed_ends_with_its_line():
+    sig = '@ApiOperation(value = "a "b")\npublic void run(String x)'
+    assert S.without_annotations(sig).split() == ["public", "void", "run(String", "x)"]

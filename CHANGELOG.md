@@ -11,7 +11,7 @@ version and date when releasing.
   "types": {"$x": "java.util.Collection"}}` keeps the sites where `$x` is that type or a
   subtype, told from the index (names, fields, parameters, `var`, calls by their return type,
   `new`, casts, literals, constants such as an enum's or `Boolean.TRUE`, array elements,
-  `X.class`). A site whose capture's type cannot be told is left out and listed.
+  `X.class`); a type may be an array (`String[]`; `Object[]` takes any array of objects). A site whose capture's type cannot be told is left out and listed.
   A select by kind whose `where` calls a method on a capture without `types` gets a note:
   the shape alone does not tell a list's `isEmpty()` from a table's.
 - `family` on a library method (and `refactor`'s `family: true` on one, in a select or in

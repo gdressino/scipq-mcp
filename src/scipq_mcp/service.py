@@ -80,20 +80,25 @@ class OverloadLabels:
         self._spent = 0.0
         self._library_spent = 0.0
         self._shard_ok: dict[str, bool] = {}
-        self.unread: dict[str, set[str]] = {"time": set(), "sources": set()}
+        self.unread: dict[str, set[str]] = {"time": set(), "limit": set(), "sources": set()}
 
-    def note(self) -> str:
-        """A line for the answer when some methods were written `m(…)`."""
-        timed, nosrc = self.unread["time"], self.unread["sources"] - self.unread["time"]
-        if not timed and not nosrc:
-            return ""
+    def note(self, text: str) -> str:
+        """A line for the answer when some of the methods it shows are written `m(…)`."""
+        unread = {r: list(syms) for r, syms in self.unread.items()}   # S.short adds to them
+        shown = {r: {s for s in syms if S.short(s) in text} for r, syms in unread.items()}
+        seen: set[str] = set()
         why = []
-        if nosrc:
-            why.append(f"{len(nosrc)} whose sources jar was not read (none here, or not "
-                       "mapped yet: `definition` of one maps it)")
-        if timed:
-            why.append(f"{len(timed)} past the time for names (asked again, they are read)")
-        return (f"-- {len(timed | nosrc)} methods are written m(…), their parameters not read: "
+        for reason, what in (("sources", "whose sources jar was not read (none here, or not "
+                                         "mapped yet: `definition` of one maps it)"),
+                             ("time", "past the time for names (asked again, they are read)"),
+                             ("limit", f"past the {self.MAX_GROUPS} methods named per answer")):
+            mine = shown[reason] - seen
+            if mine:
+                why.append(f"{len(mine)} {what}")
+                seen |= mine
+        if not seen:
+            return ""
+        return (f"-- {len(seen)} methods are written m(…), their parameters not read: "
                 + "; ".join(why) + ". m(…) names the method whatever it takes")
 
     def _index(self) -> sqlite3.Connection | None:
@@ -127,7 +132,8 @@ class OverloadLabels:
         group = self.groups.get(key)
         if group is None:
             if len(self.groups) >= self.MAX_GROUPS or self._spent >= self.MAX_SECONDS:
-                self.unread["time"].add(symbol)
+                self.unread["limit" if len(self.groups) >= self.MAX_GROUPS else "time"].add(
+                    symbol)
                 return self.UNKNOWN
             self.groups[key] = {}   # while computing: S.short inside prints the plain name
             t0 = time.perf_counter()
@@ -166,14 +172,16 @@ class OverloadLabels:
                 "WHERE s.symbol >= ? AND s.symbol < ?", (lo, lo[:-1] + ")")).fetchall()
             rows = [r for r in rows if S.is_method(r[0]) and S.parent(r[0]) == owner
                     and S.name_of(r[0]) == name]
-            if all(self._fresh(path, mt, size) for _s, _g, path, mt, size in rows):
-                if rows:
-                    return _labels({sym: R._param_types(sig) for sym, sig, *_r in rows if sig})
-                if con.execute("SELECT 1 FROM symbols s JOIN defs d ON d.symbol_id = s.id "
-                               "WHERE s.symbol = ? LIMIT 1", (owner,)).fetchone():
+            if rows and all(self._fresh(path, mt, size) for _s, _g, path, mt, size in rows):
+                return _labels({sym: R._param_types(sig) for sym, sig, *_r in rows if sig})
+            if not rows:
+                own = con.execute(
+                    "SELECT sh.path, sh.mtime_ns, sh.size FROM symbols s JOIN defs d ON "
+                    "d.symbol_id = s.id JOIN shards sh ON sh.id = d.shard_id WHERE s.symbol = ? "
+                    "LIMIT 1", (owner,)).fetchone()
+                if own and self._fresh(*own):
                     return {}   # a project type: the method is inherited or implicit
-                return self._library_group(symbol)
-            # The file was compiled again since the index read it: from its shard below.
+            # Compiled again since the index read it, or a type it does not know: the shard.
         if top not in self.files:
             methods: dict[tuple[str, str], list] = {}
             for v in self.nav._views(self.nav.ws.shards_by_basename({top + ".java"})):
@@ -276,7 +284,7 @@ class Service:
         labels = S.METHOD_LABELS.set(labeler)
         try:
             text = self._run_bodies(nav, ws, check, bodies, foot_first)
-            note = labeler.note()
+            note = labeler.note(text)
             return text + ("\n" + note if note else "")
         finally:
             S.METHOD_LABELS.reset(labels)
@@ -784,6 +792,7 @@ class Service:
         def exists(written: str) -> bool:
             """A type written in where types: a primitive, a type the index knows (declared,
             used or a supertype of one) or a library class with sources."""
+            written = written.replace("[]", "").strip()   # an array: its element type
             if written in S.PRIMITIVES or written in ("Object", "java.lang.Object"):
                 return True
             if S.is_qualified_type(written):

@@ -2371,18 +2371,26 @@ _LITERAL_TYPES = {"StringLiteralExpr": "java/lang/String#", "TextBlockLiteralExp
                   "DoubleLiteralExpr": "double"}
 
 
-def _top_level_brackets(text: str, start: int, end: int) -> int:
-    """How many `[…]` groups follow at the top level of text[start:end] (`[i][j]`: 2)."""
-    n, depth = 0, 0
-    for k in range(start, end):
-        ch = text[k]
-        if ch in "([{":
-            if ch == "[" and depth == 0:
-                n += 1
-            depth += 1
-        elif ch in ")]}":
-            depth -= 1
-    return n
+def _index_chain(text: str, lo: int, hi: int) -> tuple[int, int]:
+    """The `[…][…]` groups that end text[lo:hi] (`lookup(keys[0])[1]`: the last one only):
+    (where they start, how many)."""
+    k, n = len(text[:hi].rstrip()), 0
+    while k > lo and text[k - 1] == "]":
+        depth, j = 0, k - 1
+        while j >= lo:
+            ch = text[j]
+            if ch in ")]}":
+                depth += 1
+            elif ch in "([{":
+                depth -= 1
+                if depth == 0:
+                    break
+            j -= 1
+        if j < lo or text[j] != "[":
+            break
+        n += 1
+        k = len(text[:j].rstrip())
+    return k, n
 
 
 def _top_level(text: str, start: int, end: int, stops: str) -> int:
@@ -2448,16 +2456,18 @@ class CaptureTypes:
             return "java/lang/Class#"
         if kind == "ArrayAccessExpr":   # a[i], a[i][j]: the element type of what is indexed
             text = fs.text.text
-            k = _top_level(text, lo, hi, "[")
+            k, n = _index_chain(text, lo, hi)   # where the trailing [..][..] starts, how many
             end = lo + len(text[lo:k].rstrip())
-            base = [x for x in occs if x[1] == end and x[0] >= lo]
-            if not base:
+            if n == 0 or end <= lo:
                 return ""
-            sym = base[-1][2]
-            typ = self._declared(source, sym) if S.kind_of(sym) != "method" or \
-                self.defined(sym) else self.returns(sym)
-            n = _top_level_brackets(text, k, hi)
-            return typ[:-2 * n] if n and typ.endswith("[]" * n) else ""
+            if text[end - 1] == ")":            # f(x)[i]: what the call returns
+                sym = self._outer_call(text, [x for x in occs if x[0] < end], end)
+                typ = (self._declared(source, sym) if self.defined(sym) else self.returns(sym)) \
+                    if sym else ""
+            else:                               # a[i], o.f[i]: the name just before
+                base = [x for x in occs if x[1] == end and x[0] >= lo]
+                typ = self._declared(source, base[-1][2]) if base else ""
+            return typ[:-2 * n] if typ.endswith("[]" * n) else ""
         if kind == "NameExpr":
             hit = [x for x in occs if x[0] == lo]
             return self._declared(source, hit[0][2]) if hit else ""
@@ -2596,9 +2606,12 @@ class CaptureTypes:
             return typ not in S.PRIMITIVES and typ != "void"
         if typ.endswith("[]") or want.endswith("[]"):   # arrays: same dimensions, then the
             dims, wdims = typ.count("[]"), want.count("[]")   # element types
+            base, wbase = typ.replace("[]", ""), want.replace("[]", "")
+            if wbase in ("Object", "java.lang.Object") and dims > wdims:
+                return True   # String[][] is an Object[] (and int[][] too: int[] is an Object)
             if dims != wdims:
                 return False
-            return self.is_a(typ.replace("[]", ""), want.replace("[]", ""))
+            return self.is_a(base, wbase)
         if typ in S.PRIMITIVES or typ == "void":
             return typ == want
         if "." in want and want[:1].islower():

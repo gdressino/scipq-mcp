@@ -301,6 +301,11 @@ def without_annotations(signature: str) -> str:
                         k += 1
                         break
                 k += 1
+            else:
+                # Never closed (a quote scip-javac wrote unescaped inside a string): it ends
+                # with its line, the declaration being on its own line after it.
+                nl = text.find("\n", j)
+                k = n if nl < 0 else nl
             j = k
         out.append(" ")
         i = j
