@@ -623,6 +623,8 @@ def test_impact_lifecycle_creators_layouts_and_startup_lambdas(refactor_root, tm
     row = out.split("Startup.java")[1].split("\n")[0]
     assert "startup  d1  Startup  " in out and "warm()" in row
     assert "register()" not in row and "factory()" not in row   # a lambda, an anonymous class
+    assert "Startup#register()  shop/src/main/java/com/example/shop/Startup.java:13  → " \
+        "Pages#lazy()  (from a lambda or anonymous class)" in out
 
 
 def test_init_scripts_that_filter_by_name_prefix(tmp_path, monkeypatch):
@@ -1008,3 +1010,36 @@ def test_impact_names_library_callbacks_and_deferred_calls(refactor_root, tmp_pa
     assert "called from inside an anonymous class or a lambda" in out and \
         "Panel#setup()  shop/src/main/java/com/example/shop/Panel.java:15" in out, out
     assert "→ Panel#refresh()  (from a lambda or anonymous class)" in out
+
+
+def test_calls_inside_lambdas_are_told_apart():
+    from scipq_mcp.graph import _in_lambda
+    from scipq_mcp.javasrc import mask
+
+    def inside(code, name="go(", k=0):
+        at = -1
+        for _ in range(k + 1):
+            at = code.index(name, at + 1)
+        return _in_lambda(mask(code), at)
+    head = "class A {\n  void m() {\n"
+    yes = ["b.addListener(e -> go(target));",
+           "opt.ifPresent(x -> step(x, go(y)));",
+           "b.addListener(e -> {\n    load();\n    go();\n});",
+           "Runnable r = () -> { reload.run(); go(); };",
+           "b.add((Listener) ev -> {\n  d.open((Confirm.Listener) c -> {\n"
+           "    if (c.ok()) {\n      go();\n    }\n  });\n});",
+           "Supplier<X> s = flag ? () -> go() : () -> other();",
+           "x -> { for (int i = 0; i < 3; i++) { go(); } }"]
+    no = ["go();",
+          "list.forEach(x -> log(x));\n    go();",
+          "foo(x -> a(x), go());",
+          "switch (k) {\n  case A -> go();\n  default -> stop();\n}",
+          "switch (k) {\n  case A -> { go(); }\n}",
+          'log("a -> b"); go();',
+          "new Runnable() {\n  public void run() {\n    go();\n  }\n};",
+          "if (ready) {\n  go();\n}"]
+    for code in yes:
+        assert inside(head + code + "\n  }\n}"), code
+    for code in no:
+        assert not inside(head + code + "\n  }\n}"), code
+    assert inside(head + "list.forEach(this::go);\n  }\n}", "go)")       # a method reference

@@ -26,8 +26,9 @@ version and date when releasing.
   since those are their real callers; types already listed as entry points are left out;
   and the callers whose calls are all inside an anonymous class or a lambda.
 
-- `impact` marks the rows whose calls are all inside a lambda or an anonymous class, and
-  lists every such caller; a helper method of an entry point's type says it "is in a screen"
+- `impact` marks the rows whose calls are all inside a lambda (one line or a block, cast,
+  nested in another), a method reference or an anonymous class, and lists every such
+  caller; a helper method of an entry point's type says it "is in a screen"
   (the type is the entry point), not that it is one itself.
 
 ### Fixed

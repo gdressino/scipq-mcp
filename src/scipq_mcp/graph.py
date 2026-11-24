@@ -546,6 +546,7 @@ class Graph:
             others = frozenset(self._subtypes_of({base}) - family(x) - {base})
             return shard_id not in shards_naming(others)
         self.left_out = 0                   # calls to overridden methods left out
+        masked: dict[str, tuple] = {}       # source -> its masked text, line starts
         nodes: dict[int, Node] = {}
         names: dict[int, str] = self.names(frontier)
         truncated = False
@@ -622,7 +623,8 @@ class Graph:
                 src, mod, test = sh[shard_id]
                 nodes[caller] = Node("", level, names.get(target, ""), src, 0, module_of(mod),
                                      bool(test), _lines(sites), mod,
-                                     inner=all("@" in x for x in sites.split(",") if x))
+                                     inner=all(_deferred_site(root, src, x, masked)
+                                               for x in sites.split(",") if x))
                 if len(nodes) >= max_nodes:
                     truncated = True
                     break
@@ -1425,6 +1427,103 @@ def _not_super(root: str, source: str, sites: str, name: str, cache: dict,
             continue
         keep.append(s)
     return ",".join(keep)
+
+
+_STATEMENT_HEADS = {"if", "for", "while", "switch", "catch", "synchronized", "try"}
+
+
+def _opens(t: str, k: int) -> str:
+    """What the `{` at t[k] opens: "lambda", "statement" (a block of if/for/try…, a switch
+    rule's), "expression" (an array initializer) or "member" (a method, a class body)."""
+    head = t[max(0, k - 400):k].rstrip()
+    if head.endswith("->"):
+        return "statement" if re.search(r"(?:\bcase\b[^;{}]*|\bdefault\s*)$", head[:-2]) \
+            else "lambda"
+    if not head or head[-1] in ";{}:" or re.search(r"(?:\belse|\btry|\bfinally|\bdo)$", head):
+        return "statement"
+    if head[-1] in "=,([" or head.endswith("]"):
+        return "expression"
+    if head[-1] == ")":
+        depth, j = 0, len(head) - 1
+        while j >= 0:
+            depth += {")": 1, "(": -1}.get(head[j], 0)
+            if depth == 0:
+                break
+            j -= 1
+        word = re.search(r"([\w$]+)\s*$", head[:max(j, 0)])
+        if word and word.group(1) in _STATEMENT_HEADS:
+            return "statement"
+    return "member"         # a method's or constructor's body, a class body, an initializer
+
+
+def _in_lambda(t: str, pos: int, limit: int = 30000) -> bool:
+    """The code at pos of a masked source (javasrc.mask) runs in a lambda's body, or is a
+    method reference (::name): it runs when whoever receives it calls it."""
+    if t[max(0, pos - 2):pos] == "::":
+        return True
+    paren = brace = 0
+    arrow_ok = True         # an arrow at this level still holds pos (no , or ; since)
+    i, stop = pos - 1, max(0, pos - limit)
+    while i >= stop:
+        c = t[i]
+        if c == ")":
+            paren += 1
+        elif c == "(":
+            if paren:
+                paren -= 1
+            else:
+                arrow_ok = True     # out of an argument list, into the expression holding it
+        elif c == "}":
+            brace += 1
+        elif c == "{":
+            if brace:
+                brace -= 1
+            else:
+                kind = _opens(t, i)
+                if kind == "lambda":
+                    return True
+                if kind == "member":
+                    return False
+                if kind == "statement":
+                    arrow_ok = False
+        elif c == ">" and i and t[i - 1] == "-" and not paren and not brace:
+            if arrow_ok and not re.search(r"(?:\bcase\b[^;{}]*|\bdefault\s*)$",
+                                          t[max(0, i - 300):i - 1]):
+                return True
+            i -= 1
+        elif c in ",;" and not paren and not brace:
+            arrow_ok = False
+        i -= 1
+    return False
+
+
+def _deferred_site(root: str, source: str, site: str, cache: dict) -> bool:
+    """A call site ("line:col", 0-based) inside an anonymous class (@), a lambda's body or a
+    method reference."""
+    if "@" in site:
+        return True
+    if not root:
+        return False
+    got = cache.get(source)
+    if got is None:
+        from .javasrc import mask
+        try:
+            with open(os.path.join(root, source), encoding="utf-8", errors="replace") as fh:
+                text = mask(fh.read())
+        except OSError:
+            text = ""
+        starts, k = [0], 0
+        for line in text.split("\n"):
+            k += len(line) + 1
+            starts.append(k)
+        got = cache[source] = (text, starts)
+    text, starts = got
+    line, _, col = site.partition(":")
+    try:
+        ln, c = int(line), int(col.split("@", 1)[0] or 0)
+    except ValueError:
+        return False
+    return ln < len(starts) - 1 and _in_lambda(text, starts[ln] + c)
 
 
 def _lines(sites: str) -> list[int]:
