@@ -750,7 +750,10 @@ def library_callbacks(callbacks, deferred=()) -> str:
         lines.append("\ncalled from inside an anonymous class or a lambda (it runs when "
                      "whoever receives that object calls it, often a library):")
         lines += [f"  {S.short(n.symbol)}  {n.source}:{', '.join(map(str, n.sites[:3]))}"
-                  for n in deferred]
+                  for n in deferred[:20]]
+        if len(deferred) > 20:
+            lines.append(f"  … and {len(deferred) - 20} more (the rows marked \"from a lambda "
+                         "or anonymous class\")")
     if not callbacks:
         return "\n".join(lines)
     lines += ["\nlibrary callbacks (the library calls these; their callers are whoever creates "
