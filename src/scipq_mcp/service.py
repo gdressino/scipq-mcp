@@ -399,7 +399,8 @@ class Service:
             if scope:
                 refs = [r for r in refs if X.in_scope(r.container, r.location.source, scope)]
             text = render.references(nav.ws, sym, refs, defs, offset, limit, include_definitions,
-                                     quote=lambda src, sites: X.quote_sites(nav, src, sites))
+                                     quote=self._quoter(nav, {r.location.source
+                                                              for r in refs[offset:offset + limit]}))
             if scope:
                 text = text.replace(" — ", f" — in {scope}: ", 1)
             if by_name:
@@ -691,8 +692,19 @@ class Service:
             srcs = {r.location.source for m in fam for r in m.uses}
             return note + "".join(dict.fromkeys(notes)) + \
                 render.family(sym, fam, nav.ws, offset, limit, show_uses,
-                              quote=lambda src, sites: X.quote_sites(nav, src, sites)), srcs
+                              quote=self._quoter(nav, srcs)), srcs
         return body
+
+    @staticmethod
+    def _quoter(nav: Navigator, sources: set[str]) -> Callable:
+        """For render: quote sites (symbol given) with X.quote_sites, the stale files of the
+        answer computed once."""
+        stale = X.stale_of(nav, sources)
+
+        def quote(sites: dict) -> dict:
+            return X.quote_sites(nav, {k: (src, line, X.site_patterns(sym, cont), cont)
+                                       for k, (src, line, sym, cont) in sites.items()}, stale)
+        return quote
 
     def library_family(self, nav: Navigator, notes: list[str]) -> Callable:
         """For X.family: the library part of a library method's override family."""

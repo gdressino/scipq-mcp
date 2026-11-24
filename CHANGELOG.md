@@ -13,7 +13,7 @@ version and date when releasing.
   finds it, and is shown where it is now (`(compiled at N)`); when its line does not show it
   now, the answer says the text may be other code.
 - `source` of a method no longer in its file suggests the method with the same parameters
-  where it was (renamed?).
+  that the compilation did not have (renamed?).
 
 ### Changed
 

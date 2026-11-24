@@ -183,21 +183,20 @@ def body_section(nav: Navigator, d: Definition, short: str) -> Section | None:
 
 def _call_lines(nav: Navigator, nodes) -> tuple[list[str], int, int]:
     """One line per caller (its first call site and the call's text), non-test ones first."""
-    wanted: dict[str, dict[int, tuple[list[str], str]]] = {}
-    for n in nodes:
-        if n.sites:
-            r = n.sites[0]
-            wanted.setdefault(r.location.source, {})[r.location.range.start_line] = \
-                (render.site_names(r.symbol), r.container)
-    texts = {src: X.quote_sites(nav, src, ls) for src, ls in wanted.items()}
+    # One per caller node (two may call on the same line: each with its own container).
+    quoted = X.quote_sites(nav, {k: (n.sites[0].location.source,
+                                     n.sites[0].location.range.start_line,
+                                     X.site_patterns(n.sites[0].symbol, n.sites[0].container),
+                                     n.sites[0].container)
+                                 for k, n in enumerate(nodes) if n.sites})
     rows = []
-    for n in nodes:
+    for k, n in enumerate(nodes):
         if not n.sites:
             continue
         r = n.sites[0]
         test = X.is_test_reference(r)
         line = r.location.range.start_line
-        now, text, how = texts.get(r.location.source, {}).get(line, (line, "", ""))
+        now, text, how = quoted.get(k, (line, "", ""))
         extra = f"  (+{len(n.sites) - 1} more calls)" if len(n.sites) > 1 else ""
         via = f"  via {S.short(n.via)}" if n.via else ""
         tag = "  [test]" if test else ""

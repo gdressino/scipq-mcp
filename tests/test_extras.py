@@ -1179,7 +1179,7 @@ def test_source_of_a_file_changed_after_its_compilation(sample_copy, tmp_path):
            "14–16)" in out, out
     assert "\n17      public void setState(int state) {\n19      }" in out.replace(
         "\n18          this.state = state;", "")
-    assert "a line quoted from these files is read as it is now" in out
+    assert "a line quoted from these files is looked for where it is now" in out
     assert "body (as it is now; compiled at 14–16, before the file changed):" in \
         svc.context("Entity#setState")
     # Gone from the file: the compiled lines, said to be what they are.
@@ -1259,3 +1259,27 @@ def test_quoted_lines_of_a_changed_file_are_found_again(sample_copy, tmp_path):
     assert "  22: e.hashCode();  [Service#notArchived]  (compiled at 20; the file changed since " \
            "and this line does not show it: the text may be other code)" in out, out
     assert "  27: e.setState(1);  [Service#activate(Entity)]  (compiled at 25)" in out
+
+
+def test_quoted_sites_review_cases(sample_copy, refactor_root, tmp_path):
+    from scipq_mcp.service import Service
+    # A constructor call removed: `this.` on its line is not the call.
+    _edit(sample_copy, "app/src/main/java/com/example/app/Service.java",
+          'new Account.Builder().number("0").build()', "this.hashCode() == 0 ? null : null",
+          1_700_000_500)
+    svc = Service(sample_copy, cache_dir=str(tmp_path / "c"))
+    out = svc.references("Account#Builder#<init>")
+    assert "this text may be other code" in out or "the text may be other code" in out, out
+    # A method deleted next to another that was always there: no "renamed?" for it.
+    _edit(sample_copy, "core/src/main/java/com/example/model/Entity.java",
+          "    public int getState() {\n        return state;\n    }\n", "", 1_700_000_500)
+    out = svc.source("Entity#getState")
+    assert "was not found in it as it is now" in out and "renamed?" not in out, out
+    # An enum constant calling its enum's constructor moves with the constant.
+    shop = "shop/src/main/java/"
+    _edit(refactor_root, shop + "javax/jdo/annotations/VersionStrategy.java",
+          "public enum VersionStrategy {", "// moved\npublic enum VersionStrategy {", 1_700_000_500)
+    out = Service(refactor_root, cache_dir=str(tmp_path / "c2")).references(
+        "javax/jdo/annotations/VersionStrategy#`<init>`().")
+    assert "  5: NONE, VERSION_NUMBER, DATE_TIME (×3)  [VersionStrategy#NONE]  (compiled at 4)" \
+        in out, out

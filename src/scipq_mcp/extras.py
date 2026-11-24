@@ -53,8 +53,12 @@ def source(nav: Navigator, symbol: str, max_lines: int = 200) -> Source | None:
     compiled, located, hint = None, "", ""
     if not d.generated and nav.ws.freshness_of({d.location.source}).stale:
         compiled = (first + 1, last + 1)
+        owner = S.parent(d.symbol)
+        known = {S.name_of(x.symbol) for v in nav._views(nav.ws.shard_for_source(
+                 d.location.source)[:1]) for x in v.definitions(
+                 lambda sym, _i: S.is_method(sym) and S.parent(sym) == owner)}
         try:
-            located, now, hint = _locate_now(nav.ws.root, d)
+            located, now, hint = _locate_now(nav.ws.root, d, known=known)
         except Exception:   # half-edited code the parser does not expect: not looked for
             located, now = "", None
         if now is not None:
@@ -65,12 +69,14 @@ def source(nav: Navigator, symbol: str, max_lines: int = 200) -> Source | None:
     return Source(d, lines, last + 1, shown_last < last, compiled, located, hint)
 
 
-def _locate_now(root: str, d: Definition) -> tuple[str, tuple[int, int] | None, str]:
+def _locate_now(root: str, d: Definition, parsed: dict | None = None,
+                known: set[str] | None = None) -> tuple[str, tuple[int, int] | None, str]:
     """Where a type, method, constructor, field, enum constant or record component is in its
     file now (0-based first and last lines), found by its enclosing types, name and
     parameter types: ("found", lines, ""), ("absent", None, hint: a method with the same
-    parameters where it was, as it may have been renamed), or ("", None, "") when it cannot
-    be looked for."""
+    parameters that did not exist when it was compiled (`known`: the type's method names
+    then), as it may have been renamed), or ("", None, "") when it cannot be looked for.
+    `parsed` keeps each file's parse for the next call."""
     from .javasrc import JavaSource
     from .libsrc import _type_variables, class_path_of, param_types
     descs = [x for x in S.parse(d.symbol) if x.suffix != S.NAMESPACE]
@@ -82,12 +88,16 @@ def _locate_now(root: str, d: Definition) -> tuple[str, tuple[int, int] | None, 
     owners = descs if kind == "type" else descs[:-1]
     if not owners or any(x.suffix != S.TYPE for x in owners):
         return "", None, ""
-    try:
-        with open(os.path.join(root, d.location.source), encoding="utf-8",
-                  errors="replace") as fh:
-            src = JavaSource(fh.read())
-    except OSError:
-        return "absent", None, ""
+    src = parsed.get(d.location.source) if parsed is not None else None
+    if src is None:
+        try:
+            with open(os.path.join(root, d.location.source), encoding="utf-8",
+                      errors="replace") as fh:
+                src = JavaSource(fh.read())
+        except OSError:
+            return "absent", None, ""
+        if parsed is not None:
+            parsed[d.location.source] = src
     _path, types = class_path_of(d.symbol)
     decl = src.find_type(types) if types else None
     if decl is None:
@@ -111,15 +121,12 @@ def _locate_now(root: str, d: Definition) -> tuple[str, tuple[int, int] | None, 
         pick = same[0] if len(same) == 1 else None
         if pick is None and len(same) > 1:
             return "", None, ""
-        if pick is None and kind == "method" and want is not None:
-            # Renamed? A method with the same parameters where this one was compiled.
-            rng = d.enclosing or d.location.range
-            near = [m for m in members if m.kind == "method" and m.name != name
-                    and param_types(m.declaration, tvars) == want
-                    and m.start_line - 1 <= rng.end_line + 5
-                    and m.end_line - 1 >= rng.start_line - 5]
-            if len(near) == 1:
-                m = near[0]
+        if pick is None and kind == "method" and want is not None and known is not None:
+            # Renamed? The one method with these parameters the compilation did not have.
+            new = [m for m in members if m.kind == "method" and m.name != name
+                   and m.name not in known and param_types(m.declaration, tvars) == want]
+            if len(new) == 1:
+                m = new[0]
                 return "absent", None, f"{m.name}({', '.join(t or 'T' for t in want)}) at " \
                     f"lines {m.start_line}–{m.end_line}"
     else:
@@ -167,43 +174,78 @@ def _annotations_before(masked: str, pos: int) -> int:
         k = i - 1
 
 
-def quote_sites(nav: Navigator, source: str, sites: dict[int, tuple[list[str], str]]
-                ) -> dict[int, tuple[int, str, str]]:
-    """The text of sites (calls, uses) to quote, {compiled 0-based line: (the names the site
-    shows, its container's symbol)} -> {compiled line: (line now, stripped text, how)}. In a
-    file changed after its compilation a site moves with its container (found again as
-    `source` finds it): how is "" (where it was), "moved", or "unsure" (its line does not
-    show it now: the text may be other code)."""
+def quote_sites(nav: Navigator, sites: dict, stale: set[str] | None = None) -> dict:
+    """The text of sites (calls, uses) to quote: {key: (source, compiled 0-based line, the
+    patterns its text shows (site_patterns), its container's symbol)} -> {key: (line now,
+    stripped text, how)}. In a file changed after its compilation (`stale`: those of the
+    answer, computed once) a site moves with its container, found again as `source` finds
+    it, and is quoted only if that line shows it: how is "" (where it was), "moved", or
+    "unsure" (the text may be other code)."""
     ws = nav.ws
     if not sites:
         return {}
-    if not ws.freshness_of({source}).stale:
-        text = ws.source_lines(source, sites)
-        return {k: (k, text.get(k, ""), "") for k in sites}
-    try:
-        with open(os.path.join(ws.root, source), encoding="utf-8", errors="replace") as fh:
-            now = fh.read().split("\n")
-    except OSError:
-        return {k: (k, "", "unsure") for k in sites}
-    shifts: dict[str, tuple[int, ...]] = {}
-    out = {}
-    for k, (names, container) in sites.items():
-        if container not in shifts:
-            shifts[container] = _container_shifts(nav, container, source)
-        words = [re.compile(r"(?<![\w$])" + re.escape(n) + r"(?![\w$])") for n in names if n]
-        hits = [k + s for s in shifts[container] if 0 <= k + s < len(now)
-                and any(w.search(now[k + s]) for w in words)]
-        if len(set(hits)) == 1:
-            j = hits[0]
-            out[k] = (j, now[j].strip(), "" if j == k else "moved")
+    sources = {v[0] for v in sites.values()}
+    if stale is None:
+        stale = set(ws.freshness_of(sources).stale)
+    out: dict = {}
+    plain: dict[str, set[int]] = {}
+    for key, (source, k, _p, _c) in sites.items():
+        if source not in stale:
+            plain.setdefault(source, set()).add(k)
+    texts = {source: ws.source_lines(source, ls) for source, ls in plain.items()}
+    now_lines: dict[str, list[str]] = {}
+    parsed: dict = {}
+    shifts: dict[tuple[str, str], tuple[int, ...]] = {}
+    for key, (source, k, patterns, container) in sites.items():
+        if source not in stale:
+            out[key] = (k, texts.get(source, {}).get(k, ""), "")
+            continue
+        if source not in now_lines:
+            try:
+                with open(os.path.join(ws.root, source), encoding="utf-8",
+                          errors="replace") as fh:
+                    now_lines[source] = fh.read().split("\n")
+            except OSError:
+                now_lines[source] = []
+        now = now_lines[source]
+        if (source, container) not in shifts:
+            shifts[source, container] = _container_shifts(nav, container, source, parsed)
+        found = [re.compile(p) for p in patterns]
+        hits = {k + s_ for s_ in shifts[source, container] if 0 <= k + s_ < len(now)
+                and any(w.search(now[k + s_]) for w in found)}
+        if len(hits) == 1:
+            j = hits.pop()
+            out[key] = (j, now[j].strip(), "" if j == k else "moved")
         else:
-            j = k + shifts[container][0] if shifts[container] else k
-            j = j if 0 <= j < len(now) else k
-            out[k] = (j, now[j].strip() if j < len(now) else "", "unsure")
+            j = k + shifts[source, container][0]
+            j = j if 0 <= j < len(now) else min(k, max(len(now) - 1, 0))
+            out[key] = (j, now[j].strip() if j < len(now) else "", "unsure")
     return out
 
 
-def _container_shifts(nav: Navigator, container: str, source: str) -> tuple[int, ...]:
+def site_patterns(symbol: str, container: str = "") -> list[str]:
+    """Regular expressions for what a site of `symbol` shows in the code: its name; for a
+    constructor, `new T`, `T::new`, `this(` or `super(` (and an enum constant calling its
+    enum's constructor shows the constant)."""
+    if S.kind_of(symbol) == "constructor":
+        t = re.escape(S.name_of(S.parent(symbol)))
+        out = [r"\bnew\s+(?:[\w$]+\s*\.\s*)*" + t + r"(?![\w$])",
+               r"(?<![\w$])" + t + r"\s*::\s*new\b",
+               r"(?<![\w$.])this\s*\(", r"(?<![\w$.])super\s*\("]
+        if container and S.kind_of(container) == "term" and S.parent(container) == \
+                S.parent(symbol):
+            out.append(r"^\s*" + re.escape(S.name_of(container)) + r"(?![\w$])")
+        return out
+    return [r"(?<![\w$])" + re.escape(S.name_of(symbol)) + r"(?![\w$])"]
+
+
+def stale_of(nav: Navigator, sources) -> set[str]:
+    """Of these sources, those changed after their compilation (one pass over the shards)."""
+    return set(nav.ws.freshness_of(set(sources)).stale)
+
+
+def _container_shifts(nav: Navigator, container: str, source: str, parsed: dict
+                      ) -> tuple[int, ...]:
     """How many lines a definition moved since its compilation: (0,) when it cannot be told,
     one shift when its first and last lines moved alike, both when the edit is inside it."""
     if not container or S.is_local(container):
@@ -212,7 +254,7 @@ def _container_shifts(nav: Navigator, container: str, source: str) -> tuple[int,
     if d is None or d.location.source != source or d.generated:
         return (0,)
     try:
-        status, now, _hint = _locate_now(nav.ws.root, d)
+        status, now, _hint = _locate_now(nav.ws.root, d, parsed=parsed)
     except Exception:
         return (0,)
     if status != "found" or now is None:
