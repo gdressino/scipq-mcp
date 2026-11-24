@@ -40,34 +40,34 @@ def _declared_params(d) -> tuple | None:
     return param_types(S.without_annotations(d.info.signature))
 
 
-def by_params(items: list, params: tuple, declared) -> list:
+def by_params(items: list, params: tuple, declared, qualified=None) -> list:
     """The overloads a written parameter list means, per method (owner and name): those
     taking exactly those types; for `()` with no overload without parameters, every overload
     (`m()` also reads as "the method m"). `items` are Definitions or symbols; declared(item)
-    gives its parameter types (None: unknown)."""
+    gives its parameter types (None: unknown), qualified(item) the same as SCIP symbols, for
+    the types written with their package."""
+    if qualified is None or not any(p and S.is_qualified_type(p) for p in params):
+        qualified = lambda _it: None   # noqa: E731
     groups: dict[tuple[str, str], list] = {}
     for it in items:
         sym = it if isinstance(it, str) else it.symbol
         groups.setdefault((S.parent(sym), S.name_of(sym)), []).append(it)
-    out = []
+    if not params and len(groups) == 1 and len(items) == 1:
+        return list(items)
+    per = []
     for group in groups.values():
-        if not params and len(group) == 1:
-            out += group
-            continue
         types = [declared(it) for it in group]
-        hits = [it for it, t in zip(group, types) if S.same_params(params, t)]
+        quals = [qualified(it) if t is not None else None for it, t in zip(group, types)]
+        hits = [(it, t) for it, t, q in zip(group, types, quals) if S.same_params(params, t, q)]
         # Exact types win over a type variable (`m(String)`: m(String s), not <T> m(T x)).
-        exact = [it for it, t in zip(group, types) if S.same_params(params, t)
-                 and None not in t and None not in params]
-        hits = exact or hits
+        exact = [it for it, t in hits if None not in t and None not in params]
         unknown = [it for it, t in zip(group, types) if t is None]
-        if hits:
-            out += hits
-        elif not params:
-            out += group
-        else:
-            out += unknown   # cannot tell: left for the caller to choose
-    return out
+        per.append((group, exact or [it for it, _t in hits], unknown))
+    if not params and not any(hits for _g, hits, _u in per):
+        return list(items)   # `m()`, none without parameters: the method, whatever it takes
+    # Otherwise the overloads that fit, in every type that has one (`m()` across types: those
+    # without parameters); where it cannot be told, those left for the caller to choose.
+    return [x for _g, hits, unknown in per for x in (hits or unknown)]
 
 
 def _param_list(params: tuple) -> str:
@@ -395,8 +395,7 @@ class Navigator:
         self.unreadable: set[str] = set()
         # Every overload of a library method with its parameter types (from its sources jar),
         # set by the service: picks among them when a name is written with a parameter list.
-        self.library_overloads: Callable[[str], list[tuple[str, tuple | None]]] = \
-            lambda _sym: []
+        self.library_overloads: Callable[..., list[tuple]] = lambda _sym, _q=False: []
 
     # --- plumbing ---------------------------------------------------------------------------
 
@@ -457,8 +456,35 @@ class Navigator:
         q = S.parse_query(text.strip())
         out = self._find(text)
         if q.params is not None and not S.looks_like_symbol(text.strip()):
-            out = by_params(out, q.params, _declared_params)
+            out = by_params(out, q.params, _declared_params, self._qualified_params)
         return out
+
+    def _qualified_params(self, d: Definition) -> tuple | None:
+        """A project method's parameter types as SCIP symbols: each name as the declaring file
+        means it (its type occurrences of that name, when they are one type)."""
+        from .libsrc import JAVA_LANG_TYPES, param_types
+        if d.info is None or not d.info.signature:
+            return None
+        names = param_types(S.without_annotations(d.info.signature), written=True)
+        if names is None:
+            return None
+        by_name: dict[str, set] = {}
+        for v in self._views(self.ws.shard_for_source(d.location.source)[:1]):
+            for o in v.doc.occurrences:
+                sym = S.parent(o.symbol) if S.kind_of(o.symbol) == "constructor" else o.symbol
+                if S.kind_of(sym) == "type":
+                    by_name.setdefault(S.name_of(sym), set()).add(sym)
+        out = []
+        for n in names:
+            if n is None or n in S.PRIMITIVES:
+                out.append(None)
+            elif S.is_qualified_type(n):
+                out.append(S.type_symbol(n))
+            else:
+                found = by_name.get(n.rsplit(".", 1)[-1], set())
+                out.append(next(iter(found)) if len(found) == 1 else
+                           (f"java/lang/{n}#" if not found and n in JAVA_LANG_TYPES else None))
+        return tuple(out)
 
     def _find(self, text: str) -> list[Definition]:
         text = text.strip()
@@ -505,11 +531,23 @@ class Navigator:
             return Resolution(text)
         q = S.parse_query(text)
         every = [d for d in self._find(text) if not S.is_local_like(d.symbol)]
-        found = by_params(every, q.params, _declared_params) if q.params is not None else every
+        found = by_params(every, q.params, _declared_params, self._qualified_params) \
+            if q.params is not None else every
         if every and not found:
             return Resolution(None, every, f"no overload of {text.split('(')[0]!r} takes "
                                            f"{_param_list(q.params)}; its overloads:")
         syms = sorted({d.symbol for d in found})
+        if q.params == () and syms and len({(S.parent(x), S.name_of(x)) for x in syms}) == 1:
+            declared = [_declared_params(d) for d in found]
+            if all(t for t in declared):   # every one takes parameters: look for an inherited
+                inh = self._inherited_parameterless(S.parent(syms[0]), S.name_of(syms[0]))
+                if inh:
+                    sigs = "; ".join(" ".join(S.without_annotations(d.info.signature).split())
+                                     for d in found if d.info)
+                    return Resolution(inh, found, f"{text} → {inh} (the overload without "
+                                                  f"parameters, inherited: "
+                                                  f"{S.short(S.parent(syms[0]))} declares only "
+                                                  f"{sigs})")
         # A bare type name may also be a JDK or library type used everywhere (e.g. `Button`).
         # Only when it changes the answer: no project match, or already ambiguous.
         bare_type = len(q.names) == 1 and q.names[0][:1].isupper() and not q.method_only
@@ -550,6 +588,26 @@ class Navigator:
                                         f"(not defined in this project); pass one of: {shown}")
         return Resolution(None, [], f"no symbol in this project matches {text!r}")
 
+    def _inherited_parameterless(self, owner: str, name: str) -> str | None:
+        """The method `name` without parameters that a project type inherits: from its
+        nearest supertype declaring one (project types from the shards, library ones from
+        their sources jars)."""
+        _d, supers = self.supertypes(owner)
+        for sup in supers:
+            if sup.definition is not None:
+                for v in self._views(self.ws.shard_for_source(sup.definition.location.source)[:1]):
+                    for d in v.definitions(lambda sym, _i: _is_method_symbol(sym) and
+                                           S.parent(sym) == sup.symbol and
+                                           S.name_of(sym) == name):
+                        if _declared_params(d) == ():
+                            return d.symbol
+                continue
+            first = f"{sup.symbol}{S._format_name(name)}()."
+            for k in self.library_overloads(first):
+                if k[1] == ():
+                    return k[0]
+        return None
+
     def _library_by_params(self, external: list[str], params: tuple) -> tuple[list[str], bool]:
         """The library overloads a parameter list means, among every overload in the sources
         jar (used here or not: `println()`); a method whose sources cannot be read keeps the
@@ -559,13 +617,16 @@ class Navigator:
             groups.setdefault((S.parent(e), S.name_of(e)), []).append(e)
         out, picked = [], False
         for group in groups.values():
-            known = self.library_overloads(group[0]) if _is_method_symbol(group[0]) else []
+            want_q = any(p and S.is_qualified_type(p) for p in params)
+            known = self.library_overloads(group[0], want_q) \
+                if _is_method_symbol(group[0]) else []
             if not known:
                 out += by_params(group, params, lambda _s: None)
                 continue
-            types = dict(known)
-            hits = [sym for sym, t in known if t == ()] if not params else \
-                by_params(list(types), params, types.get)
+            types = {k[0]: k[1] for k in known}
+            quals = {k[0]: (k[2] if len(k) > 2 else None) for k in known}
+            hits = [sym for sym, t in types.items() if t == ()] if not params else \
+                by_params(list(types), params, types.get, quals.get)
             if hits:
                 out += hits
                 picked = picked or len(known) > 1
@@ -590,7 +651,9 @@ class Navigator:
         if not q.params and first is not None and first.symbol != symbol:
             sig = " ".join(S.without_annotations(first.info.signature).split()) \
                 if first.info and first.info.signature else first.symbol
-            out += f"; SCIP's {S.short(first.symbol)} is another one: {sig}"
+            num = S.parse(symbol)[-1].disambiguator
+            out += (f"; SCIP numbers it {S.name_of(symbol)}({num}), and SCIP's "
+                    f"{S.name_of(symbol)}() is another one: {sig}")
         return out + ")"
 
     def _implicit_member(self, symbol: str) -> bool:

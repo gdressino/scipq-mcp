@@ -357,6 +357,7 @@ def test_where_types_check_captures(refactor_root, javaparser_cache):
     # fields, parameters, a method's return type, `var` (HashSet): not Box
     assert _lines(out) == [22, 23, 25, 26, 27, 29], out
     assert "1 sites left out by node/where" in out and "shape only" not in out
+    assert "1 sites left out by where types: Sizes.Box 1" in out
     out = plan(svc, [{"select": {**sel, "where": {"pattern": "$x.size() == 0",
                                                   "types": {"x": "Box"}}},
                       "do": {"replace": "$x.isEmpty()"}}], dry_run=True)
@@ -390,6 +391,7 @@ def test_family_of_a_library_method_reaches_library_subtypes(refactor_root, java
            "node": "ancestor:BinaryExpr", "where": "$x.size() == 0"}
     out = plan(svc, [{"select": sel, "do": {"replace": "$x.isEmpty()"}}], dry_run=True)
     assert _lines(out) == [22, 23, 25, 26, 27, 29], out
+    assert re.search(r"the family of Collection#size\(\) adds 5: .*List#size\(\)", out), out
 
 
 def test_type_ancestors_for_where_types(refactor_root, tmp_path):
@@ -433,3 +435,32 @@ def test_capture_type_of_new_and_casts():
     start = lo + 1
     assert CaptureTypes._head_type(text, occs, start, _top_level(text, start, len(text), ")")) \
         == "a/Outer#Inner#"
+
+
+def test_where_types_need_a_known_type_and_files_are_bounded(refactor_root, javaparser_cache,
+                                                             monkeypatch):
+    from scipq_mcp import refactor as RF
+    svc = _jdk_service(refactor_root, javaparser_cache)
+    sel = {"in": "Sizes#empties", "kind": "BinaryExpr"}
+    out = plan(svc, [{"select": {**sel, "where": {"pattern": "$x.size() == 0",
+                                                  "types": {"$x": "java.util.Colection"}}},
+                      "do": {"replace": "$x.isEmpty()"}}], dry_run=True)
+    assert "no type 'java.util.Colection' in this project or its libraries" in out
+    out = plan(svc, [{"select": {**sel, "where": {"pattern": "$x.size() == 0",
+                                                  "types": {"$x": "AbstractCollection"}}},
+                      "do": {"replace": "$x.isEmpty()"}}], dry_run=True)
+    assert _lines(out) == [26, 29]          # ArrayList and HashSet: a library supertype
+    monkeypatch.setattr(RF, "MAX_FILES", 3)
+    out = plan(svc, [{"select": {"files": "**/*.java", "kind": "BinaryExpr",
+                                 "where": "$x.size() == 0"},
+                      "do": {"replace": "$x.isEmpty()"}}], dry_run=True)
+    assert "more than 3 .java files; narrow the globs" in out
+
+
+def test_plan_says_which_overload_a_parameter_list_picked(refactor_root, javaparser_cache):
+    svc = Service(refactor_root, cache_dir=javaparser_cache)
+    out = plan(svc, [{"replace_calls": {"symbol": "Overloaded#pick()", "template": "pick(0)"}}],
+               dry_run=True)
+    assert "Overloaded#pick() → com/example/shop/Overloaded#pick(+1). (the overload without " \
+           "parameters; SCIP numbers it pick(+1), and SCIP's pick() is another one: public int " \
+           "pick(int n))" in out

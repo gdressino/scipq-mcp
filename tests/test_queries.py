@@ -227,7 +227,8 @@ def test_parameter_lists_pick_overloads(refactor_root):
     # m() is the overload without parameters, also when SCIP numbers it (+1).
     r = nav.resolve("Overloaded#pick()")
     assert r.symbol == base + "(+1)." and "without parameters" in r.note
-    assert "SCIP's Overloaded#pick() is another one: public int pick(int n)" in r.note
+    assert "SCIP numbers it pick(+1), and SCIP's pick() is another one: public int pick(int n)" \
+        in r.note
     assert nav.resolve("Overloaded#pick(int)").symbol == base + "()."
     assert nav.resolve("Overloaded#pick(String s, int n)").symbol == base + "(+2)."
     assert nav.resolve("Overloaded#pick(Map<String, List<Integer>>, String...)").symbol == \
@@ -256,3 +257,40 @@ def test_parameter_lists_pick_library_overloads(refactor_root, tmp_path):
     out = svc.definition("Map#of(Object, Object)")
     assert "java/util/Map#of(+1)." in out.splitlines()[0]
     assert "the overload taking (Object, Object)" in out.splitlines()[0]
+
+
+def test_overloaded_methods_are_written_with_their_parameters(refactor_root, tmp_path):
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    out = svc.overloads("Overloaded#pick")
+    for label in ("Overloaded#pick(int)", "Overloaded#pick()", "Overloaded#pick(String, int)",
+                  "Overloaded#pick(Map, String[])", "Overloaded#pick(T, long)"):
+        assert label in out, (label, out)
+    assert "pick(+1)" not in out
+    # Each label reads back as the same overload.
+    for label, sym in (("Overloaded#pick(int)", "pick()."), ("Overloaded#pick()", "pick(+1)."),
+                       ("Overloaded#pick(T, long)", "pick(+4).")):
+        assert f"→ com/example/shop/Overloaded#{sym}" in svc.definition(label)
+    # A method without overloads keeps its plain name.
+    out = svc.callers("Units#m(String)")
+    assert "callers of Units#m(String)" in out and "\nUnits#use()  " in out
+    assert "Upper#of() — " in svc.references("Upper#of")
+
+
+def test_m_without_parameters_across_types_and_inherited(sample_root, refactor_root):
+    nav = Navigator(Workspace(refactor_root))
+    # Several types: only those with an overload without parameters.
+    r = nav.find("pick()")
+    assert [d.symbol for d in r] == ["com/example/shop/Overloaded#pick(+1)."]
+    nav = Navigator(Workspace(sample_root))
+    # Service declares process(int) and process(String) only: `process()` is still the method.
+    r = nav.resolve("Service#process()")
+    assert r.symbol is None and len(r.candidates) == 2
+
+
+def test_qualified_parameter_types_compare_the_package(refactor_root):
+    nav = Navigator(Workspace(refactor_root))
+    base = "com/example/shop/Overloaded#pick"
+    assert nav.resolve("Overloaded#pick(java.util.Map, String[])").symbol == base + "(+3)."
+    assert nav.resolve("Overloaded#pick(java.lang.String, int)").symbol == base + "(+2)."
+    r = nav.resolve("Overloaded#pick(java.awt.Map, String[])")
+    assert r.symbol is None and "no overload" in r.note

@@ -52,6 +52,7 @@ STEP_KEYS = {"select", "do", "imports", "description", "comment"}
 MAX_STEPS = 50
 MAX_REVIEW = 20000   # uses by name kept per search (all shown in review.txt)
 MAX_SITES = 20000
+MAX_FILES = 5000     # .java files a select by kind or an import step may parse
 MAX_TEMPLATE = 20000
 DIFF_LINES = 150
 IDENT = re.compile(r"[A-Za-z_$][\w$]*")
@@ -345,7 +346,22 @@ class Planner:
         r = self.nav.resolve(text)
         if r.symbol is None:
             raise AmbiguousName(r)
+        self._resolution_note(r)
         return r.symbol
+
+    def _family_note(self, k: int, sym: str, fam: list[str]) -> None:
+        """family: true on a library method: which methods it brought."""
+        if self.nav.definition(sym) is not None or len(fam) < 2:
+            return
+        others = [S.short(x) for x in fam if x != sym and not S.is_local(x)]
+        self.notes.append(f"step {k}: the family of {S.short(sym)} adds {len(others)}: "
+                          + ", ".join(others[:12]) + (" …" if len(others) > 12 else ""))
+
+    def _resolution_note(self, r) -> None:
+        """A parameter list that picked one overload among several, or an inherited one:
+        said in the plan, as the -- line of a query says it."""
+        if r.note and ("(the overload " in r.note or "inherited" in r.note):
+            self.notes.append(r.note)
 
     def file(self, path: str) -> FileState:
         if path not in self.files:
@@ -418,6 +434,7 @@ class Planner:
             if not isinstance(text, str) or not text.strip():
                 raise PlanError(f"{what}: a name or SCIP symbol is required")
             r = self.nav.resolve(text)
+            self._resolution_note(r)
             if r.symbol is None and not r.candidates and not r.externals:
                 ext = self.nav.find_external(text)   # library overloads, constructors
                 if len(ext) == 1:
@@ -856,8 +873,10 @@ class Planner:
         members = []
         for s_ in syms:
             if a.get("family") and S.kind_of(s_) == "method":
-                members += [m.symbol for m in X.family(self.nav, s_, self.library_family)
-                            if not S.is_local(m.symbol)] or [s_]
+                fam = [m.symbol for m in X.family(self.nav, s_, self.library_family)
+                       if not S.is_local(m.symbol)]
+                self._family_note(k, s_, fam)
+                members += fam or [s_]
             else:
                 members.append(s_)
         sites = []
@@ -1049,6 +1068,10 @@ class Planner:
         where_types = _where_types(where)
         if where_types:
             where = {k_: v for k_, v in where.items() if k_ != "types"}
+            for cap, typ in where_types.items():
+                if not self.captures.exists(typ):
+                    raise PlanError(f"where types: no type {typ!r} in this project or its "
+                                    f"libraries (for {cap})")
         op = Op(k, f"{action} ({json.dumps(sel)[:80]})", action, args, node=node, where=where,
                 imports=_imports(step), where_types=where_types)
         if where and not where_types and sel.get("kind") and \
@@ -1068,6 +1091,7 @@ class Planner:
                         fam = [m.symbol for m in self._family(sym, k)]
                     else:   # a call through a library supertype is still a call: keep it
                         fam = [m.symbol for m in X.family(self.nav, sym, self.library_family)]
+                        self._family_note(k, sym, fam)
                     members += [m for m in fam if not S.is_local(m)] or [sym]
                 else:
                     members.append(sym)
@@ -1212,6 +1236,8 @@ def _is_generated(path: str) -> bool:
 
 
 def _java_files(root: str, globs: list[str]) -> list[str]:
+    """The .java files matching globs (generated folders left out); more than MAX_FILES is
+    refused: the worker parses them all in one request."""
     out = []
     for d, dirs, names in os.walk(root):
         rel_d = os.path.relpath(d, root).replace(os.sep, "/")
@@ -1222,8 +1248,9 @@ def _java_files(root: str, globs: list[str]) -> list[str]:
                 rel = os.path.relpath(os.path.join(d, n), root).replace(os.sep, "/")
                 if any(fnmatch.fnmatch(rel, g) for g in globs):
                     out.append(rel)
-        if len(out) > 5000:
-            break
+        if len(out) > MAX_FILES:
+            raise PlanError(f"files {', '.join(globs)}: more than {MAX_FILES} .java files; "
+                            "narrow the globs or split the step into several")
     return sorted(out)
 
 
@@ -2294,6 +2321,7 @@ def _check_types(p: Planner, op: Op) -> None:
     """Leaves out the sites whose where captures are not of the types asked; those whose type
     cannot be told are left out too, and listed."""
     kept = []
+    other: dict[str, int] = {}
     for loc in op.found:
         ok = True
         for cap, want in op.where_types.items():
@@ -2314,11 +2342,17 @@ def _check_types(p: Planner, op: Op) -> None:
                 break
             if not hit:
                 op.filtered += 1
+                other[S.short(typ)] = other.get(S.short(typ), 0) + 1
                 ok = False
                 break
         if ok:
             kept.append(loc)
     op.found = kept
+    if other:
+        shown = sorted(other.items(), key=lambda x: (-x[1], x[0]))
+        p.notes.append(f"step {op.step}: {sum(other.values())} sites left out by where types: "
+                       + ", ".join(f"{t} {n}" for t, n in shown[:10])
+                       + (" …" if len(shown) > 10 else ""))
     if op.untyped:
         where = ", ".join(f"{s.source}:{s.line + 1}" + (f" ({s.why})" if s.why else "")
                           for _c, s in op.untyped[:5])
@@ -2360,6 +2394,7 @@ class CaptureTypes:
         self.ancestors = facts.get("ancestors") or (lambda _t: [])
         self.returns = facts.get("returns") or (lambda _m: "")
         self.defined = facts.get("defined") or (lambda sym: p.nav.definition(sym) is not None)
+        self.exists = facts.get("exists") or (lambda _written: True)
         self._docs: dict = {}
         self._declared_cache: dict = {}
         self._named: dict = {}

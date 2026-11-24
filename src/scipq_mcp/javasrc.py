@@ -129,6 +129,7 @@ class JavaSource:
     def __init__(self, text: str):
         self.text = text
         self.masked = mask(text)
+        self._members: dict[tuple, tuple] = {}   # members(): parsed once per type body
         self._line_starts = [0] + [m.end() for m in re.finditer("\n", text)]
 
     def line_of(self, pos: int) -> int:
@@ -177,7 +178,16 @@ class JavaSource:
     def members(self, body_open: int, body_close: int, is_enum: bool = False,
                 type_name: str = "") -> list[Member]:
         """Members at the top level of a type body. A constructor is a method named like the
-        type (`type_name`). Safe to call from several threads on one instance."""
+        type (`type_name`). Safe to call from several threads on one instance. Parsed once
+        per body (sources are kept by the library index): a new list each call."""
+        key = (body_open, body_close, is_enum, type_name)
+        done = self._members.get(key)
+        if done is None:
+            done = self._members[key] = tuple(self._parse_members(*key))
+        return list(done)
+
+    def _parse_members(self, body_open: int, body_close: int, is_enum: bool,
+                       type_name: str) -> list[Member]:
         m, t = self.masked, self.text
         out: list[Member] = []
         i = body_open + 1

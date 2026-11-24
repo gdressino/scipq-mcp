@@ -882,10 +882,12 @@ def library_ancestors(index: LibraryIndex, type_symbol: str, limit: int = 200) -
 _ANNOT = re.compile(r"@\s*(?!interface\b)[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?")
 
 
-def param_types(declaration: str, type_vars: set[str] = frozenset()) -> tuple | None:
+def param_types(declaration: str, type_vars: set[str] = frozenset(),
+                written: bool = False) -> tuple | None:
     """Erased simple parameter types of a method/constructor declaration, None for a type
     variable (it matches anything: `setValue(T)` overrides `setValue(V)` and `setValue(String)`);
-    None when the declaration has no parameter list."""
+    None when the declaration has no parameter list. With written, the type names as written
+    (`java.sql.Date`, `Date`: to resolve them), without array dimensions."""
     decl = _ANNOT.sub(" ", declaration)
     tvars = set(type_vars)
     method_tv = re.match(r"\s*(?:(?:public|protected|private|static|final|abstract|default|"
@@ -937,12 +939,35 @@ def param_types(declaration: str, type_vars: set[str] = frozenset()) -> tuple | 
             dims, name = name.count("["), words.pop() if words else name
         typ = "".join(words)
         dims += typ.count("[")
-        simple = typ.replace("[]", "").replace("[", "").replace("]", "").rsplit(".", 1)[-1]
+        bare = typ.replace("[]", "").replace("[", "").replace("]", "")
+        simple = bare.rsplit(".", 1)[-1]
         if simple in tvars or re.fullmatch(r"[A-Z][0-9]?", simple):
             out.append(None)
         else:
-            out.append(simple + "[]" * dims)
+            out.append(bare if written else simple + "[]" * dims)
     return tuple(out)
+
+
+def qualified_param_types(index: LibraryIndex, d: "LibDefinition") -> list[tuple]:
+    """For each overload of d (a method's LibDefinition), its parameter types as SCIP type
+    symbols resolved through the source's imports (None for primitives and type variables)."""
+    from .symbols import PRIMITIVES, is_qualified_type, type_symbol
+    _path, types = class_path_of(d.symbol)
+    tvars = _type_variables(" ".join(d.type_declaration.split()), types[-1] if types else "")
+    pkg, single, wildcards = _names_in(d.source)
+    out = []
+    for m in d.overloads:
+        names = param_types(m.declaration, tvars, written=True) or ()
+        row = []
+        for n in names:
+            if n is None or n in PRIMITIVES:
+                row.append(None)
+            elif is_qualified_type(n):
+                row.append(type_symbol(n))
+            else:
+                row.append(_resolve_type_name(index, n, pkg, single, wildcards, types) or None)
+        out.append(tuple(row))
+    return out
 
 
 def _same_signature(a: tuple, b: tuple) -> bool:

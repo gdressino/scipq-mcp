@@ -363,7 +363,7 @@ Pass a name or an exact SCIP symbol:
 | `Account#setState`, `Account.setState` | member `setState` of `Account` |
 | `com.example.model.Account` | qualified; `/`, `.` and `#` are all accepted as separators |
 | `setState()` | methods only: the overload without parameters when there are several (if none is without parameters, any overload) |
-| `setState(State)`, `pick(String, int)` | the overload taking those parameter types (simple or qualified names; generics and parameter names are ignored; a type variable matches any type) |
+| `setState(State)`, `pick(String, int)` | the overload taking those parameter types (simple or qualified names, a qualified one also by its package; generics and parameter names are ignored; a type variable matches any type) |
 | `setState(+1)` | the second overload in SCIP's numbering: `()`, `(+1)`, `(+2)`… in declaration order, whatever their parameters |
 | `Account#<init>` | constructors |
 | `com/example/model/Account#setState().` | the exact symbol, as printed by `find_symbols` |
@@ -371,9 +371,10 @@ Pass a name or an exact SCIP symbol:
 
 A name that matches one symbol is resolved, and the answer starts with
 `-- Account#setState → com/example/model/Account#setState().`. An ambiguous name returns the
-candidates with their signatures instead. Answers print methods in SCIP's numbering
-(`Account#setState()` is SCIP's first overload): when `()` picks another overload, the `--` line
-says so. Library overloads are told apart by their sources jar.
+candidates with their signatures instead. Answers write a method that has overloads with its
+parameter list (`Service#process(String)`), which reads back as the same overload; the `--` line
+gives the exact symbol. `Type#m()` on a type that only inherits the method without parameters
+resolves to the inherited one. Library overloads are told apart by their sources jar.
 
 ## Freshness
 

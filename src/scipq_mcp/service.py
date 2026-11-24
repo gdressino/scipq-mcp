@@ -32,7 +32,7 @@ from . import context as C
 from . import libsrc as L
 from .cachedir import CacheError, default_base, entry_name
 from .graph import Graph, GraphError
-from .index import Index, IndexError_, unchanged_sources
+from .index import SCHEMA_VERSION, Index, IndexError_, unchanged_sources
 from .queries import AmbiguousName, Navigator, QueryError
 from .workspace import Freshness, Workspace, WorkspaceError, build_running, find_project_root
 
@@ -56,6 +56,105 @@ def _summary_of_changed(text: str) -> str:
     start = next((k for k, ln in enumerate(lines) if ln.startswith(
         ("tests to run", "cucumber", "no test"))), None)
     return "\n".join(keep + (lines[start:] if start is not None else []))
+
+
+class OverloadLabels:
+    """For S.short while a request runs: a method with overloads is written with its parameter
+    list (`Service#process(String)`) instead of SCIP's numbering, since `process()` reads as the
+    overload without parameters. The overloads come from the file of the method's top-level
+    type, or from a library's sources jar; a few hundred methods at most per request."""
+
+    MAX_GROUPS = 400
+
+    def __init__(self, svc: "Service", nav: Navigator):
+        self.svc, self.nav = svc, nav
+        self.groups: dict[tuple[str, str], dict[str, str]] = {}
+        self.files: dict[str, dict[tuple[str, str], list]] = {}
+        self._con: sqlite3.Connection | None | bool = None   # False: no usable index
+
+    def _index(self) -> sqlite3.Connection | None:
+        """The auxiliary index, read-only and only if it exists already (a label never builds
+        it): its defs answer in a fraction of a millisecond what decoding a shard takes."""
+        if self._con is None:
+            self._con = False
+            try:
+                ix = Index(self.nav.ws, self.svc.cache_dir, self.svc.index_external)
+                if os.path.exists(ix.path):
+                    con = sqlite3.connect(f"file:{ix.path}?mode=ro", uri=True, timeout=5)
+                    meta = dict(con.execute("SELECT key, value FROM meta"))
+                    if meta.get("schema_version") == SCHEMA_VERSION and \
+                            meta.get("root_realpath") == os.path.realpath(self.nav.ws.root):
+                        self._con = con
+                    else:
+                        con.close()
+            except (sqlite3.Error, OSError, ValueError, CacheError):
+                self._con = False
+        return self._con or None
+
+    def close(self) -> None:
+        if self._con:
+            self._con.close()
+        self._con = False
+
+    def __call__(self, symbol: str) -> str | None:
+        if S.is_local(symbol) or not S.is_method(symbol):
+            return None
+        key = (S.parent(symbol), S.name_of(symbol))
+        group = self.groups.get(key)
+        if group is None:
+            if len(self.groups) >= self.MAX_GROUPS:
+                return None
+            self.groups[key] = {}   # while computing: S.short inside prints the plain name
+            try:
+                group = self._group(symbol, key)
+            except Exception:   # a label is never worth an error
+                group = {}
+            self.groups[key] = group
+        return group.get(symbol)
+
+    def _group(self, symbol: str, key: tuple[str, str]) -> dict[str, str]:
+        top = S.top_level_type_name(symbol)
+        if not top:
+            return {}
+        con = self._index()
+        if con is not None:
+            owner, name = key
+            lo = owner + S._format_name(name) + "("
+            rows = con.execute(
+                "SELECT s.symbol, d.signature FROM symbols s JOIN defs d ON d.symbol_id = s.id "
+                "WHERE s.symbol >= ? AND s.symbol < ?", (lo, lo[:-1] + ")")).fetchall()
+            sigs = {sym: sig for sym, sig in rows if S.is_method(sym) and S.parent(sym) == owner
+                    and S.name_of(sym) == name}
+            if sigs:
+                return {} if len(sigs) < 2 else {
+                    sym: ", ".join(R._param_types(sig)) for sym, sig in sigs.items() if sig}
+            if con.execute("SELECT 1 FROM symbols s JOIN defs d ON d.symbol_id = s.id "
+                           "WHERE s.symbol = ? LIMIT 1", (owner,)).fetchone():
+                return {}   # a project type: the method is inherited or implicit
+            return self._library_group(symbol)
+        if top not in self.files:
+            methods: dict[tuple[str, str], list] = {}
+            for v in self.nav._views(self.nav.ws.shards_by_basename({top + ".java"})):
+                for d in v.definitions(lambda sym, _i: S.is_method(sym)
+                                       and not S.is_local_like(sym)):
+                    methods.setdefault((S.parent(d.symbol), S.name_of(d.symbol)), []).append(d)
+            self.files[top] = methods
+        found = {d.symbol: d for d in self.files[top].get(key, [])}
+        if found:
+            if len(found) < 2:
+                return {}
+            return {sym: ", ".join(R._param_types(d.info.signature))
+                    for sym, d in found.items() if d.info and d.info.signature}
+        if any(k[0] == key[0] for k in self.files[top]):
+            return {}   # a project type: the method is inherited or implicit
+        return self._library_group(symbol)
+
+    def _library_group(self, symbol: str) -> dict[str, str]:
+        lib = self.svc._library(symbol, self.nav.ws.root)
+        if lib is None or lib.member is None or len(lib.overloads) < 2:
+            return {}
+        return {S.overload_symbol(symbol, k): ", ".join(R._param_types(m.declaration))
+                for k, m in enumerate(lib.overloads)}
 
 
 class Service:
@@ -116,9 +215,19 @@ class Service:
             return f"error: {msg}" + (f"\n{NO_SHARDS_HINT}" if "no SCIP shards" in msg else "")
         ws.files()
         check = ws.start_freshness() if self.freshness == "full" else None
-        texts, sources = [], set()
         nav = Navigator(ws)
-        nav.library_overloads = lambda sym: self._library_overload_params(sym, ws.root)
+        nav.library_overloads = lambda sym, qualified=False: \
+            self._library_overload_params(sym, ws.root, qualified)
+        labeler = OverloadLabels(self, nav)
+        labels = S.METHOD_LABELS.set(labeler)
+        try:
+            return self._run_bodies(nav, ws, check, bodies, foot_first)
+        finally:
+            S.METHOD_LABELS.reset(labels)
+            labeler.close()
+
+    def _run_bodies(self, nav: Navigator, ws: Workspace, check, bodies, foot_first: bool) -> str:
+        texts, sources = [], set()
         for body in bodies:
             try:
                 text, srcs = body(nav)
@@ -283,9 +392,11 @@ class Service:
         except (CacheError, OSError, sqlite3.Error):
             return None
 
-    def _library_overload_params(self, symbol: str, root: str) -> list[tuple[str, tuple | None]]:
+    def _library_overload_params(self, symbol: str, root: str,
+                                 qualified: bool = False) -> list[tuple]:
         """Every overload of a library method or constructor, numbered as SCIP does, with its
-        parameter types, from the sources jar ([] when they cannot be read)."""
+        parameter types, from the sources jar ([] when they cannot be read); with qualified,
+        a third element: those types as SCIP symbols (None where unknown)."""
         if not S.is_method(symbol):
             return []
         try:
@@ -297,8 +408,15 @@ class Service:
         _path, types = L.class_path_of(symbol)
         tvars = L._type_variables(" ".join(d.type_declaration.split()), types[-1]) \
             if types else set()
-        return [(S.overload_symbol(symbol, k), L.param_types(m.declaration, tvars))
-                for k, m in enumerate(d.overloads)]
+        out = [(S.overload_symbol(symbol, k), L.param_types(m.declaration, tvars))
+               for k, m in enumerate(d.overloads)]
+        if qualified:
+            try:
+                quals = L.qualified_param_types(self._library_index(root), d)
+            except (CacheError, OSError, sqlite3.Error):
+                quals = [None] * len(out)
+            out = [(sym, params, q) for (sym, params), q in zip(out, quals)]
+        return out
 
     def _b_definition(self, symbol: str) -> Body:
         def body(nav: Navigator):
@@ -599,7 +717,27 @@ class Service:
                 returns[m] = self._library_return(nav, m)
             return returns[m]
 
-        return {"defined": is_defined, "ancestors": ancestors_of, "returns": return_of}
+        def exists(written: str) -> bool:
+            """A type written in where types: a primitive, a type the index knows (declared,
+            used or a supertype of one) or a library class with sources."""
+            if written in S.PRIMITIVES or written in ("Object", "java.lang.Object"):
+                return True
+            if S.is_qualified_type(written):
+                sym = S.type_symbol(written)
+                if g.con.execute("SELECT 1 FROM symbols WHERE symbol = ?", (sym,)).fetchone():
+                    return True
+                try:
+                    path, _t = L.class_path_of(sym)
+                    return bool(path) and \
+                        self._library_index(nav.ws.root).find_class(path) is not None
+                except (CacheError, OSError, sqlite3.Error):
+                    return True   # cannot tell: let it through
+            name = written.rsplit(".", 1)[-1]
+            return g.con.execute("SELECT 1 FROM symbols WHERE symbol GLOB ? OR symbol GLOB ? "
+                                 "LIMIT 1", (f"*/{name}#", f"*#{name}#")).fetchone() is not None
+
+        return {"defined": is_defined, "ancestors": ancestors_of, "returns": return_of,
+                "exists": exists}
 
     def _type_ancestors(self, nav: Navigator, type_symbol: str,
                         defined: Callable) -> list[str] | None:

@@ -74,7 +74,10 @@ def test_parameter_lists_in_queries():
     assert S.parse_query("pick(+1)").params is None and S.parse_query("pick(+1)").disambiguator == "+1"
     assert S.parse_query("pick").params is None
     assert S.parse_query("a.b.Type#pick(java.lang.String, int[] xs, T)").params == (
-        "String", "int[]", None)
+        "java.lang.String", "int[]", None)        # the package is kept, to be compared
+    assert S.same_params(("java.util.Date",), ("Date",), ("java/util/Date#",))
+    assert not S.same_params(("java.util.Date",), ("Date",), ("java/sql/Date#",))
+    assert S.same_params(("java.util.Date",), ("Date",), None)   # unknown: by its name
     assert S.parse_query("Account#<init>(String)").names == ("Account", "<init>")
     assert S.same_params(("String", None), ("String", "int"))
     assert S.same_params(("Object",), (None,))     # a declared type variable

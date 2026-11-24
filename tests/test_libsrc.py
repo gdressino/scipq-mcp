@@ -264,7 +264,9 @@ def test_overloads_of_a_library_method(libroot, tmp_path, sample_root):
     svc = Service(sample_root, cache_dir=str(tmp_path / "cache"), library_roots=[libroot])
     out = svc.overloads("org/acme/ui/Widget#addColumn(+1).")
     assert "3 overloads" in out
-    assert "this       Widget#addColumn(+1)" in out
+    # Overloaded methods are written with their parameter list: it reads back as the same one.
+    assert "this       Widget#addColumn(Provider, String)" in out
+    assert "overload   Widget#addColumn(Renderer)" in out
     assert "acme-ui:1.10.0 org/acme/ui/Widget.java:" in out
     assert "Column<T> addColumn(Renderer<T> renderer)" in out
 

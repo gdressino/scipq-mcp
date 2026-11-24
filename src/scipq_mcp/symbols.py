@@ -7,6 +7,7 @@ scip-javac writes symbols without the scheme/package prefix, e.g.
 
 from __future__ import annotations
 
+import contextvars
 import re
 from dataclasses import dataclass
 
@@ -160,9 +161,17 @@ def is_type(symbol: str) -> bool:
     return kind_of(symbol) == "type"
 
 
+# Set by the service for the length of a request: method symbol -> its parameter list as a
+# name reads back ("String, int"), for a method with overloads; None to print SCIP's (+N).
+METHOD_LABELS: contextvars.ContextVar = contextvars.ContextVar("scipq_method_labels",
+                                                              default=None)
+
+
 def short(symbol: str) -> str:
     """Readable name without the package: ``Entity#setState()``, ``Account.Builder``,
-    ``Account#<init>(+1)``. Locals are returned as is."""
+    ``Account#<init>(+1)``. Locals are returned as is. While METHOD_LABELS is set, a method
+    with overloads is written with its parameter list (``Service#process(String)``), which
+    reads back as the same overload."""
     d = parse(symbol)
     if not d:
         return symbol
@@ -173,7 +182,11 @@ def short(symbol: str) -> str:
     for k, x in enumerate(parts):
         sep = "" if k == 0 else ("." if parts[k - 1].suffix == TYPE and x.suffix == TYPE else "#")
         if x.suffix == METHOD:
-            out.append(f"{sep}{x.name}({x.disambiguator})")
+            label = None
+            if k == len(parts) - 1:
+                hook = METHOD_LABELS.get()
+                label = hook(symbol) if hook is not None else None
+            out.append(f"{sep}{x.name}({x.disambiguator if label is None else label})")
         else:
             out.append(f"{sep}{x.name}")
     return "".join(out) or symbol
@@ -333,16 +346,45 @@ def written_params(text: str) -> tuple:
             words.pop()  # the parameter's name
         typ = "".join(words)
         dims = typ.count("[]")
-        base = typ.replace("[]", "").rsplit(".", 1)[-1]
+        full = typ.replace("[]", "")
+        # Qualified (java.util.Date) is kept: its package is compared when it can be.
+        base = full if is_qualified_type(full) else full.rsplit(".", 1)[-1]
         out.append(None if re.fullmatch(r"[A-Z][0-9]?", base) else base + "[]" * dims)
     return tuple(out)
 
 
-def same_params(written: tuple, declared: tuple | None) -> bool:
+def is_qualified_type(name: str) -> bool:
+    """`java.util.Date`, `java.util.Map.Entry`: a type name that starts with a package."""
+    return "." in name and name[:1].islower()
+
+
+def type_symbol(name: str) -> str:
+    """`java.util.Map.Entry[]` -> `java/util/Map#Entry#` (array dimensions left out)."""
+    parts = name.replace("[]", "").split(".")
+    pkg = [x for x in parts if x[:1].islower()]
+    return "/".join(pkg) + "/" + "".join(x + "#" for x in parts[len(pkg):])
+
+
+def same_params(written: tuple, declared: tuple | None, qualified: tuple | None = None) -> bool:
     """A written parameter list against a declared one (libsrc.param_types): same length, and
-    each type the same where neither is a type variable."""
-    return declared is not None and len(written) == len(declared) and all(
-        w is None or d is None or w == d for w, d in zip(written, declared))
+    each type the same where neither is a type variable. A type written qualified also needs
+    the same package when `qualified` (the declared types as SCIP symbols, None where
+    unknown) tells it."""
+    if declared is None or len(written) != len(declared):
+        return False
+    for k, (w, d) in enumerate(zip(written, declared)):
+        if w is None or d is None:
+            continue
+        if not is_qualified_type(w):
+            if w != d:
+                return False
+            continue
+        if w.rsplit(".", 1)[-1] != d:
+            return False
+        q = qualified[k] if qualified is not None and k < len(qualified) else None
+        if q and q != type_symbol(w):
+            return False
+    return True
 
 
 def looks_like_symbol(text: str) -> bool:

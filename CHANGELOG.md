@@ -27,10 +27,24 @@ version and date when releasing.
   anything; library overloads are read from their sources jar, used here or not). Before,
   `m()` meant any overload. A list no overload takes lists the overloads. `m()` with no
   overload free of parameters still means the method, as `m(...)` does, and `m(+N)` is
-  SCIP's numbering.
+  SCIP's numbering. On a type that only inherits the method without parameters, `Type#m()`
+  is the inherited one; across several types, `m()` keeps those with one. A type written with
+  its package (`java.util.Date`) is compared by its package too.
+- Answers write a method that has overloads with its parameter list (`Service#process(String)`,
+  `Overloaded#pick(String, int)`) instead of SCIP's numbering, in
+  every list and heading: it reads back as the same overload. A method without overloads
+  keeps `m()`; the exact symbol is in the `--` line.
+- `refactor` says which overload a parameter list picked (as the `--` line of a query does),
+  which types `where` types left out (`Sizes.Box 1`), and which methods `family: true` added
+  to a library method.
 
 ### Fixed
 
+- `refactor`: a select by `files` matching more than 5000 `.java` files stopped there without
+  a word (and reported what it saw as everything); it is refused now, to narrow or split. A
+  type that does not exist in `where` types is an error instead of leaving every site out.
+- Library members are parsed once per source, not once per lookup (`members` of a library
+  type, overloads, labels).
 - Library supertypes read from a sources jar missed those of a type whose type parameters
   have bounds (`class Nodes<T extends Node> extends ArrayList<T>`: none instead of
   `ArrayList`), in `members(inherited)`, `typed(subtypes)` and the rest. The cached rows are
