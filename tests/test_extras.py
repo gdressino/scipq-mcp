@@ -1132,3 +1132,29 @@ def test_family_of_an_implicit_member_has_no_library_note(sample_root, tmp_path)
     svc = Service(sample_root, cache_dir=str(tmp_path / "c"))
     out = svc.family("Point#x()")          # a record's implicit accessor
     assert "Point#x() — family of 1 methods" in out and "sources were not found" not in out
+
+
+def test_doctor_build_cache_with_shards_as_outputs(sample_copy, tmp_path, monkeypatch):
+    import os
+    from scipq_mcp.service import Service
+    with open(os.path.join(sample_copy, "gradle.properties"), "w") as fh:
+        fh.write("org.gradle.caching=true\n")
+    with open(os.path.join(sample_copy, "settings.gradle"), "w") as fh:
+        fh.write("rootProject.name = 'sample'\n")
+    home = tmp_path / "gradle-home"
+    (home / "init.d").mkdir(parents=True)
+    script = home / "init.d" / "scip.init.gradle"
+    body = ('gradle.rootProject { root ->\n    if (root.name != "sample") return\n'
+            '    // scip-javac\n    root.allprojects { p -> p.tasks.withType(JavaCompile)'
+            '.configureEach { c ->\n        def targetroot = new File(root.projectDir, '
+            '"build/scip-targetroot")\n        %s\n        c.options.compilerArgs.add('
+            '"-Xplugin:scip")\n    } }\n}\n')
+    script.write_text(body % "c.outputs.dir(targetroot)")
+    monkeypatch.setenv("GRADLE_USER_HOME", str(home))
+    out = Service(sample_copy, cache_dir=str(tmp_path / "c")).doctor()
+    assert "     [build] the Gradle build cache is on (org.gradle.caching=true): the init " \
+           "script declares the shards as outputs" in out
+    assert "WARN [build] the Gradle build cache" not in out
+    script.write_text(body % "// c.outputs.dir(targetroot)")   # commented out: not declared
+    out = Service(sample_copy, cache_dir=str(tmp_path / "c2")).doctor()
+    assert "WARN [build] the Gradle build cache is on" in out and "c.outputs.dir" in out

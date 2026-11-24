@@ -3,6 +3,15 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Changed
+
+- `doctor`: with the Gradle build cache on, no warning when the init script declares the
+  shards' folder as an output of the compile tasks (`c.outputs.dir(targetroot)`, as
+  `scipq-mcp gradle-init` does): a task restored FROM-CACHE restores its shards too. Without
+  it, the warning now says how to declare it.
+
 ## 0.9.0 — 2026-11-24
 
 ### Added

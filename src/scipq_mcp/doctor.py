@@ -152,6 +152,20 @@ def _excluded(path: str, pattern: str) -> bool:
     return re.search(r"(?:^|/)" + rx + "$", path) is not None
 
 
+def _declares_shard_outputs(path: str) -> bool:
+    """An init script that declares the shards' folder as an output of the compile tasks
+    (`c.outputs.dir(targetroot)`): the build cache then stores and restores the shards with
+    the classes (and its entries are not those of a build without the plugin, since the
+    output properties are part of the cache key)."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    code = "\n".join(line.split("//", 1)[0] for line in text.splitlines())
+    return re.search(r"\boutputs\s*\.\s*dirs?\s*\(", code) is not None
+
+
 def _package(root: str, source: str) -> str:
     try:
         with open(os.path.join(root, source), encoding="utf-8", errors="replace") as fh:
@@ -209,9 +223,18 @@ def run(ws: Workspace, settings, cache_base: str | None, freshness) -> Report:
     except OSError:
         props = ""
     if re.search(r"^\s*org\.gradle\.caching\s*=\s*true", props, re.M):
-        r.add("warn", "build", "the Gradle build cache is on (org.gradle.caching=true): a task "
-              "restored FROM-CACHE does not run javac, so its shards are not rewritten",
-              "when files stay stale after a build, run that task with --rerun")
+        scripts = [p for p, a in d.init_scripts if a.startswith(("yes", "unknown"))] \
+            if d.build == "gradle" else []
+        if scripts and all(_declares_shard_outputs(p) for p in scripts):
+            r.add("info", "build", "the Gradle build cache is on (org.gradle.caching=true): the "
+                  "init script declares the shards as outputs of the compile tasks, so a task "
+                  "restored FROM-CACHE restores its shards with its classes")
+        else:
+            r.add("warn", "build", "the Gradle build cache is on (org.gradle.caching=true): a "
+                  "task restored FROM-CACHE does not run javac, so its shards are not "
+                  "rewritten", "when files stay stale after a build, run that task with "
+                  "--rerun; or declare the shards' folder as the task's output in the init "
+                  "script (`c.outputs.dir(targetroot)`, as `scipq-mcp gradle-init` does)")
 
     # Tracked sources the index does not see.
     shard_sources = {rel[:-len(SUFFIX)] for _k, rel in files}
