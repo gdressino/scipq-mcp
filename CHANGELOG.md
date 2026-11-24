@@ -62,6 +62,8 @@ version and date when releasing.
   type that does not exist in `where` types is an error instead of leaving every site out.
 - `overloads` with the name of a library method used here in several overloads
   (`List#remove`) listed the symbols instead of the overloads.
+- A library class is looked for also in the cached artifacts named like its package
+  (`javax.jdo.annotations` in `org.datanucleus:javax.jdo`), before listing every jar.
 - Library members are parsed once per source, not once per lookup (`members` of a library
   type, overloads, labels).
 - Library supertypes read from a sources jar missed those of a type whose type parameters

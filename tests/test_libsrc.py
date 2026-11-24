@@ -453,3 +453,17 @@ def test_declared_supertypes_skip_type_parameter_bounds():
     assert L._declared_names("class A<T extends Comparable<T>> extends B<T> implements C, "
                              "D<T>") == ["B", "C", "D"]
     assert L._declared_names("public interface Map<K, V>") == []
+
+
+def test_likely_jars_by_artifact_name(tmp_path):
+    root = tmp_path / "files-2.1"
+    jar = root / "org.datanucleus" / "javax.jdo" / "3.2.1" / "abc" / "javax.jdo-3.2.1-sources.jar"
+    jar.parent.mkdir(parents=True)
+    jar.write_bytes(b"")
+    api = root / "jakarta.persistence" / "jakarta.persistence-api" / "3.1.0" / "d" / "x-sources.jar"
+    api.parent.mkdir(parents=True)
+    api.write_bytes(b"")
+    ix = L.LibraryIndex(str(tmp_path / "cache"), [str(root)])
+    assert str(jar) in ix._likely_jars("javax/jdo/annotations/PersistenceCapable")
+    assert str(api) in ix._likely_jars("jakarta/persistence/Entity")
+    assert not ix._likely_jars("org/other/Thing")

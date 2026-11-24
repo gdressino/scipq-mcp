@@ -90,7 +90,7 @@ class OverloadLabels:
         why = []
         if nosrc:
             why.append(f"{len(nosrc)} whose sources jar was not read (none here, or not "
-                       "mapped yet)")
+                       "mapped yet: `definition` of one maps it)")
         if timed:
             why.append(f"{len(timed)} past the time for names (asked again, they are read)")
         return (f"-- {len(timed | nosrc)} methods are written m(…), their parameters not read: "

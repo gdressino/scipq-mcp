@@ -240,6 +240,7 @@ class LibraryIndex:
         self._cache_lock = threading.Lock()
         self._absent: dict[str, float] = {}  # class -> when the whole map last lacked it
         self._absent_quick: set[str] = set()  # not in its likely jars (find_class wait=False)
+        self._artifacts: dict[str, dict[str, list[str]]] = {}
 
     def source(self, lib: LibClass) -> JavaSource | None:
         """The parsed .java of a class, from a jar kept open (keyed by path, mtime and size, so
@@ -407,10 +408,32 @@ class LibraryIndex:
         con.commit()
         return n
 
+    def _gradle_artifacts(self, root: str) -> dict[str, list[str]]:
+        """Artifact name (without -api/-core…) -> its directories in a Gradle cache, listed
+        once per process: an artifact may be named like its package under another group
+        (org.datanucleus:javax.jdo)."""
+        if root not in self._artifacts:
+            out: dict[str, list[str]] = {}
+            try:
+                for g in os.listdir(root):
+                    gd = os.path.join(root, g)
+                    try:
+                        names = os.listdir(gd)
+                    except OSError:
+                        continue
+                    for a in names:
+                        key = re.sub(r"-(api|core|spec|annotations)$", "", a)
+                        out.setdefault(key, []).append(os.path.join(gd, a))
+            except OSError:
+                pass
+            self._artifacts[root] = out
+        return self._artifacts[root]
+
     def _likely_jars(self, class_path: str) -> dict[str, tuple[int, int]]:
         """Jars that probably hold the class without listing every jar: the JDK for java/ and
         javax/, and the cached artifacts whose group is a prefix of the package (or the other
-        way around), e.g. com.vaadin.flow.component.grid -> group com.vaadin."""
+        way around), e.g. com.vaadin.flow.component.grid -> group com.vaadin, or whose name
+        is (javax.jdo.annotations -> org.datanucleus:javax.jdo)."""
         pkg = class_path.rsplit("/", 1)[0].replace("/", ".")
         out = {}
         for root in self.roots:
@@ -427,6 +450,9 @@ class LibraryIndex:
                 cands = [g for g in groups if pkg == g or pkg.startswith(g + ".")
                          or g.startswith(pkg + ".")]
                 dirs = [os.path.join(root, g) for g in cands]
+                for name, found in self._gradle_artifacts(root).items():
+                    if "." in name and (pkg == name or pkg.startswith(name + ".")):
+                        dirs += found
             else:  # Maven: the group is a directory path
                 parts = pkg.split(".")
                 dirs = []
