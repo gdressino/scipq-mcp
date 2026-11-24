@@ -2335,6 +2335,20 @@ _LITERAL_TYPES = {"StringLiteralExpr": "java/lang/String#", "TextBlockLiteralExp
                   "DoubleLiteralExpr": "double"}
 
 
+def _top_level(text: str, start: int, end: int, stops: str) -> int:
+    """The first of `stops` in text[start:end] outside `<…>`, or end."""
+    depth = 0
+    for k in range(start, end):
+        ch = text[k]
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth -= 1
+        elif depth <= 0 and ch in stops:
+            return k
+    return end
+
+
 class CaptureTypes:
     """The static type of a where capture, from the SCIP occurrences in its range: a name or
     a field access (its declared type), a call (its return type), `new T(…)`, a cast, a
@@ -2391,13 +2405,28 @@ class CaptureTypes:
             if self.defined(sym):
                 return self._declared(source, sym)
             return self.returns(sym)
-        if kind in ("ObjectCreationExpr", "CastExpr"):
-            for _a, _b, sym in occs:
-                if S.kind_of(sym) == "type":
-                    return sym
-                if S.kind_of(sym) == "constructor":
-                    return S.parent(sym)
+        text = fs.text.text
+        if kind == "ObjectCreationExpr":    # new a.Outer.Inner<T>(…) {…}
+            start = lo + text[lo:hi].find("new") + 3
+            return self._head_type(text, occs, start, _top_level(text, start, hi, "([{"))
+        if kind == "CastExpr":              # (Outer.Inner<T>) x
+            start = text.find("(", lo, hi) + 1
+            return self._head_type(text, occs, start, _top_level(text, start, hi, ")"))
         return ""
+
+    @staticmethod
+    def _head_type(text: str, occs: list, start: int, end: int) -> str:
+        """The type written in text[start:end]: its last type (or constructor) occurrence
+        outside `<…>` (type arguments)."""
+        best = ""
+        for a, _b, sym in occs:
+            if not start <= a < end or text[start:a].count("<") != text[start:a].count(">"):
+                continue
+            if S.kind_of(sym) == "constructor":
+                sym = S.parent(sym)
+            if S.kind_of(sym) == "type":
+                best = sym
+        return best
 
     @staticmethod
     def _outer_call(text: str, occs: list, hi: int) -> str:

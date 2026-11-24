@@ -413,3 +413,23 @@ def test_type_ancestors_for_where_types(refactor_root, tmp_path):
     assert ct.is_a("int", "int") is True and ct.is_a("int", "long") is False
     assert ct.is_a("java/util/Map#", "Map") is True
     assert ct.is_a("java/util/Map#", "java.util.Collection") is False
+
+
+def test_capture_type_of_new_and_casts():
+    from scipq_mcp.refactor import CaptureTypes, _top_level
+    text = "x = new a.Outer.Inner<Map<K, V>>(new B()) {}; y = (Outer.Inner<List<C>>) z;"
+    occs = []
+    for name, sym in (("Outer", "a/Outer#"), ("Inner", "a/Outer#Inner#`<init>`()."),
+                      ("Map", "java/util/Map#"), ("B", "b/B#`<init>`()."),
+                      ("Outer", "a/Outer#"), ("Inner", "a/Outer#Inner#"),
+                      ("List", "java/util/List#"), ("C", "c/C#")):
+        at = text.find(name, occs[-1][1] if occs else 0)
+        occs.append((at, at + len(name), sym))
+    lo = text.find("new")
+    start = lo + 3
+    assert CaptureTypes._head_type(text, occs, start, _top_level(text, start, len(text), "([{")) \
+        == "a/Outer#Inner#"
+    lo = text.find("(Outer")
+    start = lo + 1
+    assert CaptureTypes._head_type(text, occs, start, _top_level(text, start, len(text), ")")) \
+        == "a/Outer#Inner#"

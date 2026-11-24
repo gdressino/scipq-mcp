@@ -82,3 +82,9 @@ def test_parameter_lists_in_queries():
     assert not S.same_params((), None)
     assert S.overload_symbol("java/lang/Long#`<init>`().", 2) == "java/lang/Long#`<init>`(+2)."
     assert S.overload_symbol("a/B#m(+3).", 0) == "a/B#m()."
+
+
+def test_ellipsis_means_any_overload():
+    for t in ("pick(...)", "pick(…)", "pick(*)"):
+        q = S.parse_query(t)
+        assert q.method_only and q.params is None and q.names == ("pick",), t

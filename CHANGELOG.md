@@ -26,7 +26,8 @@ version and date when releasing.
   (simple or qualified names, generics and parameter names ignored, a type variable matches
   anything; library overloads are read from their sources jar, used here or not). Before,
   `m()` meant any overload. A list no overload takes lists the overloads. `m()` with no
-  overload free of parameters still means the method, and `m(+N)` is SCIP's numbering.
+  overload free of parameters still means the method, as `m(...)` does, and `m(+N)` is
+  SCIP's numbering.
 
 ### Fixed
 

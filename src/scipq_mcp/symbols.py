@@ -358,7 +358,9 @@ def parse_query(text: str) -> Query:
     params = None
     m = _TRAILING_PARAMS.search(t)
     if m and not re.fullmatch(r"\s*\+\d+\s*", m.group(1)):
-        params = written_params(m.group(1))
+        # `m(...)`, `m(…)`: the method, whatever it takes.
+        if not re.fullmatch(r"\s*(?:\.{2,3}|…|\*)\s*", m.group(1)):
+            params = written_params(m.group(1))
         t = t[:m.start()] + "()"
     names, method_only, disamb = [], False, None
     pos = 0
