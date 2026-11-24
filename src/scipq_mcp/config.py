@@ -371,9 +371,9 @@ def _check_refs_template(md_folders) -> str:
     with Markdown out of it (those mostly named by date look like records)."""
     lines = ["# [check_refs]   # the docs check_refs reads when the call names none",
              '# files = ["**/CLAUDE.md", "**/AGENTS.md", ".claude/**/*.md", ".github/**/*.md",',
-             '#          "**/README*.md"]   # globs or folders; this list replaces the default',
-             "#   (the default: what agents read, these and the .md files CLAUDE.md or AGENTS.md",
-             "#   name, and folders with a SKILL.md). * stays in its folder, ** crosses folders."]
+             '#          "**/README*.md"]   # the default (what agents read); this list '
+             "replaces it",
+             "#   globs or folders: * stays in its folder, ** crosses folders"]
     md_folders = list(md_folders)
     if md_folders:
         lines.append("#   Markdown out of it here (add the folders whose docs agents follow):")

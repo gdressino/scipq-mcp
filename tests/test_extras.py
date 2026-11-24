@@ -887,7 +887,7 @@ def test_check_refs_history_follows_doc_renames_and_the_parent_version(sample_co
     assert f"{s}:20" not in out
 
 
-def test_check_refs_default_scope_reads_what_agents_read(sample_copy, tmp_path):
+def test_check_refs_default_scope_is_what_agents_read(sample_copy, tmp_path):
     import os
     from scipq_mcp.service import Service
 
@@ -908,12 +908,14 @@ def test_check_refs_default_scope_reads_what_agents_read(sample_copy, tmp_path):
     put("sdk/LICENSE", "MIT\n")
     put("sdk/README.md", "- `Entity#a8`\n")                           # our own package
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
-    for x in ("a1", "a2", "a3", "a5", "a6", "a8"):
+    for x in ("a1", "a8"):
         assert f"Entity has no member {x}" in out, (x, out)
-    assert "a4" not in out and "a7" not in out and "other.md" not in out
+    for x in ("a2", "a3", "a4", "a5", "a6", "a7"):     # named, skills, logs: only when asked
+        assert f"member {x}" not in out, x
     assert out.count("Entity has no member a1") == 1
-    assert ": 6 files (2 named in CLAUDE.md or AGENTS.md, 2 in skill folders); not checked: " \
-        "1 other .md file of the checkout" in out and "; 1 README of third-party code" in out, out
+    assert "scope: the default, files agents read (CLAUDE.md, AGENTS.md, .claude/**, " \
+        ".github/**, README*.md): 2 files; not checked: 5 other .md files of the checkout" \
+        in out and "; 1 README of third-party code" in out, out
 
 
 def test_check_refs_since_a_commit(sample_copy, tmp_path):

@@ -117,8 +117,7 @@ ARCHIVE_DIRS = {"archive", "archived", "archives", "archivo", "archivados", "des
 # read to work, by convention (file names compared without case).
 AGENT_FILES = ["**/CLAUDE.md", "**/AGENTS.md", ".claude/**/*.md", ".github/**/*.md",
                "**/README*.md"]
-AGENT_FILES_SHORT = ("CLAUDE.md and AGENTS.md (and the .md files they name), .claude/**, "
-                     ".github/**, README*.md, folders with a SKILL.md")
+AGENT_FILES_SHORT = "CLAUDE.md, AGENTS.md, .claude/**, .github/**, README*.md"
 # Folders of someone else's code kept in the repository: their READMEs are not the project's.
 _VENDOR_DIRS = {"node_modules", "bower_components", "vendor", "vendors", "third_party",
                 "third-party", "thirdparty", "external", "externals"}
@@ -132,9 +131,6 @@ def _generated(f: str) -> bool:
 
 _SOURCE_TREE = {"src", "public", "static", "webapp", "resources", "assets", "web"}
 _LICENSE = re.compile(r"(?i)(?:license|licence|copying)(?:\.\w+)?$")
-# A Markdown file a text names: [x](docs/a.md), @docs/a.md, `docs/a.md`, docs/a.md
-_MD_NAMED = re.compile(r"(?:\]\(|@|`|(?<![\w./-]))((?:\.{1,2}/)?[\w$.-]+(?:/[\w$.-]+)*\.md)"
-                       r"(?:#[\w-]*)?(?=[)`\s,;:.]|$)", re.I)
 # A file or folder named by date or by ticket: a record (an audit, a fix's write-up), not a
 # guide.
 _DATED = re.compile(r"(?<!\d)(?:19|20)\d\d[-_.]?(?:0[1-9]|1[0-2])(?:[-_.]?[0-3]\d)?(?!\d)|"
@@ -505,41 +501,6 @@ def _vendored(f: str, license_dirs: set[str]) -> bool:
         for k in range(2, len(parts) + 1))
 
 
-def _agent_files(root: str, files: list[str], listed: list[str], exclude: list[str],
-                 sc) -> list[str]:
-    """The default scope, plus the .md files CLAUDE.md or AGENTS.md name (one level: what
-    they tell agents to read) and those in folders with a SKILL.md (a skill's references)."""
-    have = set(files)
-    known = {f for f in listed if _is_md(f)}
-
-    def take(f: str) -> bool:
-        return f in known and f not in have and not any(_match(f, x, dirs=True)
-                                                       for x in exclude)
-    added = []
-    for f in files:
-        if os.path.basename(f).upper() not in ("CLAUDE.MD", "AGENTS.MD"):
-            continue
-        try:
-            with open(os.path.join(root, f), encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
-        except OSError:
-            continue
-        for mo in _MD_NAMED.finditer(text):
-            for base in (os.path.dirname(f), ""):
-                p = os.path.normpath(os.path.join(base, mo.group(1))).replace(os.sep, "/")
-                if take(p):
-                    have.add(p)
-                    added.append(p)
-                    break
-    sc.named = len(added)
-    skill_dirs = {os.path.dirname(f) for f in listed
-                  if os.path.basename(f).upper() == "SKILL.MD"}
-    skills = [f for f in sorted(known) if take(f) and any(
-        f.startswith(d + "/") or (not d and "/" not in f) for d in skill_dirs)]
-    sc.skills = len(skills)
-    return sorted(have | set(skills))
-
-
 @dataclass
 class Scope:
     """What check_refs read and why: the files named in the call, [check_refs] files of a
@@ -552,8 +513,6 @@ class Scope:
     total: int = 0                      # files in scope (more than read, with since)
     archived: int = 0                   # .md files (or in scope) under archive folders
     others: int = 0                     # other .md files of the checkout, not checked
-    named: int = 0                      # .md files CLAUDE.md or AGENTS.md name (default)
-    skills: int = 0                     # .md files in folders with a SKILL.md (default)
     vendored: int = 0                   # READMEs of someone else's code left out
     excluded: int = 0                   # .md files exclude leaves out
     since: str = ""                     # the ref given, and the commit it meant
@@ -672,10 +631,6 @@ def scope_line(sc: Scope, full: bool = False) -> str:
         head += " minus exclude (" + ", ".join(sc.exclude[:3]) + \
             (", …" if len(sc.exclude) > 3 else "") + ")"
     head += f": {sc.total} file{'s' if sc.total != 1 else ''}"
-    extra = ([f"{sc.named} named in CLAUDE.md or AGENTS.md"] if sc.named else []) + \
-        ([f"{sc.skills} in skill folders"] if sc.skills else [])
-    if extra:
-        head += " (" + ", ".join(extra) + ")"
     left = ([f"{sc.others} other .md file{'s' if sc.others != 1 else ''} of the checkout"]
             if sc.others and sc.how != "given" else []) + \
         ([f"{sc.archived} under archive folders (archive/, old/…)"] if sc.archived else [])
@@ -733,8 +688,7 @@ def md_folders(root: str, listed: list[str] | None = None, limit: int | None = N
     scope. Records: named by date or ticket, or in a folder named like a log (logs/,
     journal/…); a bundle: the folder holding skills/*/SKILL.md (its agents/, commands/…)."""
     listed = _listed(root) if listed is None else listed
-    default = set(_agent_files(root, _files(root, AGENT_FILES, [], listed, nocase=True),
-                               listed, [], Scope()))
+    default = set(_files(root, AGENT_FILES, [], listed, nocase=True))
     bundles = {os.path.dirname(os.path.dirname(os.path.dirname(p))) for p in listed
                if os.path.basename(p).upper() == "SKILL.MD" and
                os.path.basename(os.path.dirname(os.path.dirname(p))) == "skills"}
@@ -795,8 +749,6 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
     checked = 0
     listed = _listed(root)
     files = _files(root, globs, exclude, listed, nocase=sc.how == "default")
-    if sc.how == "default":
-        files = _agent_files(root, files, listed, exclude, sc)
     if sc.how != "given":
         lic = {os.path.dirname(f) for f in listed if _LICENSE.match(os.path.basename(f))} - {""}
         third = [f for f in files if _vendored(f, lic)]

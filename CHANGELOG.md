@@ -57,9 +57,8 @@ version and date when releasing.
 ### Changed
 
 - `check_refs` reads by default only what agents read to work: `CLAUDE.md` and `AGENTS.md`
-  in any folder and the `.md` files they name (links, `@imports`, paths), `.claude/**/*.md`,
-  `.github/**/*.md`, `README*.md` and folders with a `SKILL.md`, instead of every Markdown
-  file of the checkout; READMEs of third-party code (under `vendor/`, `node_modules/`, or
+  in any folder, `.claude/**/*.md`, `.github/**/*.md` and `README*.md`, instead of every
+  Markdown file of the checkout; READMEs of third-party code (under `vendor/`, `node_modules/`, or
   with a LICENSE of their own inside a source tree) and a second link to a file already
   read are left out. A project sets its own scope with `[check_refs] files`
   (globs or folders; it replaces the default) in `.scipq.toml` or its `[[project]]` entry;

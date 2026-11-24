@@ -214,8 +214,8 @@ section. Unknown keys are reported, not ignored silently.
    and members, wrong parameter lists, missing files, moved lines. Library types, placeholders,
    examples, negated mentions, other languages' snippets and archive folders are left alone.
    Scope: the files named, else `[check_refs] files`, else what agents read (`CLAUDE.md`,
-   `AGENTS.md` and the `.md` files they name, `.claude/**`, `.github/**`, `README*.md`,
-   folders with a `SKILL.md`; not third-party READMEs, nor a link to a file already read);
+   `AGENTS.md`, `.claude/**`, `.github/**`, `README*.md`; not third-party READMEs, nor a
+   link to a file already read);
    records (audits, fix write-ups) describe the code of their day and are read only when
    named. The output says the scope and how many Markdown files it left out. `since=REF`:
    from the merge base with HEAD to the working tree, the docs changed (their edited lines)

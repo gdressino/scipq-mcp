@@ -508,9 +508,8 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         overload has, missing files, and line numbers that no longer fall in the symbol named
         next to them; counts by kind, then by file.
         Scope: without files, the files agents read to work: CLAUDE.md and AGENTS.md (any
-        folder) and the .md files they name, .claude/**/*.md, .github/**/*.md, README*.md and
-        folders with a SKILL.md (not archive folders, third-party READMEs, or a link to a file
-        already read). A project opts in to more or fewer with `[check_refs] files =
+        folder), .claude/**/*.md, .github/**/*.md and README*.md (not archive folders,
+        third-party READMEs, or a link to a file already read). A project opts in to more or fewer with `[check_refs] files =
         ["docs/guides", "**/CLAUDE.md", …]` (globs or folders relative to the checkout: *
         stays in its folder, ** crosses folders; it replaces the default) in .scipq.toml at
         the checkout root, or in its [[project]] entry of ~/.config/scipq/config.toml. The

@@ -304,8 +304,7 @@ other_versions = ["v4"]              # a doc's "v4 `File.java:N`" is another bra
 ```
 
 `check_refs` checks by default what agents read to work: `CLAUDE.md` and `AGENTS.md` in any
-folder and the `.md` files they name, `.claude/**/*.md`, `.github/**/*.md`, `README*.md` and
-folders with a `SKILL.md`. Dated records (audits, the write-up of a fix) describe the code as
+folder, `.claude/**/*.md`, `.github/**/*.md` and `README*.md`. Dated records (audits, the write-up of a fix) describe the code as
 it was and need not follow it, so they are left out unless `[check_refs] files` or the call's
 `files` names them; the output's `scope:` line says what was read and how many other Markdown
 files were not. Globs are relative to the checkout: `*` stays within a folder, `**` crosses
