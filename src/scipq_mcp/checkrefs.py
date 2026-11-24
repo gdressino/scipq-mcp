@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import bisect
 import difflib
-import fnmatch
+import functools
 import os
 import re
 import shutil
@@ -117,7 +117,24 @@ ARCHIVE_DIRS = {"archive", "archived", "archives", "archivo", "archivados", "des
 # read to work, by convention (file names compared without case).
 AGENT_FILES = ["**/CLAUDE.md", "**/AGENTS.md", ".claude/**/*.md", ".github/**/*.md",
                "**/README*.md"]
-AGENT_FILES_SHORT = "CLAUDE.md, AGENTS.md, .claude/**, .github/**, README*.md"
+AGENT_FILES_SHORT = ("CLAUDE.md and AGENTS.md (and the .md files they name), .claude/**, "
+                     ".github/**, README*.md, folders with a SKILL.md")
+# Folders of someone else's code kept in the repository: their READMEs are not the project's.
+_VENDOR_DIRS = {"node_modules", "bower_components", "vendor", "vendors", "third_party",
+                "third-party", "thirdparty", "external", "externals"}
+# Output folders (graph-out, generated, dist): what is there was written by a tool.
+_GENERATED = re.compile(r"(?:^|[-_.])(?:out|output|generated|gen|dist)$", re.I)
+
+
+def _generated(f: str) -> bool:
+    return any(_GENERATED.search(d) for d in f.split("/")[:-1])
+
+
+_SOURCE_TREE = {"src", "public", "static", "webapp", "resources", "assets", "web"}
+_LICENSE = re.compile(r"(?i)(?:license|licence|copying)(?:\.\w+)?$")
+# A Markdown file a text names: [x](docs/a.md), @docs/a.md, `docs/a.md`, docs/a.md
+_MD_NAMED = re.compile(r"(?:\]\(|@|`|(?<![\w./-]))((?:\.{1,2}/)?[\w$.-]+(?:/[\w$.-]+)*\.md)"
+                       r"(?:#[\w-]*)?(?=[)`\s,;:.]|$)", re.I)
 # A file or folder named by date or by ticket: a record (an audit, a fix's write-up), not a
 # guide.
 _DATED = re.compile(r"(?<!\d)(?:19|20)\d\d[-_.]?(?:0[1-9]|1[0-2])(?:[-_.]?[0-3]\d)?(?!\d)|"
@@ -426,32 +443,101 @@ def _listed(root: str) -> list[str]:
     return listed
 
 
-def _match(p: str, gl: str, nocase: bool = False) -> bool:
-    if nocase:
-        p, gl = p.lower(), gl.lower()
-    if fnmatch.fnmatchcase(p, gl) or (gl.startswith("**/") and fnmatch.fnmatchcase(p, gl[3:])):
+@functools.lru_cache(maxsize=1024)
+def _glob_rx(gl: str, nocase: bool = False) -> re.Pattern:
+    """A glob relative to the checkout as a regex: * and ? stay within a folder, ** crosses
+    folders (dir/**/x also matches dir/x), [abc] is a class."""
+    gl = gl[2:] if gl.startswith("./") else gl
+    out, i = [], 0
+    while i < len(gl):
+        if gl.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif gl.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif gl[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif gl[i] == "?":
+            out.append("[^/]")
+            i += 1
+        elif gl[i] == "[" and "]" in gl[i + 2:]:
+            j = gl.index("]", i + 2)
+            body = gl[i + 1:j]
+            out.append("[" + ("^" + body[1:] if body.startswith("!") else body)
+                       .replace("\\", "\\\\") + "]")
+            i = j + 1
+        else:
+            out.append(re.escape(gl[i]))
+            i += 1
+    return re.compile("".join(out), re.I if nocase else 0)
+
+
+def _match(p: str, gl: str, nocase: bool = False, dirs: bool = False) -> bool:
+    """p matches the glob; with dirs, also when one of its folders does (a folder, or
+    docs/*, means everything under it)."""
+    rx = _glob_rx(gl.rstrip("/") if dirs else gl, nocase)
+    if rx.fullmatch(p):
         return True
-    # dir/**/*.md also matches dir/x.md
-    return "/**/" in gl and fnmatch.fnmatchcase(p, gl.replace("/**/", "/"))
-
-
-def _exclude_globs(root: str, exclude: list[str]) -> list[str]:
-    """A folder in exclude means everything under it."""
-    return [x.rstrip("/") + "/*" if os.path.isdir(os.path.join(root, x.rstrip("/"))) else x
-            for x in exclude]
+    parts = p.split("/")
+    return dirs and any(rx.fullmatch("/".join(parts[:k])) for k in range(1, len(parts)))
 
 
 def _files(root: str, globs: list[str], exclude: list[str],
            listed: list[str] | None = None, nocase: bool = False) -> list[str]:
     listed = _listed(root) if listed is None else listed
     globs = _expand_globs(root, globs)
-    exclude = _exclude_globs(root, exclude)
     return sorted(p for p in listed if any(_match(p, g_, nocase) for g_ in globs)
-                  and not any(_match(p, x) for x in exclude))
+                  and not any(_match(p, x, dirs=True) for x in exclude))
 
 
 def _is_md(p: str) -> bool:
     return p.lower().endswith(".md")
+
+
+def _vendored(f: str, license_dirs: set[str]) -> bool:
+    """A README of someone else's code: under vendor/, node_modules/…, or a folder with a
+    LICENSE of its own inside a source tree (a library copied into src/…/public/)."""
+    parts = f.split("/")[:-1]
+    return bool(_VENDOR_DIRS & {d.lower() for d in parts}) or any(
+        "/".join(parts[:k]) in license_dirs and _SOURCE_TREE & {d.lower() for d in parts[:k - 1]}
+        for k in range(2, len(parts) + 1))
+
+
+def _agent_files(root: str, files: list[str], listed: list[str], exclude: list[str],
+                 sc) -> list[str]:
+    """The default scope, plus the .md files CLAUDE.md or AGENTS.md name (one level: what
+    they tell agents to read) and those in folders with a SKILL.md (a skill's references)."""
+    have = set(files)
+    known = {f for f in listed if _is_md(f)}
+
+    def take(f: str) -> bool:
+        return f in known and f not in have and not any(_match(f, x, dirs=True)
+                                                       for x in exclude)
+    added = []
+    for f in files:
+        if os.path.basename(f).upper() not in ("CLAUDE.MD", "AGENTS.MD"):
+            continue
+        try:
+            with open(os.path.join(root, f), encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for mo in _MD_NAMED.finditer(text):
+            for base in (os.path.dirname(f), ""):
+                p = os.path.normpath(os.path.join(base, mo.group(1))).replace(os.sep, "/")
+                if take(p):
+                    have.add(p)
+                    added.append(p)
+                    break
+    sc.named = len(added)
+    skill_dirs = {os.path.dirname(f) for f in listed
+                  if os.path.basename(f).upper() == "SKILL.MD"}
+    skills = [f for f in sorted(known) if take(f) and any(
+        f.startswith(d + "/") or (not d and "/" not in f) for d in skill_dirs)]
+    sc.skills = len(skills)
+    return sorted(have | set(skills))
 
 
 @dataclass
@@ -466,6 +552,9 @@ class Scope:
     total: int = 0                      # files in scope (more than read, with since)
     archived: int = 0                   # .md files (or in scope) under archive folders
     others: int = 0                     # other .md files of the checkout, not checked
+    named: int = 0                      # .md files CLAUDE.md or AGENTS.md name (default)
+    skills: int = 0                     # .md files in folders with a SKILL.md (default)
+    vendored: int = 0                   # READMEs of someone else's code left out
     excluded: int = 0                   # .md files exclude leaves out
     since: str = ""                     # the ref given, and the commit it meant
     base: str = ""
@@ -473,6 +562,8 @@ class Scope:
     changed_code: int = 0               # .java files changed since then
     citing: int = 0                     # docs in scope that mention changed code
     citing_outside: tuple = ()          # .md files out of scope that mention changed code
+    citing_docs: tuple = ()             # docs in scope read for those mentions
+    older: int = 0                      # problems in changed docs on lines not edited since
     error: str = ""
 
 
@@ -495,7 +586,80 @@ def _changed_since(root: str, ref: str) -> tuple[str, list[str]] | str:
     return base, sorted(set(names))
 
 
-def scope_line(sc: Scope) -> str:
+class _Changed:
+    """The .java files changed since a commit, as a doc names them: their types and file
+    names written as code; a name several files declare (Configuracion.java) only with its
+    folder or package (banval/Configuracion, banval.Configuracion)."""
+
+    def __init__(self, m, java: set[str], listed: list[str]):
+        self.java = java
+        same = {}
+        for f in listed:
+            if f.endswith(".java"):
+                same[os.path.basename(f)] = same.get(os.path.basename(f), 0) + 1
+        plain: set[str] = set()
+        qualified: set[tuple[str, str]] = set()
+
+        def add(name: str, src: str) -> None:
+            files = {m.where[x][0] for x in m.types.get(name, []) if x in m.where}
+            if same.get(name + ".java", 0) > 1 or len(files) > 1:
+                qualified.add((os.path.basename(os.path.dirname(src)), name))
+            else:
+                plain.add(name)
+        for f in java:
+            add(os.path.basename(f)[:-len(".java")], f)
+        for sym, v in m.where.items():
+            if v[0] in java and sym.endswith("#"):
+                add(S.parse(sym)[-1].name, v[0])
+        alt = "|".join(map(re.escape, sorted(plain, key=len, reverse=True)))
+        self.word = re.compile(r"(?<![\w$])(?:" + alt + r")(?![\w$])") if plain else None
+        # written as code: in backticks, or File.java, Type#m, Type.m(, Type::m
+        self.code = re.compile(r"(?<![\w$])(?:" + alt +
+                               r")(?:\.java\b|#|::|\.[a-z_$][\w$]*\()") if plain else None
+        self.qual = re.compile(r"(?<![\w$])(?:" + "|".join(
+            re.escape(d) + r"[/.]" + re.escape(n) for d, n in sorted(qualified)) +
+            r")(?![\w$])") if qualified else None
+
+    def cites(self, text: str) -> bool:
+        if self.qual is not None and self.qual.search(text):
+            return True
+        return self.word is not None and (self.code.search(text) is not None or any(
+            self.word.search(c) for c in re.findall(r"`[^`\n]+`", text)))
+
+    def names(self, mention: str) -> bool:
+        return any(rx is not None and rx.search(mention) for rx in (self.qual, self.word))
+
+
+def _edited_lines(root: str, base: str, docs: list[str]) -> dict[str, set[int] | None]:
+    """The lines of docs edited from base to the working tree (None: the whole doc, new)."""
+    out: dict[str, set[int] | None] = {d: None for d in docs}     # untracked: new
+    if not docs:
+        return out
+    diff = _git(root, "diff", "-U0", "--no-renames", "--relative", base, "--", *docs)
+    tracked = _git(root, "ls-files", "-z", "--", *docs) or b""
+    for d in tracked.decode("utf-8", "replace").split("\0"):
+        if d in out:
+            out[d] = set()
+    for f, h in _hunks((diff or b"").decode("utf-8", "replace")).items():
+        if f in out:
+            out[f] = None if h is None else {k for _a, _b, c, d in h for k in range(c, c + d)}
+    return out
+
+
+def _listing(paths, full: bool = False, cap: int = 10) -> str:
+    """Paths in full when few (or full), else by folder with their counts."""
+    paths = sorted(paths)
+    if full or len(paths) <= cap:
+        return ", ".join(paths)
+    by: dict[str, int] = {}
+    for p in paths:
+        by[os.path.dirname(p) or "."] = by.get(os.path.dirname(p) or ".", 0) + 1
+    rows = sorted(by.items(), key=lambda kv: (-kv[1], kv[0]))
+    return "by folder: " + ", ".join(f"{d}/ ({n})" for d, n in rows[:cap]) + \
+        (f", … ({len(rows) - cap} more folders)" if len(rows) > cap else "")
+
+
+def scope_line(sc: Scope, full: bool = False) -> str:
     """The `scope:` line of the output: what was read, from where, and what was not."""
     shown = ", ".join(sc.globs[:4]) + (", …" if len(sc.globs) > 4 else "")
     if sc.how == "given":
@@ -508,6 +672,10 @@ def scope_line(sc: Scope) -> str:
         head += " minus exclude (" + ", ".join(sc.exclude[:3]) + \
             (", …" if len(sc.exclude) > 3 else "") + ")"
     head += f": {sc.total} file{'s' if sc.total != 1 else ''}"
+    extra = ([f"{sc.named} named in CLAUDE.md or AGENTS.md"] if sc.named else []) + \
+        ([f"{sc.skills} in skill folders"] if sc.skills else [])
+    if extra:
+        head += " (" + ", ".join(extra) + ")"
     left = ([f"{sc.others} other .md file{'s' if sc.others != 1 else ''} of the checkout"]
             if sc.others and sc.how != "given" else []) + \
         ([f"{sc.archived} under archive folders (archive/, old/…)"] if sc.archived else [])
@@ -517,6 +685,9 @@ def scope_line(sc: Scope) -> str:
             if sc.how == "default" else " (name them in files)")
     if sc.excluded:
         head += f"; {sc.excluded} .md file{'s' if sc.excluded != 1 else ''} excluded"
+    if sc.vendored:
+        head += (f"; {sc.vendored} README{'s' if sc.vendored != 1 else ''} of third-party code "
+                 "(vendor/, a LICENSE of its own) left out")
     out = [head]
     if sc.since:
         def n_(k: int, one: str, many: str) -> str:
@@ -524,36 +695,57 @@ def scope_line(sc: Scope) -> str:
         out.append(
             f"since {sc.since} (merge base {sc.base[:10]}): "
             f"{n_(sc.changed_code, '.java file', '.java files')} changed; read "
-            f"{n_(sc.changed_docs, 'doc', 'docs')} of the scope changed since then and "
+            f"{n_(sc.changed_docs, 'doc', 'docs')} of the scope changed since then (the lines "
+            f"edited, and mentions of the changed code) and "
             f"{n_(sc.citing, 'doc that mentions', 'docs that mention')} the changed code "
-            "(only those mentions)")
+            "(only those mentions)" + (f": {_listing(sc.citing_docs, full)}"
+                                       if sc.citing_docs else ""))
+        if sc.older:
+            out.append(f"{n_(sc.older, 'older problem', 'older problems')} of the changed "
+                       "docs, on lines not edited since then, not shown (name the docs in "
+                       "files to see them)")
         if sc.citing_outside:
             n = len(sc.citing_outside)
             out.append(f"{n_(n, '.md file', '.md files')} out of scope "
                        f"mention{'s' if n == 1 else ''} the changed code: "
-                       + ", ".join(sc.citing_outside[:5]) + (" …" if n > 5 else "") +
-                       " (name them in files to check them)")
+                       + _listing(sc.citing_outside, full) +
+                       " (name them, or their folders, in files to check them)")
     return "\n".join(out)
 
 
+# Folders that hold records by their name: a log, a journal, audits…
+_RECORD_DIRS = {"log", "logs", "journal", "journals", "bitacora", "bitácora", "bitacoras",
+                "bitácoras", "diario", "audit", "audits", "auditoria", "auditorías",
+                "auditorias", "incidents", "postmortems", "handoffs", "worklog", "worklogs",
+                "minutes", "reports", "informes"}
+
+
 def md_folders(root: str, listed: list[str] | None = None, limit: int = 8
-               ) -> list[tuple[str, int, int]]:
-    """Folders with Markdown files out of the default scope: (folder, files, named by date or
-    ticket), most files first, for init-config to suggest a scope."""
+               ) -> list[tuple[str, int, int, str]]:
+    """Folders with Markdown files out of the default scope: (folder, files, how many look
+    like records, "records" / "bundle" / ""), most files first, for init-config to suggest a
+    scope. Records: named by date or ticket, or in a folder named like a log (logs/,
+    journal/…); a bundle: the folder holding skills/*/SKILL.md (its agents/, commands/…)."""
     listed = _listed(root) if listed is None else listed
-    default = set(_files(root, AGENT_FILES, [], listed, nocase=True))
+    default = set(_agent_files(root, _files(root, AGENT_FILES, [], listed, nocase=True),
+                               listed, [], Scope()))
+    bundles = {os.path.dirname(os.path.dirname(os.path.dirname(p))) for p in listed
+               if os.path.basename(p).upper() == "SKILL.MD" and
+               os.path.basename(os.path.dirname(os.path.dirname(p))) == "skills"}
     groups: dict[str, list[int]] = {}
     for p in listed:
         if not _is_md(p) or p in default:
             continue
         parts = p.split("/")[:-1]
-        if ARCHIVE_DIRS & {d.lower() for d in parts}:
+        if ARCHIVE_DIRS & {d.lower() for d in parts} or _generated(p):
             continue
-        key = "/".join(parts[:2]) or "."
+        key = next((b for b in sorted(bundles, key=len, reverse=True)
+                    if b and p.startswith(b + "/")), None) or "/".join(parts[:2]) or "."
         g_ = groups.setdefault(key, [0, 0])
         g_[0] += 1
-        g_[1] += bool(_DATED.search(p))
-    return sorted(((k, v[0], v[1]) for k, v in groups.items()),
+        g_[1] += bool(_DATED.search(p) or _RECORD_DIRS & {d.lower() for d in parts})
+    return sorted(((k, v[0], v[1], "bundle" if k in bundles else
+                    "records" if v[1] * 2 > v[0] else "") for k, v in groups.items()),
                   key=lambda x: (-x[1], x[0]))[:limit]
 
 
@@ -595,6 +787,20 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
     checked = 0
     listed = _listed(root)
     files = _files(root, globs, exclude, listed, nocase=sc.how == "default")
+    if sc.how == "default":
+        files = _agent_files(root, files, listed, exclude, sc)
+    if sc.how != "given":
+        lic = {os.path.dirname(f) for f in listed if _LICENSE.match(os.path.basename(f))} - {""}
+        third = [f for f in files if _vendored(f, lic)]
+        sc.vendored, files = len(third), [f for f in files if f not in set(third)]
+    # Each file once (CLAUDE.md as a link to AGENTS.md), none from outside the checkout.
+    real_root, seen_real, aliases = os.path.realpath(root), set(), set()
+    for f in list(files):
+        r = os.path.realpath(os.path.join(root, f))
+        if r in seen_real or not (r == real_root or r.startswith(real_root + os.sep)):
+            aliases.add(f)
+        seen_real.add(r)
+    files = [f for f in files if f not in aliases]
     # Java files in the checkout the index does not have (a build without the plugin, a
     # tool's own folder): they exist.
     for f in listed:
@@ -610,22 +816,19 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
     def in_archive(f: str) -> bool:
         return skip_archives and bool((ARCHIVE_DIRS - named) &
                                       {d.lower() for d in f.split("/")[:-1]})
-    ex_globs = _exclude_globs(root, exclude)
-
     def is_excluded(f: str) -> bool:
-        return any(_match(f, x) for x in ex_globs)
+        return any(_match(f, x, dirs=True) for x in exclude)
     archived = {f for f in files if in_archive(f)}
     files = [f for f in files if f not in archived]
     in_scope = set(files)
     excluded = {f for f in listed if _is_md(f) and is_excluded(f)}
-    if skip_archives:
+    if skip_archives and sc.how != "given":     # the checkout's, not only the globs' ones
         archived |= {f for f in listed if _is_md(f) and f not in in_scope and in_archive(f)}
     archived -= excluded
     sc.total, sc.archived, sc.excluded = len(in_scope), len(archived), len(excluded)
     sc.others = sum(1 for f in listed if _is_md(f) and f not in in_scope and f not in archived
-                    and f not in excluded)
+                    and f not in excluded and f not in aliases) - sc.vendored
     citing_only: set[str] = set()       # docs read only for their mentions of changed code
-    changed_names = None
     java_set: set[str] = set()
     if since:
         got = _changed_since(root, since)
@@ -636,27 +839,14 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
         java_set = {f for f in changed if f.endswith(".java")}
         sc.changed_code = len(java_set)
         changed_set = set(changed)
-        # the types those files declare (now), and the files' own names (deleted ones too)
-        names = {os.path.basename(f)[:-5] for f in java_set}
-        for sym, v in m.where.items():
-            if v[0] in java_set and sym.endswith("#"):
-                names.add(S.parse(sym)[-1].name)
-        alt = "|".join(map(re.escape, sorted(names, key=len, reverse=True)))
-        changed_names = re.compile(r"(?<![\w$])(?:" + alt + r")(?![\w$])") if names else None
-        # written as code: in backticks, or File.java, Type#m, Type.m(, Type::m
-        as_code = re.compile(r"(?<![\w$])(?:" + alt + r")(?:\.java\b|#|::|\.[a-z_$][\w$]*\()")\
-            if names else None
+        ch = _Changed(m, java_set, listed)
 
         def cites(f: str) -> bool:
-            if changed_names is None:
-                return False
             try:
                 with open(os.path.join(root, f), encoding="utf-8", errors="replace") as fh:
-                    text = fh.read()
+                    return ch.cites(fh.read())
             except OSError:
                 return False
-            return as_code.search(text) is not None or any(
-                changed_names.search(c) for c in re.findall(r"`[^`\n]+`", text))
         keep = []
         for f in files:
             if f in changed_set:
@@ -667,8 +857,11 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                 citing_only.add(f)
                 keep.append(f)
         files = keep
-        sc.citing_outside = tuple(f for f in listed if _is_md(f) and f not in in_scope
-                                  and not in_archive(f) and not is_excluded(f) and cites(f))
+        sc.citing_docs = tuple(sorted(citing_only))
+        sc.citing_outside = tuple(f for f in listed if _is_md(f) and f not in in_scope and
+                                  not in_archive(f) and not is_excluded(f) and
+                                  not _generated(f) and cites(f))
+        edited = _edited_lines(root, sc.base, [f for f in files if f in changed_set])
     sc.read = len(files)
     line_counts: dict[str, int] = {}
     text_cache: dict[str, list[str]] = {}
@@ -827,12 +1020,21 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                                 abbrev, other_versions, before_line, starts, heads)
     if citing_only:
         problems = [p for p in problems if p.path not in citing_only or p.src in java_set or
-                    changed_names.search(p.mention)]
+                    ch.names(p.mention)]
     _since_written(root, problems)
     _gone(root, problems)
-    return [p for p in problems if p.kind not in ("drop", "weak", "quoted") and
-            (not p.loose or "gone from" in p.what) and
-            not (p.cont and p.kind == "line-moved")], checked, sc
+    problems = [p for p in problems if p.kind not in ("drop", "weak", "quoted") and
+                (not p.loose or "gone from" in p.what) and
+                not (p.cont and p.kind == "line-moved")]
+    if since:
+        # In the docs changed since then: the lines edited, and mentions of changed code.
+        def new(p: Problem) -> bool:
+            lines = edited.get(p.path, ())
+            return p.path not in edited or lines is None or p.line in lines or \
+                p.src in java_set or ch.names(p.mention)
+        sc.older = len({(p.path, p.mention, p.what) for p in problems if not new(p)})
+        problems = [p for p in problems if new(p)]
+    return problems, checked, sc
 
 
 # Output that does not depend on the user's git configuration (prefixes, quoting, colors).
@@ -2491,6 +2693,7 @@ def _rank(p: Problem) -> int:
 
 def render(problems: list[Problem], checked: int, scope: Scope, offset: int, limit: int,
            fmt: str = "text") -> str:
+    full = fmt == "md"
     if scope.error:
         return f"check_refs: {scope.error}\n" + scope_line(scope).split("\n")[0]
     nfiles = scope.read
@@ -2498,8 +2701,8 @@ def render(problems: list[Problem], checked: int, scope: Scope, offset: int, lim
         why = ("nothing changed since then in scope or mentions the changed code"
                if scope.since else "no file in scope" if scope.how != "given" else
                "no file matches (files: globs or folders relative to the checkout)")
-        return f"check_refs: {why}\n" + scope_line(scope)
-    sline = scope_line(scope)
+        return f"check_refs: {why}\n" + scope_line(scope, full)
+    sline = scope_line(scope, full)
     # The same mention with the same problem in one file: once, with its lines.
     # One row per mention on a line: the message with a hint (is at / called at) first.
     best: dict[tuple, Problem] = {}

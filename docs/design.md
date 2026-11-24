@@ -214,11 +214,16 @@ section. Unknown keys are reported, not ignored silently.
    and members, wrong parameter lists, missing files, moved lines. Library types, placeholders,
    examples, negated mentions, other languages' snippets and archive folders are left alone.
    Scope: the files named, else `[check_refs] files`, else what agents read (`CLAUDE.md`,
-   `AGENTS.md`, `.claude/**`, `.github/**`, `README*.md`); records (audits, fix write-ups)
-   describe the code of their day and are read only when named. The output says the scope
-   and how many Markdown files it left out. `since=REF`: from the merge base with HEAD to the
-   working tree, the docs changed and those that name a changed `.java` file or its types as
-   code (backticks, `X.java`, `X#`, `X.m(`), keeping in the latter only those mentions.
+   `AGENTS.md` and the `.md` files they name, `.claude/**`, `.github/**`, `README*.md`,
+   folders with a `SKILL.md`; not third-party READMEs, nor a link to a file already read);
+   records (audits, fix write-ups) describe the code of their day and are read only when
+   named. The output says the scope and how many Markdown files it left out. `since=REF`:
+   from the merge base with HEAD to the working tree, the docs changed (their edited lines)
+   and those that name a changed `.java` file or its types as code (backticks, `X.java`,
+   `X#`, `X.m(`; a name several files have, with its folder or package), keeping in the
+   latter only those mentions. A `:N` alone after a path is that file's line when nothing
+   in between names another type and it is in the same sentence or cell; else git must show
+   the doc's version had a specific name there; same-named files are told apart by git.
    A line number is checked against the names of its own part of the line (the name glued
    to it, else its parentheses, clause or table cell; a name after another path or a bare
    `:N` is that one's), at any of the lines listed with it (`:40,42-43`, `:12 + 80`);

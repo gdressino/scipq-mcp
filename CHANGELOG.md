@@ -7,12 +7,17 @@ version and date when releasing.
 
 ### Added
 
-- `check_refs(since=…)`: a commit or branch (`HEAD`, `main`); of the scope, only the docs
-  changed since its merge base with HEAD (uncommitted changes included) and those that
-  mention, as code, a `.java` file changed since then (in those, only those mentions); says
-  which docs out of the scope mention the changed code. CLI: `check-refs --since REF`.
+- `check_refs(since=…)`: a commit or branch (`HEAD`, `main`); of the scope, the docs
+  changed since its merge base with HEAD (uncommitted changes included), only on their
+  edited lines (the older problems are counted), and those that mention, as code, a `.java`
+  file changed since then (only those mentions; a name several files have, such as
+  `Config.java`, only with its folder or package). It lists the docs read for those
+  mentions and the docs out of the scope that mention the changed code (by folder when
+  many, in full with `format="md"`). CLI: `check-refs --since REF`.
 - `init-config` proposes a `[check_refs]` section: the default scope, and the folders with
-  Markdown outside it, those mostly named by date or ticket marked as likely records.
+  Markdown outside it, those mostly named by date or ticket or in a log folder (`logs/`,
+  `journal/`…) marked as likely records, the folder holding `skills/*/SKILL.md` as one agent
+  bundle, and no generated output folders.
 
 - `impact` says where the call chain is handed to a library: overrides of library methods
   it reaches (listeners, `run()`, a servlet's `service()`, Vaadin's `onAttach`…), with where
@@ -49,13 +54,19 @@ version and date when releasing.
 ### Changed
 
 - `check_refs` reads by default only what agents read to work: `CLAUDE.md` and `AGENTS.md`
-  in any folder, `.claude/**/*.md`, `.github/**/*.md` and `README*.md`, instead of every
-  Markdown file of the checkout. A project sets its own scope with `[check_refs] files`
+  in any folder and the `.md` files they name (links, `@imports`, paths), `.claude/**/*.md`,
+  `.github/**/*.md`, `README*.md` and folders with a `SKILL.md`, instead of every Markdown
+  file of the checkout; READMEs of third-party code (under `vendor/`, `node_modules/`, or
+  with a LICENSE of their own inside a source tree) and a second link to a file already
+  read are left out. A project sets its own scope with `[check_refs] files`
   (globs or folders; it replaces the default) in `.scipq.toml` or its `[[project]]` entry;
   `files` in the call still checks any doc. The output's `scope:` line says which set was
   read and from where, and how many other Markdown files were not (and how many are under
-  archive folders or excluded). Archive folders are left out of a configured scope too,
-  unless a glob names them.
+  archive folders or excluded). Archive folders are left out of any scope, the call's
+  `files` too, unless a glob names them.
+- `check_refs` globs follow the usual rules: `*` and `?` stay within a folder, `**` crosses
+  folders (`doc/*.md` no longer takes `doc/logs/*.md`); a folder, or `dir/*`, in `exclude`
+  leaves out everything under it.
 - `check_refs` binds names to line numbers more finely. A name after an arrow, a
   preposition ("de X (File:N)") or before a parenthesis that goes on in prose still names
   the line but never makes the doc "wrong in its own version"; a member written alone in

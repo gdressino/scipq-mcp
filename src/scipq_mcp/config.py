@@ -371,17 +371,21 @@ def _check_refs_template(md_folders) -> str:
     with Markdown out of it (those mostly named by date look like records)."""
     lines = ["# [check_refs]   # the docs check_refs reads when the call names none",
              '# files = ["**/CLAUDE.md", "**/AGENTS.md", ".claude/**/*.md", ".github/**/*.md",',
-             '#          "**/README*.md"]   # the default (what agents read); this list '
-             "replaces it"]
+             '#          "**/README*.md"]   # globs or folders; this list replaces the default',
+             "#   (the default: what agents read, these and the .md files CLAUDE.md or AGENTS.md",
+             "#   name, and folders with a SKILL.md). * stays in its folder, ** crosses folders."]
     if md_folders:
         lines.append("#   Markdown out of it here (add the folders whose docs agents follow):")
-        for folder, n, dated in md_folders:
+        for folder, n, rec, kind in md_folders:
             where = "the checkout's root" if folder == "." else f'"{folder}"'
-            rec = (f", {dated} named by date or ticket: records? leave them out"
-                   if dated * 2 > n else f", {dated} named by date or ticket" if dated else "")
-            lines.append(f"#   {where}: {n} .md file{'s' if n != 1 else ''}{rec}")
-    lines += ['# exclude = ["docs/audits/**"]   # never read, not even when files names them',
-              '# other_versions = ["v4"]   # words a doc writes before a path of another branch']
+            looks = f"{rec} look{'s' if rec == 1 else ''} like records"
+            note = (f", {looks} (by date, ticket or a log folder): leave them out?"
+                    if kind == "records" else ", next to skills/: an agent bundle"
+                    if kind == "bundle" else f", {looks}" if rec else "")
+            lines.append(f"#   {where}: {n} .md file{'s' if n != 1 else ''}{note}")
+    lines += ['# exclude = ["docs/audits"]   # never read, not even when files names them',
+              '# other_versions = ["v4"]   # e.g.: words a doc writes before a path of another '
+              "branch"]
     return "\n".join(lines)
 
 

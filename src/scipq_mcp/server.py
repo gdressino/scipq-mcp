@@ -491,10 +491,10 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
             description="Globs or folders of the docs to check instead of the scope (any doc: "
                         "a record, a plan). Default: the scope, see below")] = None,
         since: Annotated[str, Field(
-            description="A commit or branch (HEAD, main): of the scope, only the docs changed "
-                        "since its merge base with HEAD and those that mention .java files "
-                        "changed since then (uncommitted changes included); in the latter, only "
-                        "those mentions")] = "",
+            description="A commit or branch (HEAD, main): of the scope, the docs changed since "
+                        "its merge base with HEAD (uncommitted changes included; only their "
+                        "edited lines and mentions of changed code) and those that mention "
+                        ".java files changed since then (only those mentions)")] = "",
         exclude: Annotated[list[str] | None, Field(
             description="Globs to leave out, added to [check_refs] exclude of "
                         ".scipq.toml")] = None,
@@ -508,13 +508,16 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         overload has, missing files, and line numbers that no longer fall in the symbol named
         next to them; counts by kind, then by file.
         Scope: without files, the files agents read to work: CLAUDE.md and AGENTS.md (any
-        folder), .claude/**/*.md, .github/**/*.md and README*.md. A project opts in to more or
-        fewer with `[check_refs] files = ["docs/guides", "**/CLAUDE.md", …]` (globs or
-        folders; it replaces the default) in .scipq.toml at the checkout root, or in its
-        [[project]] entry of ~/.config/scipq/config.toml. The output's `scope:` line says
-        which set was read and how many other .md files were not.
+        folder) and the .md files they name, .claude/**/*.md, .github/**/*.md, README*.md and
+        folders with a SKILL.md (not archive folders, third-party READMEs, or a link to a file
+        already read). A project opts in to more or fewer with `[check_refs] files =
+        ["docs/guides", "**/CLAUDE.md", …]` (globs or folders relative to the checkout: *
+        stays in its folder, ** crosses folders; it replaces the default) in .scipq.toml at
+        the checkout root, or in its [[project]] entry of ~/.config/scipq/config.toml. The
+        output's `scope:` line says which set was read and how many other .md files were not.
         When: after changing code, since="HEAD" (or the branch you started from) finds the
-        docs in scope your change left wrong; before committing a doc, files=[that doc];
+        docs in scope your change left wrong, and lists the docs out of it that mention the
+        changed code (a name several files have counts only with its folder or package); before committing a doc, files=[that doc];
         before relying on an older doc's line numbers or names, files=[that doc].
         In a git checkout, line numbers are followed from the version the doc was written
         against. What to do: "line N is now M" (the code only moved): fix the number;

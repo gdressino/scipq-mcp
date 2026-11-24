@@ -86,12 +86,17 @@ def test_init_config_suggests_a_check_refs_scope(tmp_path):
                 "docs/archive/old.md", "notes.md", "docs/guides/v2-2026.md"):
         write(str(root / rel), "x\n")
     from scipq_mcp.checkrefs import md_folders
-    assert md_folders(str(root)) == [("docs/fixes", 4, 3), ("docs/guides", 3, 0), (".", 1, 0)]
+    for rel in ("tools/skills/a/SKILL.md", "tools/agents/x.md", "tools/commands/y.md",
+                "doc/logs/Design_x.md", "doc/logs/Bug_y.md"):
+        write(str(root / rel), "x\n")
+    assert md_folders(str(root)) == [("docs/fixes", 4, 3, "records"), ("docs/guides", 3, 0, ""),
+                                     ("doc/logs", 2, 2, "records"), ("tools", 2, 0, "bundle"),
+                                     (".", 1, 0, "")]
     text = CFG.repo_template([], detected=False, md_folders=md_folders(str(root)))
     import tomllib
     tomllib.loads(text)
-    assert '#   "docs/fixes": 4 .md files, 3 named by date or ticket: records? leave them ' \
-        'out' in text
+    assert '#   "docs/fixes": 4 .md files, 3 look like records (by date, ticket or a log ' \
+        'folder): leave them out?' in text and '#   "tools": 2 .md files, next to skills/: an agent bundle' in text
     assert '#   "docs/guides": 3 .md files\n' in text and "the checkout's root: 1 .md file" in text
     assert '# files = ["**/CLAUDE.md", "**/AGENTS.md"' in text
 

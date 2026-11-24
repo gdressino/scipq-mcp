@@ -447,10 +447,13 @@ svc = Client.__init__(url=None)  # Python: Entity.get_connection(x)
         fh.write("`Entity#nothing`; next to it: `../tools/Probe.java`\n")
     with open(os.path.join(sample_copy, "docs", "b.txt"), "w") as fh:
         fh.write("`Entity#nothing`\n")
-    only = svc.check_refs(files=["docs"])
-    assert "in 2 files" in only and "Entity has no member nothing" in only   # archive too
-    assert "Entity has no member ancient" in only
-    assert "scope: the files given (docs): 2 files" in only
+    only = svc.check_refs(files=["docs"])           # archive folders: only when named
+    assert "in 1 files" in only and "Entity has no member nothing" in only
+    assert "ancient" not in only and "scope: the files given (docs): 1 file; not checked: 1 " \
+        "under archive folders (archive/, old/…) (name them in files)" in only, only
+    assert "Entity has no member ancient" in svc.check_refs(files=["docs/archive"])
+    assert "in 1 files" in svc.check_refs(files=["docs/*.md"])     # * stays in its folder
+    assert "in 2 files" in svc.check_refs(files=["docs/**/*.md", "docs/archive/*.md"])
     with open(os.path.join(sample_copy, ".scipq.toml"), "w") as fh:
         fh.write('[check_refs]\nfiles = ["*.md", "docs"]\nexclude = ["docs/**"]\n')
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
@@ -882,6 +885,35 @@ def test_check_refs_history_follows_doc_renames_and_the_parent_version(sample_co
     assert f"{s}:20" not in out
 
 
+def test_check_refs_default_scope_reads_what_agents_read(sample_copy, tmp_path):
+    import os
+    from scipq_mcp.service import Service
+
+    def put(rel, text):
+        os.makedirs(os.path.dirname(os.path.join(sample_copy, rel)) or sample_copy, exist_ok=True)
+        with open(os.path.join(sample_copy, rel), "w") as fh:
+            fh.write(text)
+    put("AGENTS.md", "Read [the ADR](doc/adr.md) and @doc/steps.md first; not doc/other.md.\n"
+                     "- `Entity#a1`\n")
+    os.symlink("AGENTS.md", os.path.join(sample_copy, "CLAUDE.md"))   # one file, read once
+    put("doc/adr.md", "- `Entity#a2`\n")
+    put("doc/steps.md", "- `Entity#a3`\n")
+    put("doc/logs/x.md", "- `Entity#a4`\n")
+    put("tools/skills/fmt/SKILL.md", "- `Entity#a5`\n")
+    put("tools/skills/fmt/references/r.md", "- `Entity#a6`\n")
+    put("app/src/main/webapp/lib/LICENSE", "MIT\n")
+    put("app/src/main/webapp/lib/README.md", "- `Entity#a7`\n")       # someone else's
+    put("sdk/LICENSE", "MIT\n")
+    put("sdk/README.md", "- `Entity#a8`\n")                           # our own package
+    out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs()
+    for x in ("a1", "a2", "a3", "a5", "a6", "a8"):
+        assert f"Entity has no member {x}" in out, (x, out)
+    assert "a4" not in out and "a7" not in out and "other.md" not in out
+    assert out.count("Entity has no member a1") == 1
+    assert ": 6 files (2 named in CLAUDE.md or AGENTS.md, 2 in skill folders); not checked: " \
+        "1 other .md file of the checkout" in out and "; 1 README of third-party code" in out, out
+
+
 def test_check_refs_since_a_commit(sample_copy, tmp_path):
     import os
     from scipq_mcp.service import Service
@@ -891,33 +923,41 @@ def test_check_refs_since_a_commit(sample_copy, tmp_path):
         with open(os.path.join(sample_copy, rel), "w") as fh:
             fh.write(text)
     put("CLAUDE.md", "- `Entity#nothing1`; and `Service#nothing2`\n")    # cites Entity
-    put(".github/x.md", "- Entity, in prose\n- `Service#nothing3`\n")   # not as code
-    put("AGENTS.md", "- fine\n")
+    put(".github/x.md", "- Entity, in prose\n- `Service#nothing3`; `Registry#nothing7`\n")
+    put(".claude/s.md", "- `com.example.model.Registry#nothing6`\n")    # Registry, qualified
+    put("AGENTS.md", "- `Service#old1`\n- fine\n")
     put("NOTES.md", "- `Entity#nothing5`\n")                           # out of scope
+    put("tools/other/Registry.java", "class Registry {}\n")            # a second Registry
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs(since="HEAD")
     assert "check_refs: since needs a git checkout" in out, out
     _git(sample_copy, "init", "-q")
     _git(sample_copy, "add", "-A")
     _git(sample_copy, "commit", "-qm", "a", date="2026-01-02T10:00:00Z")
     svc = Service(sample_copy, cache_dir=str(tmp_path / "c"))
-    assert "check_refs: since: 'nope' is not a commit here\nscope: the default, files agents " \
-        "read (CLAUDE.md, AGENTS.md, .claude/**, .github/**, README*.md): 3 files" \
-        in svc.check_refs(since="nope")
+    nope = svc.check_refs(since="nope")
+    assert nope.startswith("check_refs: since: 'nope' is not a commit here\nscope: the "
+                           "default, files agents read (") and "): 4 files" in nope, nope
     out = svc.check_refs(since="HEAD")
     assert "check_refs: nothing changed since then in scope or mentions the changed code" \
         in out and "0 .java files changed" in out, out
-    entity = os.path.join(sample_copy, "core/src/main/java/com/example/model/Entity.java")
-    with open(entity, "a") as fh:
-        fh.write("// touched\n")
-    put("AGENTS.md", "- `Service#nothing4`\n")                         # changed: all of it
+    model = os.path.join(sample_copy, "core/src/main/java/com/example/model")
+    for f in ("Entity.java", "Registry.java"):
+        with open(os.path.join(model, f), "a") as fh:
+            fh.write("// touched\n")
+    put("AGENTS.md", "- `Service#old1`\n- `Service#nothing4`\n")      # line 2 edited
     out = svc.check_refs(since="HEAD")
     assert "Entity has no member nothing1" in out and "nothing4" in out, out
-    assert "nothing2" not in out and "nothing3" not in out and "nothing5" not in out
-    assert "since HEAD (merge base " in out and "): 1 .java file changed; read 1 doc of the " \
-        "scope changed since then and 1 doc that mentions the changed code" in out
+    assert "nothing6" in out                                  # written with its package
+    for x in ("nothing2", "nothing3", "nothing5", "nothing7", "old1"):
+        assert x not in out, x
+    assert "since HEAD (merge base " in out and "): 2 .java files changed; read 1 doc of the " \
+        "scope changed since then (the lines edited, and mentions of the changed code) and " \
+        "2 docs that mention the changed code (only those mentions): .claude/s.md, CLAUDE.md" \
+        in out, out
+    assert "1 older problem of the changed docs, on lines not edited since then, not shown" in out
     assert "1 .md file out of scope mentions the changed code: NOTES.md" in out
-    assert "check_refs: 3 mentions in 2 files;" in out
-    assert "scope: the default, files agents read" in out and ": 3 files; not checked: 1 " \
+    assert "check_refs: 5 mentions in 3 files;" in out
+    assert "scope: the default, files agents read" in out and ": 4 files; not checked: 1 " \
         "other .md file of the checkout (set" in out
     out = svc.check_refs(files=["NOTES.md", ".github"], since="HEAD")
     assert "nothing5" in out and "nothing3" not in out, out

@@ -1308,7 +1308,7 @@ class Service:
                     scope = CR.Scope(how="default", globs=tuple(globs))
                 problems, checked, scope = CR.check(
                     g, nav.ws.root, globs, list(exclude or []) + list(st.check_refs_exclude),
-                    self.cache_dir, skip_archives=not files,
+                    self.cache_dir, skip_archives=True,
                     other_versions=st.check_refs_versions, scope=scope, since=since.strip())
             out = render.index_note(stats) + CR.render(problems, checked, scope, offset,
                                                        limit, fmt)
