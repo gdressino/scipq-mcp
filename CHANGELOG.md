@@ -27,6 +27,21 @@ version and date when releasing.
 
 ### Fixed
 
+- `check_refs` gives the same result in every run: of several files with the same name,
+  the one checked depended on Python's hash order; now git decides (the one whose version
+  the doc was written against had the name there).
+- `check_refs` binds a line number alone after a path (`` `X.java:12`, `:30` ``) to the right
+  file more often. A project type named right before it (`Engine.run :587`, `` `T.m`:237 ``)
+  sends it to that type's file, a library's type ends the run; a parenthesis with its own list
+  of lines (`(X.java:74, :853, :866)`) ends it; after `main X.java:N` (or `MAIN <sha>:path`)
+  they are all main's. Far from its path (another sentence or table cell) it is reported only
+  when git shows the doc's version had the name at that line, and never on a name like
+  `get`, `add` or `setValue`. A type further back in the sentence (a call the doc describes)
+  is not taken for the line's file.
+- `check_refs` no longer places a blank or brace-only line by its text, no longer gives
+  "now at" for names like `add` or `get`, does not take an older version of the file for a
+  name written further from the line number, and reads a path cut at a `/` over two lines
+  whole. The count per file is of problems, as in the header.
 - `impact` rows show the same representative call in any build of the index.
 - `check_refs` reads the versions of the docs one at a time (peak memory on a large
   checkout from 1.4 GB to about 450 MB).

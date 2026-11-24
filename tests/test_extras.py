@@ -797,6 +797,47 @@ def test_check_refs_reads_line_lists_getters_and_neighbouring_numbers(sample_cop
     assert "line 4 no longer mentions getState" in out                 # the line before
     assert "line 23 no longer mentions setState" in out                # `add` names nothing here
 
+def test_check_refs_continuations_bind_to_their_file(sample_copy, tmp_path):
+    # The doc was written against an Entity.java without its class javadoc (3 lines fewer:
+    # setState at 11, getState at 15, findById at 19); a `:N` alone is the path's only when
+    # nothing says otherwise, and git must confirm it when it is far from the path.
+    import os
+    import shutil
+    import pytest
+    from scipq_mcp.service import Service
+    if shutil.which("git") is None:
+        pytest.skip("no git")
+    entity = os.path.join(sample_copy, "core/src/main/java/com/example/model/Entity.java")
+    with open(entity) as fh:
+        now = fh.read()
+    lines = now.split("\n")
+    with open(entity, "w") as fh:
+        fh.write("\n".join(lines[:2] + lines[5:]))
+    e = "core/src/main/java/com/example/model/Entity.java"
+    with open(os.path.join(sample_copy, "NOTES.md"), "w") as fh:
+        fh.write(f"- `getState()` (`{e}:15`); `Session.find` :4 calls the finder.\n"  # 1
+                 f"- `{e}:11` sets it, via `Session.find(1)` luego, and `findById` (:19).\n"
+                 f"- `getState()` (`{e}:15`) reads it. Later `get` (:19) too.\n"      # 3
+                 f"- (main `{e}:11` `setState`, :15 `getState`) was other code.\n"
+                 f"- (`{e}:11`, :15 getState) and then `findById` :19 elsewhere.\n"    # 5
+                 f"- `getState()` (`core/src/main/java/com/example/\n"
+                 f"  model/Entity.java:15`) reads it.\n")
+    _git(sample_copy, "init", "-q")
+    _git(sample_copy, "add", "-A")
+    _git(sample_copy, "commit", "-qm", "a", date="2026-01-02T10:00:00Z")
+    with open(entity, "w") as fh:
+        fh.write(now)
+    os.utime(entity, (1_700_000_000, 1_700_000_000))
+    _git(sample_copy, "commit", "-qam", "b", date="2026-01-05T10:00:00Z")
+    out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs(files=["NOTES.md"])
+    # 1: Session's line 4 is fine; 3: far from the path, and only `get`; 5: past its
+    # parenthesis; 6: a path cut at a "/" over two lines
+    assert f"NOTES.md (3)\n  line 1 ×4 (also 3, 5, 6)  {e}:15  — line 15 is now 18" in out, out
+    assert f"line 2  {e}:19  — line 19 is now 22" in out             # a call described, not X's
+    assert ":4" not in out and "line 4  " not in out                   # line 4: main's
+    assert out.count(":19  —") == 1
+
+
 def test_check_refs_history_follows_doc_renames_and_the_parent_version(sample_copy, tmp_path):
     # The doc is committed together with the code change it was written before (its line
     # numbers are the parent's), then moved to another folder.
