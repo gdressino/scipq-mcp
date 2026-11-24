@@ -117,6 +117,7 @@ class Service:
         check = ws.start_freshness() if self.freshness == "full" else None
         texts, sources = [], set()
         nav = Navigator(ws)
+        nav.library_overloads = lambda sym: self._library_overload_params(sym, ws.root)
         for body in bodies:
             try:
                 text, srcs = body(nav)
@@ -280,6 +281,23 @@ class Service:
             raise QueryError(str(e)) from e
         except (CacheError, OSError, sqlite3.Error):
             return None
+
+    def _library_overload_params(self, symbol: str, root: str) -> list[tuple[str, tuple | None]]:
+        """Every overload of a library method or constructor, numbered as SCIP does, with its
+        parameter types, from the sources jar ([] when they cannot be read)."""
+        if not S.is_method(symbol):
+            return []
+        try:
+            d = self._library(symbol, root)
+        except QueryError:
+            return []
+        if d is None or d.member is None or not d.overloads:
+            return []
+        _path, types = L.class_path_of(symbol)
+        tvars = L._type_variables(" ".join(d.type_declaration.split()), types[-1]) \
+            if types else set()
+        return [(S.overload_symbol(symbol, k), L.param_types(m.declaration, tvars))
+                for k, m in enumerate(d.overloads)]
 
     def _b_definition(self, symbol: str) -> Body:
         def body(nav: Navigator):
@@ -516,8 +534,7 @@ class Service:
         lib = self._library(sym, nav.ws.root)  # LibraryBusy becomes a QueryError
         if lib is None or lib.member is None or not lib.overloads:
             return []
-        owner, name = S.parent(sym), S.name_of(sym)
-        syms = [f"{owner}{name}({'+' + str(k) if k else ''})." for k in range(len(lib.overloads))]
+        syms = [S.overload_symbol(sym, k) for k in range(len(lib.overloads))]
         uses = nav._references_many(set(syms))
         return [X.FamilyMember(None, s, "this" if s == sym else "overload", uses.get(s, []),
                                m.declaration, f"{lib.lib.coordinates} {lib.lib.entry}:{m.line}")

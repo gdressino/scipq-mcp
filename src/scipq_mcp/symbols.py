@@ -207,6 +207,11 @@ def parent(symbol: str) -> str:
     return format_descriptors(d[:-1]) if len(d) > 1 else ""
 
 
+def overload_symbol(method: str, k: int) -> str:
+    """The k-th overload (SCIP's numbering: (), (+1), (+2)…) of the method `method` names."""
+    return f"{parent(method)}{_format_name(name_of(method))}({'+' + str(k) if k else ''})."
+
+
 def name_of(symbol: str) -> str:
     d = parse(symbol)
     return d[-1].name if d else symbol
@@ -276,20 +281,68 @@ def top_level_type_name(symbol: str) -> str:
 # --- user queries ---------------------------------------------------------------------------
 
 _QUERY_TOKEN = re.compile(r"([^#./()\s]+)(\((\+\d+)?\))?")
+_TRAILING_PARAMS = re.compile(r"\(([^()]*)\)\s*$")
+PRIMITIVES = frozenset({"boolean", "byte", "char", "short", "int", "long", "float", "double"})
 
 
 @dataclass(frozen=True, slots=True)
 class Query:
     """A name typed by a user or an agent: ``Entity``, ``Entity#setState``,
-    ``com.example.model.Entity.setState()``, ``setState(+1)``, ``Account.Builder``,
-    ``Account#<init>``. Matching is on the trailing descriptor names; package separators
-    may be '/', '.' or '#'. A trailing ``()`` restricts to methods (any overload), ``(+N)`` to
-    one overload."""
+    ``com.example.model.Entity.setState()``, ``setState(+1)``, ``setState(State)``,
+    ``Account.Builder``, ``Account#<init>``. Matching is on the trailing descriptor names;
+    package separators may be '/', '.' or '#'. A trailing ``(+N)`` is SCIP's overload number;
+    ``()`` and ``(Type, …)`` are parameter lists, as in Java (see Navigator.find)."""
 
     raw: str
     names: tuple[str, ...]
     method_only: bool
-    disambiguator: str | None  # None = any overload
+    disambiguator: str | None  # SCIP's overload number when written: "+1"
+    # The parameter list written, as erased simple types ("String", "int[]"; None for a type
+    # variable: it matches any type); () for "m()"; None when none was written.
+    params: tuple | None = None
+
+
+def written_params(text: str) -> tuple:
+    """`String, Map<K, V>, int... rest` -> ("String", "Map", "int[]"): erased simple types,
+    parameter names, `final` and annotations left out; a type variable (`T`) is None."""
+    chunks, depth, cur = [], 0, ""
+    for ch in text:
+        if ch in "<([":
+            depth += 1
+        elif ch in ">)]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            chunks.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip() or chunks:
+        chunks.append(cur)
+    out = []
+    for c in chunks:
+        c = re.sub(r"@\s*[\w$.]+(\s*\([^()]*\))?", " ", c)
+        while "<" in c:
+            d = re.sub(r"<[^<>]*>", "", c)
+            if d == c:
+                break
+            c = d
+        c = re.sub(r"\s*\[\s*\]", "[]", c.replace("...", "[]"))
+        words = [w for w in c.split() if w != "final"]
+        if len(words) >= 2 and re.fullmatch(r"[a-z_$][\w$]*", words[-1]) and \
+                words[-1] not in PRIMITIVES:
+            words.pop()  # the parameter's name
+        typ = "".join(words)
+        dims = typ.count("[]")
+        base = typ.replace("[]", "").rsplit(".", 1)[-1]
+        out.append(None if re.fullmatch(r"[A-Z][0-9]?", base) else base + "[]" * dims)
+    return tuple(out)
+
+
+def same_params(written: tuple, declared: tuple | None) -> bool:
+    """A written parameter list against a declared one (libsrc.param_types): same length, and
+    each type the same where neither is a type variable."""
+    return declared is not None and len(written) == len(declared) and all(
+        w is None or d is None or w == d for w, d in zip(written, declared))
 
 
 def looks_like_symbol(text: str) -> bool:
@@ -302,6 +355,11 @@ def looks_like_symbol(text: str) -> bool:
 
 def parse_query(text: str) -> Query:
     t = text.strip().replace("`", "")
+    params = None
+    m = _TRAILING_PARAMS.search(t)
+    if m and not re.fullmatch(r"\s*\+\d+\s*", m.group(1)):
+        params = written_params(m.group(1))
+        t = t[:m.start()] + "()"
     names, method_only, disamb = [], False, None
     pos = 0
     for m in _QUERY_TOKEN.finditer(t):
@@ -311,11 +369,12 @@ def parse_query(text: str) -> Query:
         pos = m.end()
         if m.group(2):
             method_only = True
-            disamb = m.group(3)  # None for "()": any overload
+            disamb = m.group(3)  # None for "()": a parameter list
         else:
             method_only, disamb = False, None
     # Only the parentheses of the last token count.
-    return Query(text, tuple(names), method_only, disamb)
+    return Query(text, tuple(names), method_only, disamb,
+                 params if method_only and disamb is None else None)
 
 
 def matches(symbol: str, q: Query) -> bool:

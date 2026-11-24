@@ -3,6 +3,23 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Changed
+
+- A name written with a parameter list picks overloads as Java reads it, in every tool:
+  `Type#m()` is the overload without parameters (SCIP numbers it `m(+N)` when it is not the
+  first; the `--` line says so), and `Type#m(String, int)` the one taking those types
+  (simple or qualified names, generics and parameter names ignored, a type variable matches
+  anything; library overloads are read from their sources jar, used here or not). Before,
+  `m()` meant any overload. A list no overload takes lists the overloads. `m()` with no
+  overload free of parameters still means the method, and `m(+N)` is SCIP's numbering.
+
+### Fixed
+
+- `overloads` of a library constructor: the symbols were built without SCIP's backquotes
+  (`` `<init>` ``), so their uses were not found.
+
 ## 0.8.0 — 2026-11-24
 
 ### Added

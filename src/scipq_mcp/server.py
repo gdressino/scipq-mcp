@@ -41,9 +41,11 @@ Results reflect the LAST COMPILATION. Answers end with a WARNING (and the task t
 when sources changed after it; a file that never compiled is not indexed. Paths are relative
 to the project root; lines are 1-based.
 
-Symbols can be given as names: `Account`, `Account#setState`, `Account.setState()`,
-`com.example.Account`, `setState(+1)` (one overload), `Account#<init>` (constructor), or as
-the exact SCIP symbol printed by find_symbols/definition (e.g. `com/example/Account#setState().`).
+Symbols can be given as names: `Account`, `Account#setState`, `com.example.Account`,
+`Account#<init>` (constructor); with overloads, `pick(String, int)` (by parameter types),
+`pick()` (the one without parameters) or `pick(+1)` (SCIP's numbering, in declaration order:
+answers print `pick()` for SCIP's first overload, whatever it takes); or as the exact SCIP
+symbol printed by find_symbols/definition (e.g. `com/example/Account#setState().`).
 JDK and library symbols work too (`PersistenceManager#evict`). A unique name is resolved and
 the answer starts with `-- name → symbol`; an ambiguous name returns the candidates.
 

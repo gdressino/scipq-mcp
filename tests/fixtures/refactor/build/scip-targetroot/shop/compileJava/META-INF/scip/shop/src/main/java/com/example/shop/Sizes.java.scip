@@ -1,0 +1,51 @@
+≈)
+.shop/src/main/java/com/example/shop/Sizes.javajava/B
+java/util/Bjava/util/ArrayList#Bjava/B
+java/util/Bjava/util/Collection#Bjava/B
+java/util/Bjava/util/HashSet#Bjava/B
+java/util/Bjava/util/List#Bjava/B
+java/util/Bjava/util/Set#B+com/example/shop/Sizes#B	Z	0 ."com/example/shop/Sizes#`<init>`().B	1com/example/shop/Sizes#Box#B
+Z
+ 2&com/example/shop/Sizes#Box#`<init>`().B
+8"com/example/shop/Sizes#Box#size().BZ 	java/util/List#Bjava/lang/String#B1com/example/shop/Sizes#names.B$R9+!java/util/ArrayList#`<init>`(+1).B+4java/util/Set#Bjava/lang/String#B0com/example/shop/Sizes#tags.B"R5'java/util/HashSet#`<init>`().B)0%com/example/shop/Sizes#Box#B/com/example/shop/Sizes#box.BR&0&com/example/shop/Sizes#Box#`<init>`().B #7!com/example/shop/Sizes#empties().BZ java/util/Collection#Bjava/lang/String#B%local 0B'(R(java/util/ArrayList#B*3java/lang/String#B4:local 1B<=R*=local 2BR&'com/example/shop/Sizes#names.B java/util/List#size().Blocal 3BR%&com/example/shop/Sizes#tags.Bjava/util/Set#size().Blocal 4BR$%com/example/shop/Sizes#box.B,"com/example/shop/Sizes#Box#size().Blocal 5BR"local 0B&java/util/Collection#size().Blocal 6BR"local 1B%java/util/ArrayList#size().Blocal 7BR()com/example/shop/Sizes#items().B java/util/List#size().B local 8BR+'java/util/HashSet#`<init>`().Bjava/lang/Integer#B 'local 9BR&local 8B#java/util/HashSet#size().Blocal 10BR)$java/lang/String#length().B!local 2Blocal 3Blocal 4Blocal 5Blocal 6B#$local 7B()local 9B-.local 10B23java/util/List#B!java/lang/String#B!	5com/example/shop/Sizes#items().B!Z!# 'com/example/shop/Sizes#names.B"1com/example/shop/Sizes#Bag#B%Z%/ 2&com/example/shop/Sizes#Bag#`<init>`().B%java/B%!
+java/util/B%"&!java/util/AbstractList#B%'3java/lang/String#B%4:java/lang/Override#B&	java/lang/String#B'7!com/example/shop/Sizes#Bag#get().B'Z&) 	local 11B'R'java/lang/Override#B+	8"com/example/shop/Sizes#Bag#size().B,Z+. 	è
+com/example/shop/Sizes#Osize() on collections of several library types, and on a type that is not one. (2Sizes:"java*public class SizesF
+"com/example/shop/Sizes#`<init>`().(	2<init>:"java*public Sizes()>
+com/example/shop/Sizes#Box#(2Box:"java*static class BoxA
+&com/example/shop/Sizes#Box#`<init>`().(	2<init>:"java*Box()@
+"com/example/shop/Sizes#Box#size().(2size:"java*
+int size()R
+com/example/shop/Sizes#names.(2names:("java* private final List<String> namesN
+com/example/shop/Sizes#tags.(2tags:&"java*private final Set<String> tagsC
+com/example/shop/Sizes#box.(2box:"java*private final Box boxr
+!com/example/shop/Sizes#empties().(2empties:B"java*:boolean empties(Collection<String> c, ArrayList<String> a)M
+local 02c:"java*Collection<String> cB!com/example/shop/Sizes#empties().L
+local 12a:"java*ArrayList<String> aB!com/example/shop/Sizes#empties().D
+local 2(=2x:"java*	boolean xB!com/example/shop/Sizes#empties().D
+local 3(=2y:"java*	boolean yB!com/example/shop/Sizes#empties().D
+local 4(=2z:"java*	boolean zB!com/example/shop/Sizes#empties().D
+local 5(=2w:"java*	boolean wB!com/example/shop/Sizes#empties().D
+local 6(=2v:"java*	boolean vB!com/example/shop/Sizes#empties().D
+local 7(=2u:"java*	boolean uB!com/example/shop/Sizes#empties().U
+local 8(=2local:"java*HashSet<Integer> localB!com/example/shop/Sizes#empties().D
+local 9(=2t:"java*	boolean tB!com/example/shop/Sizes#empties().E
+local 10(=2s:"java*	boolean sB!com/example/shop/Sizes#empties().H
+com/example/shop/Sizes#items().(2items:"java*List<String> items()à
+com/example/shop/Sizes#Bag#"
+java/util/AbstractList#"!
+java/util/AbstractCollection#"
+java/util/Collection#"
+java/lang/Iterable#"
+java/util/List#""
+java/util/SequencedCollection#(2Bag:5"java*-static class Bag extends AbstractList<String>A
+&com/example/shop/Sizes#Bag#`<init>`().(	2<init>:"java*Bag()ò
+!com/example/shop/Sizes#Bag#get()."#
+java/util/AbstractList#get()."
+java/util/List#get().(2get:*"java*"@Override
+public String get(int i)?
+local 112i:"java*int iB!com/example/shop/Sizes#Bag#get().ø
+"com/example/shop/Sizes#Bag#size()."*
+$java/util/AbstractCollection#size().""
+java/util/Collection#size()."
+java/util/List#size().(2size:#"java*@Override
+public int size()"java

@@ -64,3 +64,21 @@ def test_reference_search_for_types_skips_members():
     rx = re.compile(pat)
     assert rx.search(b"com/example/model/Entity#\x42")
     assert not rx.search(b"com/example/model/Entity#setState().\x42")
+
+
+def test_parameter_lists_in_queries():
+    q = S.parse_query("Overloaded#pick(Map<String, List<Integer>> m, final String... rest)")
+    assert q.names == ("Overloaded", "pick") and q.method_only
+    assert q.params == ("Map", "String[]") and q.disambiguator is None
+    assert S.parse_query("pick()").params == ()
+    assert S.parse_query("pick(+1)").params is None and S.parse_query("pick(+1)").disambiguator == "+1"
+    assert S.parse_query("pick").params is None
+    assert S.parse_query("a.b.Type#pick(java.lang.String, int[] xs, T)").params == (
+        "String", "int[]", None)
+    assert S.parse_query("Account#<init>(String)").names == ("Account", "<init>")
+    assert S.same_params(("String", None), ("String", "int"))
+    assert S.same_params(("Object",), (None,))     # a declared type variable
+    assert not S.same_params(("String",), ("String", "int"))
+    assert not S.same_params((), None)
+    assert S.overload_symbol("java/lang/Long#`<init>`().", 2) == "java/lang/Long#`<init>`(+2)."
+    assert S.overload_symbol("a/B#m(+3).", 0) == "a/B#m()."

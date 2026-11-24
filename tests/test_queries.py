@@ -219,3 +219,40 @@ def test_read_header_spans_lines(tmp_path):
                  "        int hi) implements Comparable<Range> {\n}\n")
     assert _read_header(str(p), 2) == ("public record Range( int lo, int hi) "
                                        "implements Comparable<Range>")
+
+
+def test_parameter_lists_pick_overloads(refactor_root):
+    nav = Navigator(Workspace(refactor_root))
+    base = "com/example/shop/Overloaded#pick"
+    # m() is the overload without parameters, also when SCIP numbers it (+1).
+    r = nav.resolve("Overloaded#pick()")
+    assert r.symbol == base + "(+1)." and "without parameters" in r.note
+    assert "SCIP's Overloaded#pick() is another one: public int pick(int n)" in r.note
+    assert nav.resolve("Overloaded#pick(int)").symbol == base + "()."
+    assert nav.resolve("Overloaded#pick(String s, int n)").symbol == base + "(+2)."
+    assert nav.resolve("Overloaded#pick(Map<String, List<Integer>>, String...)").symbol == \
+        base + "(+3)."
+    assert nav.resolve("Overloaded#pick(Map, String[])").symbol == base + "(+3)."
+    assert nav.resolve("Overloaded#pick(Object, long)").symbol == base + "(+4)."  # <T> pick(T, …)
+    r = nav.resolve("Overloaded#pick(int, int)")
+    assert r.symbol is None and "no overload of 'Overloaded#pick' takes (int, int)" in r.note
+    assert len(r.candidates) == 5
+    assert nav.resolve("Overloaded#pick").symbol is None        # no list: every overload
+    assert nav.resolve("Overloaded#pick(+1)").symbol == base + "(+1)."
+    assert [d.symbol for d in nav.find("pick()")] == [base + "(+1)."]
+    # m() without an overload free of parameters still means the method, whatever it takes.
+    assert nav.resolve("Units#m(String)").symbol == "com/example/shop/Units#m(+1)."
+    assert nav.resolve("Upper#of()").symbol == "com/example/shop/Upper#of()."
+
+
+@pytest.mark.skipif(not __import__("scipq_mcp.libsrc").libsrc.jdk_src_zip(),
+                    reason="no JDK src.zip on this machine")
+def test_parameter_lists_pick_library_overloads(refactor_root, tmp_path):
+    from scipq_mcp import libsrc as L
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"), library_roots=[L.jdk_src_zip()])
+    out = svc.definition("Map#of()")   # Map.of() in Overloaded; the list picks among 11+
+    assert out.startswith("-- Map#of() → java/util/Map#of(). (external, the overload without "
+                          "parameters)")
+    out = svc.definition("Map#of(Object, Object)")
+    assert "java/util/Map#of(+1)." in out.splitlines()[0]
+    assert "the overload taking (Object, Object)" in out.splitlines()[0]
