@@ -2186,8 +2186,8 @@ def _type_between(m, line: str, a: int, b: int, written: str, code: list):
             continue        # inside quoted code (`pm.get(Helper.id(o))`): not the subject
         name = t.group(1)
         gap = line[t.end():b]
-        pure = re.fullmatch(r"[\s`()]*" if t.group(2) else r"[\s`(]*(?:[\w-]+\s+)?", gap) \
-            is not None
+        pure = re.fullmatch(r"[\s`()]*" if t.group(2) else r"[\s`(]*(?:[\w-]+\s+[\s`(]*)?",
+                            gap) is not None
         if name == stem:
             out, close = "same", pure
             continue
