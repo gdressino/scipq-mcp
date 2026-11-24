@@ -1179,7 +1179,7 @@ def test_source_of_a_file_changed_after_its_compilation(sample_copy, tmp_path):
            "14–16)" in out, out
     assert "\n17      public void setState(int state) {\n19      }" in out.replace(
         "\n18          this.state = state;", "")
-    assert "may be shifted" in out                     # the warning says the lines are read now
+    assert "a line quoted from these files is read as it is now" in out
     assert "body (as it is now; compiled at 14–16, before the file changed):" in \
         svc.context("Entity#setState")
     # Gone from the file: the compiled lines, said to be what they are.
@@ -1188,3 +1188,51 @@ def test_source_of_a_file_changed_after_its_compilation(sample_copy, tmp_path):
     os.utime(path, (1_700_000_600, 1_700_000_600))
     out = svc.source("Entity#setState")
     assert "was not found in it as it is now: these are lines 14–16 of the current file" in out
+
+
+def _edit(root, rel, old, new, when):
+    import os
+    path = os.path.join(root, rel)
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    assert old in text, (rel, old)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text.replace(old, new, 1))
+    os.utime(path, (when, when))      # after its shard: changed since the compilation
+
+
+def test_source_in_changed_files_finds_constants_components_types_and_overloads(
+        refactor_root, sample_copy, tmp_path):
+    from scipq_mcp.service import Service
+    shop = "shop/src/main/java/"
+    # An enum constant, a line above it.
+    _edit(refactor_root, shop + "javax/jdo/annotations/VersionStrategy.java",
+          "public enum VersionStrategy {", "// moved\npublic enum VersionStrategy {", 1_700_000_500)
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    out = svc.source("VersionStrategy#VERSION_NUMBER")
+    assert "shown as it is now, at lines 5–5 (compiled at 4–4)" in out, out
+    # A type with annotations: they are part of it, as compiled.
+    _edit(refactor_root, shop + "com/example/shop/Order.java", "import javax.jdo.annotations",
+          "// moved\nimport javax.jdo.annotations", 1_700_000_500)
+    out = svc.source("com/example/shop/Order#")
+    assert "shown as it is now, at lines 16–37 (compiled at 15–36)" in out and \
+        "\n16  @PersistenceCapable" in out, out
+    # A deleted overload is not another one's body; the one left is found.
+    _edit(refactor_root, shop + "com/example/shop/Units.java",
+          "    public int m(String s) {\n        return s.length();\n    }\n", "", 1_700_000_500)
+    out = svc.source("Units#m(String)")
+    assert "was not found in it as it is now" in out, out
+    assert "shown as it is now" in svc.source("Units#m()")
+    # A record component.
+    _edit(sample_copy, "core/src/main/java/com/example/model/Point.java",
+          "public record Point", "// moved\npublic record Point", 1_700_000_500)
+    out = Service(sample_copy, cache_dir=str(tmp_path / "c2")).source("com/example/model/Point#x.")
+    assert "shown as it is now, at lines 5–5 (compiled at 4–4)" in out, out
+
+
+def test_members_of_a_class_inside_a_method_are_not_looked_for(tmp_path):
+    from scipq_mcp.extras import _locate_now
+    from scipq_mcp.queries import Definition, Location
+    from scipq_mcp.scip import Range
+    d = Definition("com/x/Foo#bar().Local#baz().", Location("Foo.java", Range(3, 4, 3, 7)), None)
+    assert _locate_now(str(tmp_path), d) == ("", None)

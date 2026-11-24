@@ -9,9 +9,11 @@ version and date when releasing.
 
 - `source` of a definition whose file changed after its compilation showed the current text
   at the compiled lines, which may hold other code by then: it finds the definition in the
-  current text (by its types, name and parameter types) and says where it is now and where
-  it was compiled, or says the lines shown may hold other code. The warning on changed files
-  says that the code lines shown are read from the files as they are now.
+  current text (by its enclosing types, name and parameter types: methods, constructors,
+  fields, enum constants, record components and types with their annotations) and says where
+  it is now and where it was compiled, or that it is no longer there (an overload deleted is
+  not shown as the one left). The warning on changed files says that a line quoted from them
+  is read as it is now.
 
 ## 0.9.1 — 2026-11-24
 

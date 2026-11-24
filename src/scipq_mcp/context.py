@@ -172,9 +172,12 @@ def body_section(nav: Navigator, d: Definition, short: str) -> Section | None:
     if src.compiled is not None:   # the file changed after its compilation
         a, b = src.compiled
         title = (f"body (as it is now; compiled at {a}–{b}, before the file changed):"
-                 if src.located else f"body (lines {a}–{b} of the file as it is now: it changed "
-                 "after its compilation and the definition was not found in it, so they may "
-                 "hold other code):")
+                 if src.located == "found" else
+                 f"body (lines {a}–{b} of the file as it is now: it changed after its "
+                 "compilation and the definition was not found in it, so they may hold other "
+                 "code):" if src.located == "absent" else
+                 f"body (its compiled lines {a}–{b}, read from the file as it is now, which "
+                 "changed after its compilation: they may have moved):")
     return Section("body", title, lines, f"source({short})", BODY_TAIL)
 
 

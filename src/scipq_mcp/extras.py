@@ -31,15 +31,16 @@ class Source:
     end_line: int                 # last line of the body, 1-based
     truncated: bool
     # The file changed after its compilation: the lines of the last compilation (1-based,
-    # first and last), and whether the definition was found again in the current text (then
-    # `lines` are where it is now).
+    # first and last), and whether the definition was looked for in the current text:
+    # "found" (then `lines` are where it is now), "absent", or "" (it cannot be looked for:
+    # a parameter, a local, a member of a local class…, or the text did not parse).
     compiled: tuple[int, int] | None = None
-    located: bool = False
+    located: str = ""
 
 
 def source(nav: Navigator, symbol: str, max_lines: int = 200) -> Source | None:
     """The source of a definition, read from the file as it is now. When the file changed
-    after its compilation, the definition is looked for in the current text (by its type,
+    after its compilation, the definition is looked for in the current text (by its types,
     name and parameter types), since the compiled lines may have moved."""
     d = nav.definition(symbol)
     if d is None:
@@ -48,63 +49,109 @@ def source(nav: Navigator, symbol: str, max_lines: int = 200) -> Source | None:
     first, last = rng.start_line, rng.end_line
     if rng.end_char == 0 and last > first:
         last -= 1  # half-open range ending at column 0 of the next line
-    compiled, located = None, False
+    compiled, located = None, ""
     if not d.generated and nav.ws.freshness_of({d.location.source}).stale:
         compiled = (first + 1, last + 1)
-        now = _locate_now(nav.ws.root, d)
+        try:
+            located, now = _locate_now(nav.ws.root, d)
+        except Exception:   # half-edited code the parser does not expect: not looked for
+            located, now = "", None
         if now is not None:
             first, last = now
-            located = True
     shown_last = min(last, first + max(1, max_lines) - 1)
     raw = read_raw_lines(nav.ws.root, d.location.source, first, shown_last)
     lines = [(first + 1 + k, t) for k, t in enumerate(raw)]
     return Source(d, lines, last + 1, shown_last < last, compiled, located)
 
 
-def _locate_now(root: str, d: Definition) -> tuple[int, int] | None:
-    """Where a type, method, constructor or field is in its file now (0-based first and last
-    lines), found by its enclosing types, name and parameter types; None when it is not
-    there, or not as one."""
+def _locate_now(root: str, d: Definition) -> tuple[str, tuple[int, int] | None]:
+    """Where a type, method, constructor, field, enum constant or record component is in its
+    file now (0-based first and last lines), found by its enclosing types, name and
+    parameter types: ("found", lines), ("absent", None), or ("", None) when it cannot be
+    looked for."""
     from .javasrc import JavaSource
     from .libsrc import _type_variables, class_path_of, param_types
-    if S.is_local_like(d.symbol):
-        return None
+    descs = [x for x in S.parse(d.symbol) if x.suffix != S.NAMESPACE]
+    kind = S.kind_of(d.symbol)
+    if S.is_local_like(d.symbol) or not descs or kind not in (
+            "type", "method", "constructor", "term"):
+        return "", None
+    # Only members of types nested in types: not of a class declared inside a method.
+    owners = descs if kind == "type" else descs[:-1]
+    if not owners or any(x.suffix != S.TYPE for x in owners):
+        return "", None
     try:
         with open(os.path.join(root, d.location.source), encoding="utf-8",
                   errors="replace") as fh:
             src = JavaSource(fh.read())
     except OSError:
-        return None
+        return "absent", None
     _path, types = class_path_of(d.symbol)
-    if not types:
-        return None
-    decl = src.find_type(types)
+    decl = src.find_type(types) if types else None
     if decl is None:
-        return None
+        return "absent", None
     start, body_open, body_close = decl
-    kind = S.kind_of(d.symbol)
     if kind == "type":
-        return src.line_of(start) - 1, src.line_of(body_close) - 1
+        return "found", (src.line_of(_annotations_before(src.masked, start)) - 1,
+                         src.line_of(body_close) - 1)
     header = " ".join(src.masked[start:body_open].split())
-    members = src.members(body_open, body_close, is_enum=" enum " in f" {header} ",
-                          type_name=types[-1])
+    is_enum = " enum " in f" {header} "
+    members = src.members(body_open, body_close, is_enum=is_enum, type_name=types[-1])
     name = S.name_of(d.symbol)
+    pick = None
     if kind in ("method", "constructor"):
         same = [m for m in members if m.kind == kind and (kind == "constructor" or m.name == name)]
-        if len(same) > 1:
-            tvars = _type_variables(header, types[-1])
-            want = param_types(S.without_annotations(d.info.signature), tvars) \
-                if d.info and d.info.signature else None
+        tvars = _type_variables(header, types[-1])
+        want = param_types(S.without_annotations(d.info.signature), tvars) \
+            if d.info and d.info.signature else None
+        if want is not None:   # the same parameters, also when one overload is left
             same = [m for m in same if param_types(m.declaration, tvars) == want]
         pick = same[0] if len(same) == 1 else None
-    elif kind == "term":
+        if pick is None and len(same) > 1:
+            return "", None
+    else:
         fields = [m for m in members if m.kind == "field" and m.name == name]
         pick = fields[0] if len(fields) == 1 else None
-    else:
-        pick = None
+        if pick is None and is_enum:
+            pick = next((m for m in src.enum_constants(body_open, body_close)
+                         if m.name == name), None)
+        if pick is None:
+            for _typ, comp, pos in src.record_components(start, body_open, types[-1]):
+                if comp == name:
+                    line = src.line_of(pos) - 1
+                    return "found", (line, line)
     if pick is None:
-        return None
-    return pick.start_line - 1, pick.end_line - 1
+        return "absent", None
+    return "found", (pick.start_line - 1, pick.end_line - 1)
+
+
+def _annotations_before(masked: str, pos: int) -> int:
+    """The start of the annotations right before a declaration at pos (`@Entity
+    @Table(name = "x") public class …`): where scip-javac's range starts too."""
+    k = pos
+    while True:
+        j = k
+        while j > 0 and masked[j - 1].isspace():
+            j -= 1
+        if j > 0 and masked[j - 1] == ")":   # an annotation's arguments
+            depth, i = 0, j - 1
+            while i >= 0:
+                if masked[i] == ")":
+                    depth += 1
+                elif masked[i] == "(":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i -= 1
+            j = i
+            while j > 0 and masked[j - 1].isspace():
+                j -= 1
+        i = j
+        while i > 0 and (masked[i - 1].isalnum() or masked[i - 1] in "_$."):
+            i -= 1
+        if i == j or i == 0 or masked[i - 1] != "@":
+            return k
+        k = i - 1
 
 
 def read_raw_lines(root: str, source: str, first: int, last: int) -> list[str]:

@@ -335,9 +335,10 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None) -> st
     if f.stale:
         hit = sorted(set(f.stale) & result_sources) if result_sources else []
         lines.append(f"WARNING: {len(f.stale)} source{'s' if len(f.stale) != 1 else ''} changed "
-                     f"after their last compilation (results reflect the compiled version; the "
-                     f"code lines shown are read from the files as they are now, so in these "
-                     f"files they may be shifted): " + _some(f.stale))
+                     f"after their last compilation (results reflect the compiled version, "
+                     f"and their line numbers too: a line quoted from these files is read as "
+                     f"it is now, and may be another one; source and context look the "
+                     f"definition up again): " + _some(f.stale))
         if hit:
             lines.append(f"  of them, in these results: {_some(hit)}")
     if f.uncompiled:
@@ -373,15 +374,19 @@ def source(src, symbol: str) -> str:
     out = [head]
     if src.compiled is not None:
         a, b = src.compiled
-        if src.located and src.lines:
+        if src.located == "found" and src.lines:
             now = f"{src.lines[0][0]}–{src.end_line}"
             out.append(f"-- {d.location.source} changed after its compilation: shown as it is "
                        f"now, at lines {now} (compiled at {a}–{b}); the other tools still see "
                        "the compiled version")
-        else:
+        elif src.located == "absent":
             out.append(f"-- {d.location.source} changed after its compilation and the "
                        f"definition was not found in it as it is now: these are lines {a}–{b} "
                        "of the current file, which may hold other code")
+        else:
+            out.append(f"-- {d.location.source} changed after its compilation: these are the "
+                       f"compiled lines {a}–{b}, read from the file as it is now (they may have "
+                       "moved)")
     width = len(str(src.lines[-1][0])) if src.lines else 1
     out += [f"{n:>{width}}  {t}" for n, t in src.lines]
     if src.truncated:
