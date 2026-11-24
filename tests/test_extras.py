@@ -1158,3 +1158,33 @@ def test_doctor_build_cache_with_shards_as_outputs(sample_copy, tmp_path, monkey
     script.write_text(body % "// c.outputs.dir(targetroot)")   # commented out: not declared
     out = Service(sample_copy, cache_dir=str(tmp_path / "c2")).doctor()
     assert "WARN [build] the Gradle build cache is on" in out and "c.outputs.dir" in out
+
+
+def test_source_of_a_file_changed_after_its_compilation(sample_copy, tmp_path):
+    import os
+    from scipq_mcp.service import Service
+    path = os.path.join(sample_copy, "core/src/main/java/com/example/model/Entity.java")
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    # Three new lines above setState, not compiled yet.
+    text = text.replace("    private int state;\n",
+                        "    private int state;\n    private int a;\n    private int b;\n"
+                        "    private int c;\n", 1)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.utime(path, (1_700_000_500, 1_700_000_500))      # after its shard
+    svc = Service(sample_copy, cache_dir=str(tmp_path / "c"))
+    out = svc.source("Entity#setState")
+    assert "changed after its compilation: shown as it is now, at lines 17–19 (compiled at " \
+           "14–16)" in out, out
+    assert "\n17      public void setState(int state) {\n19      }" in out.replace(
+        "\n18          this.state = state;", "")
+    assert "may be shifted" in out                     # the warning says the lines are read now
+    assert "body (as it is now; compiled at 14–16, before the file changed):" in \
+        svc.context("Entity#setState")
+    # Gone from the file: the compiled lines, said to be what they are.
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text.replace("setState(int state)", "changeState(int state)"))
+    os.utime(path, (1_700_000_600, 1_700_000_600))
+    out = svc.source("Entity#setState")
+    assert "was not found in it as it is now: these are lines 14–16 of the current file" in out

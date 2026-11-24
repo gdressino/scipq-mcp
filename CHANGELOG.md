@@ -3,6 +3,16 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Fixed
+
+- `source` of a definition whose file changed after its compilation showed the current text
+  at the compiled lines, which may hold other code by then: it finds the definition in the
+  current text (by its types, name and parameter types) and says where it is now and where
+  it was compiled, or says the lines shown may hold other code. The warning on changed files
+  says that the code lines shown are read from the files as they are now.
+
 ## 0.9.1 — 2026-11-24
 
 ### Changed

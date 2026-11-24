@@ -335,8 +335,9 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None) -> st
     if f.stale:
         hit = sorted(set(f.stale) & result_sources) if result_sources else []
         lines.append(f"WARNING: {len(f.stale)} source{'s' if len(f.stale) != 1 else ''} changed "
-                     f"after their last compilation (results reflect the compiled version): "
-                     + _some(f.stale))
+                     f"after their last compilation (results reflect the compiled version; the "
+                     f"code lines shown are read from the files as they are now, so in these "
+                     f"files they may be shifted): " + _some(f.stale))
         if hit:
             lines.append(f"  of them, in these results: {_some(hit)}")
     if f.uncompiled:
@@ -347,7 +348,8 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None) -> st
     if tasks:
         lines.append("  recompile to refresh: " + ", ".join(tasks[:6])
                      + (" …" if len(tasks) > 6 else "") + " (scipq-mcp does not build; if "
-                     "the task comes FROM-CACHE the shards are not rewritten: --rerun it)")
+                     "the shards stay old after it, the task came FROM-CACHE without them: "
+                     "--rerun it)")
     elif f.stale or f.uncompiled:
         lines.append("  recompile the project to refresh (scipq-mcp does not build)")
     return "\n".join(lines)
@@ -369,6 +371,17 @@ def source(src, symbol: str) -> str:
     if d.generated:
         head += "  (generated: no source body; this is the node that generates it)"
     out = [head]
+    if src.compiled is not None:
+        a, b = src.compiled
+        if src.located and src.lines:
+            now = f"{src.lines[0][0]}–{src.end_line}"
+            out.append(f"-- {d.location.source} changed after its compilation: shown as it is "
+                       f"now, at lines {now} (compiled at {a}–{b}); the other tools still see "
+                       "the compiled version")
+        else:
+            out.append(f"-- {d.location.source} changed after its compilation and the "
+                       f"definition was not found in it as it is now: these are lines {a}–{b} "
+                       "of the current file, which may hold other code")
     width = len(str(src.lines[-1][0])) if src.lines else 1
     out += [f"{n:>{width}}  {t}" for n, t in src.lines]
     if src.truncated:

@@ -30,9 +30,17 @@ class Source:
     lines: list[tuple[int, str]]  # (1-based line, text)
     end_line: int                 # last line of the body, 1-based
     truncated: bool
+    # The file changed after its compilation: the lines of the last compilation (1-based,
+    # first and last), and whether the definition was found again in the current text (then
+    # `lines` are where it is now).
+    compiled: tuple[int, int] | None = None
+    located: bool = False
 
 
 def source(nav: Navigator, symbol: str, max_lines: int = 200) -> Source | None:
+    """The source of a definition, read from the file as it is now. When the file changed
+    after its compilation, the definition is looked for in the current text (by its type,
+    name and parameter types), since the compiled lines may have moved."""
     d = nav.definition(symbol)
     if d is None:
         return None
@@ -40,10 +48,63 @@ def source(nav: Navigator, symbol: str, max_lines: int = 200) -> Source | None:
     first, last = rng.start_line, rng.end_line
     if rng.end_char == 0 and last > first:
         last -= 1  # half-open range ending at column 0 of the next line
+    compiled, located = None, False
+    if not d.generated and nav.ws.freshness_of({d.location.source}).stale:
+        compiled = (first + 1, last + 1)
+        now = _locate_now(nav.ws.root, d)
+        if now is not None:
+            first, last = now
+            located = True
     shown_last = min(last, first + max(1, max_lines) - 1)
     raw = read_raw_lines(nav.ws.root, d.location.source, first, shown_last)
     lines = [(first + 1 + k, t) for k, t in enumerate(raw)]
-    return Source(d, lines, last + 1, shown_last < last)
+    return Source(d, lines, last + 1, shown_last < last, compiled, located)
+
+
+def _locate_now(root: str, d: Definition) -> tuple[int, int] | None:
+    """Where a type, method, constructor or field is in its file now (0-based first and last
+    lines), found by its enclosing types, name and parameter types; None when it is not
+    there, or not as one."""
+    from .javasrc import JavaSource
+    from .libsrc import _type_variables, class_path_of, param_types
+    if S.is_local_like(d.symbol):
+        return None
+    try:
+        with open(os.path.join(root, d.location.source), encoding="utf-8",
+                  errors="replace") as fh:
+            src = JavaSource(fh.read())
+    except OSError:
+        return None
+    _path, types = class_path_of(d.symbol)
+    if not types:
+        return None
+    decl = src.find_type(types)
+    if decl is None:
+        return None
+    start, body_open, body_close = decl
+    kind = S.kind_of(d.symbol)
+    if kind == "type":
+        return src.line_of(start) - 1, src.line_of(body_close) - 1
+    header = " ".join(src.masked[start:body_open].split())
+    members = src.members(body_open, body_close, is_enum=" enum " in f" {header} ",
+                          type_name=types[-1])
+    name = S.name_of(d.symbol)
+    if kind in ("method", "constructor"):
+        same = [m for m in members if m.kind == kind and (kind == "constructor" or m.name == name)]
+        if len(same) > 1:
+            tvars = _type_variables(header, types[-1])
+            want = param_types(S.without_annotations(d.info.signature), tvars) \
+                if d.info and d.info.signature else None
+            same = [m for m in same if param_types(m.declaration, tvars) == want]
+        pick = same[0] if len(same) == 1 else None
+    elif kind == "term":
+        fields = [m for m in members if m.kind == "field" and m.name == name]
+        pick = fields[0] if len(fields) == 1 else None
+    else:
+        pick = None
+    if pick is None:
+        return None
+    return pick.start_line - 1, pick.end_line - 1
 
 
 def read_raw_lines(root: str, source: str, first: int, last: int) -> list[str]:
