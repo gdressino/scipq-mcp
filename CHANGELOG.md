@@ -3,6 +3,14 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Changed
+
+- README: which version a server runs, by what follows `uvx`: `scipq-mcp` (the one cached
+  the first time), `scipq-mcp@latest` (the newest on PyPI, checked when a session starts) or
+  `scipq-mcp@X.Y.Z`; how to change it, and `doctor` to see it.
+
 ## 0.9.2 — 2026-11-24
 
 ### Fixed

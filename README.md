@@ -106,18 +106,28 @@ root, to commit; each member approves it the first time Claude Code starts there
 claude mcp add --scope project scipq -- uvx scipq-mcp
 ```
 
-Without `--scope`, the server is added for this project and only for you (local scope). In any
-scope, `uvx scipq-mcp@X.Y.Z` (a version from PyPI) instead of `uvx scipq-mcp` pins it (see
-the note on worktrees below). `claude mcp list` lists the servers and checks them;
-`claude mcp get scipq` shows the scope and command of this one.
+Without `--scope`, the server is added for this project and only for you (local scope).
+`claude mcp list` lists the servers and checks them; `claude mcp get scipq` shows the scope
+and command of this one.
 
-When the same name is added in several scopes, local wins, then project, then user. To move a
-pinned server to another version, remove it from its scope and add it again:
+Which version runs depends on what follows `uvx` (in any scope):
+
+- `uvx scipq-mcp`: the version uv downloaded the first time, kept in its cache; it is not
+  updated by itself.
+- `uvx scipq-mcp@latest`: always the newest on PyPI. Each session that starts checks PyPI
+  (about a second) and runs the newest; sessions already open keep theirs until they are
+  restarted (or the server is reconnected with `/mcp`).
+- `uvx scipq-mcp@X.Y.Z`: that version, until you change it (see the note on worktrees below).
+
+When the same name is added in several scopes, local wins, then project, then user. To change
+what a server runs, remove it from its scope and add it again:
 
 ```sh
 claude mcp remove --scope user scipq
-claude mcp add --scope user scipq -- uvx scipq-mcp@X.Y.Z
+claude mcp add --scope user scipq -- uvx scipq-mcp@latest
 ```
+
+`doctor` says which version is running, on its first line.
 
 ### Other MCP clients
 
@@ -160,9 +170,11 @@ Server options: `--root DIR` (default project), `--shards-dir` (default
 Each agent session starts its own server process (~70 MB at rest). The whole process runs at
 low CPU and I/O priority (nice 10, best-effort I/O 7 on Linux), so it yields to builds and
 tests. With `uvx`, every running server holds uv's cache: `uv cache clean` waits until those
-sessions are closed. With several worktrees, pin the version (`uvx scipq-mcp@X.Y.Z`): a new
-version with another index schema rebuilds each checkout's index on its first whole-project
-query, and pinned sessions upgrade when you choose, not all at once mid-day.
+sessions are closed. With several worktrees, consider pinning the version
+(`uvx scipq-mcp@X.Y.Z`) instead of `@latest`: a new version with another index schema rebuilds
+each checkout's index on its first whole-project query, and pinned sessions upgrade when you
+choose, not all at once mid-day (with `@latest`, sessions started before and after a release
+run different versions).
 
 ## Tools
 
