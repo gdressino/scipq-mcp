@@ -91,3 +91,12 @@ def test_ellipsis_means_any_overload():
     for t in ("pick(...)", "pick(…)", "pick(*)"):
         q = S.parse_query(t)
         assert q.method_only and q.params is None and q.names == ("pick",), t
+
+
+def test_annotations_with_scip_strings_are_left_out():
+    # scip-javac writes an annotation's string unescaped: `(\d+)` with one backslash.
+    sig = '@Then("^the cart holds (\\d+) items?$")\npublic void theCartHolds(int count)'
+    assert S.without_annotations(sig).split() == ["public", "void", "theCartHolds(int", "count)"]
+    assert S.is_parameter("a/B#m().[T]") and S.is_parameter("a/B#m().(x)") and \
+        S.is_parameter("a/B#[T]")
+    assert not S.is_parameter("a/B#m().") and not S.is_parameter("local 3")

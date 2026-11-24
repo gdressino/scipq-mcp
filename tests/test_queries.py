@@ -272,8 +272,8 @@ def test_overloaded_methods_are_written_with_their_parameters(refactor_root, tmp
         assert f"→ com/example/shop/Overloaded#{sym}" in svc.definition(label)
     # A method without overloads keeps its plain name.
     out = svc.callers("Units#m(String)")
-    assert "callers of Units#m(String)" in out and "\nUnits#use()  " in out
-    assert "Upper#of() — " in svc.references("Upper#of")
+    assert "callers of Units#m(String)" in out and "\nUnits#use(Bar, FooBar)  " in out
+    assert "Upper#of(String) — " in svc.references("Upper#of")
 
 
 def test_m_without_parameters_across_types_and_inherited(sample_root, refactor_root):
@@ -304,3 +304,29 @@ def test_overloads_of_a_library_method_by_its_name(refactor_root, tmp_path):
     out = svc.overloads("HashSet#<init>")
     assert "5 overloads" in out and "HashSet#<init>()  " in out and \
         "HashSet#<init>(int, float)" in out
+
+
+def test_a_generic_method_is_the_caller_not_its_type_parameter(refactor_root, tmp_path):
+    nav = Navigator(Workspace(refactor_root))
+    refs, _ = nav.references("com/example/shop/Overloaded#pick().")
+    assert {r.container for r in refs} == {"com/example/shop/Overloaded#pick(+1).",
+                                          "com/example/shop/Overloaded#use()."}
+    # Inside <T> pick(T value, long n): the method, as in the index.
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    out = svc.callers("Overloaded#pick(int)", depth=2)
+    assert "[T]" not in out and "Overloaded#pick()  " in out and "Overloaded#use()" in out
+
+
+def test_methods_taking_parameters_are_written_with_them(sample_root, tmp_path):
+    svc = Service(sample_root, cache_dir=str(tmp_path / "c"))
+    out = svc.callers("Entity#setState")
+    assert out.splitlines()[1].startswith("callers of Entity#setState(int)")
+    assert "Entity#getState()" in svc.references("Entity#getState")   # no parameters
+    out = svc.definition("Entity#setState(int)")
+    assert "→ com/example/model/Entity#setState()." in out
+
+
+def test_constructors_are_not_inherited(nav):
+    # Account declares only Account(String); Entity has the implicit one without parameters.
+    r = nav.resolve("Account#<init>()")
+    assert r.symbol == "com/example/model/Account#`<init>`()." and "inherited" not in r.note

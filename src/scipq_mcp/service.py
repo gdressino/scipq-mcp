@@ -59,10 +59,11 @@ def _summary_of_changed(text: str) -> str:
 
 
 class OverloadLabels:
-    """For S.short while a request runs: a method with overloads is written with its parameter
-    list (`Service#process(String)`) instead of SCIP's numbering, since `process()` reads as the
-    overload without parameters. The overloads come from the file of the method's top-level
-    type, or from a library's sources jar; a few hundred methods at most per request."""
+    """For S.short while a request runs: a method that takes parameters is written with them
+    (`Service#process(String)`) instead of SCIP's numbering, since a name reads `process()` as
+    the method without parameters, as Java does. The signatures come from the index (when it
+    exists already), the file of the method's top-level type, or a library's sources jar; a
+    few hundred methods at most per request."""
 
     MAX_GROUPS = 400
 
@@ -126,8 +127,7 @@ class OverloadLabels:
             sigs = {sym: sig for sym, sig in rows if S.is_method(sym) and S.parent(sym) == owner
                     and S.name_of(sym) == name}
             if sigs:
-                return {} if len(sigs) < 2 else {
-                    sym: ", ".join(R._param_types(sig)) for sym, sig in sigs.items() if sig}
+                return _labels({sym: R._param_types(sig) for sym, sig in sigs.items() if sig})
             if con.execute("SELECT 1 FROM symbols s JOIN defs d ON d.symbol_id = s.id "
                            "WHERE s.symbol = ? LIMIT 1", (owner,)).fetchone():
                 return {}   # a project type: the method is inherited or implicit
@@ -141,20 +141,26 @@ class OverloadLabels:
             self.files[top] = methods
         found = {d.symbol: d for d in self.files[top].get(key, [])}
         if found:
-            if len(found) < 2:
-                return {}
-            return {sym: ", ".join(R._param_types(d.info.signature))
-                    for sym, d in found.items() if d.info and d.info.signature}
+            return _labels({sym: R._param_types(d.info.signature)
+                            for sym, d in found.items() if d.info and d.info.signature})
         if any(k[0] == key[0] for k in self.files[top]):
             return {}   # a project type: the method is inherited or implicit
         return self._library_group(symbol)
 
     def _library_group(self, symbol: str) -> dict[str, str]:
         lib = self.svc._library(symbol, self.nav.ws.root)
-        if lib is None or lib.member is None or len(lib.overloads) < 2:
+        if lib is None or lib.member is None or not lib.overloads:
             return {}
-        return {S.overload_symbol(symbol, k): ", ".join(R._param_types(m.declaration))
-                for k, m in enumerate(lib.overloads)}
+        return _labels({S.overload_symbol(symbol, k): R._param_types(m.declaration)
+                        for k, m in enumerate(lib.overloads)})
+
+
+def _labels(params: dict[str, tuple]) -> dict[str, str]:
+    """The parameter lists a method's overloads are written with: every one that takes
+    parameters, and, among several, the one without too (`m()` alone is SCIP's numbering)."""
+    if len(params) < 2:
+        return {sym: ", ".join(p) for sym, p in params.items() if p}
+    return {sym: ", ".join(p) for sym, p in params.items()}
 
 
 class Service:

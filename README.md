@@ -92,11 +92,29 @@ pipx install scipq-mcp          # or install it
 
 ### Claude Code
 
+For every project you open (user scope): the server stays silent where there is no Java
+project (see below), so this is the usual choice.
+
 ```sh
-claude mcp add scipq -- uvx scipq-mcp
+claude mcp add --scope user scipq -- uvx scipq-mcp
 ```
 
+For one project, shared with the team (project scope): this writes `.mcp.json` at the project
+root, to commit; each member approves it the first time Claude Code starts there.
+
+```sh
+claude mcp add --scope project scipq -- uvx scipq-mcp
+```
+
+Without `--scope`, the server is added for this project and only for you (local scope). In any
+scope, `uvx scipq-mcp@X.Y.Z` (a version from PyPI) instead of `uvx scipq-mcp` pins it (see
+the note on worktrees below). `claude mcp list` shows what is installed and where.
+
 ### Other MCP clients
+
+The same server definition goes in the client's user-level configuration (every project) or in
+its project-level one, where the client has it (e.g. Cursor: `~/.cursor/mcp.json` and
+`.cursor/mcp.json`):
 
 ```json
 {
@@ -125,7 +143,7 @@ Server options: `--root DIR` (default project), `--shards-dir` (default
 Each agent session starts its own server process (~70 MB at rest). The whole process runs at
 low CPU and I/O priority (nice 10, best-effort I/O 7 on Linux), so it yields to builds and
 tests. With `uvx`, every running server holds uv's cache: `uv cache clean` waits until those
-sessions are closed. With several worktrees, pin the version (`uvx scipq-mcp@0.2.2`): a new
+sessions are closed. With several worktrees, pin the version (`uvx scipq-mcp@X.Y.Z`): a new
 version with another index schema rebuilds each checkout's index on its first whole-project
 query, and pinned sessions upgrade when you choose, not all at once mid-day.
 

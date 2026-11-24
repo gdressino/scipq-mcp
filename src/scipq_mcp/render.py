@@ -96,7 +96,9 @@ def candidates(r: Resolution, limit: int = 30) -> str:
     if len(r.candidates) > limit:
         lines.append(f"  … and {len(r.candidates) - limit} more")
     for e in r.externals[:limit]:
-        lines.append(f"  external  {e}")
+        label = S.short(e)
+        lines.append(f"  external  {e}" + (f"  ({label})" if "(" in label and
+                                           not label.endswith("()") else ""))
     if len(r.externals) > limit:
         lines.append(f"  … and {len(r.externals) - limit} more external")
     return "\n".join(lines)

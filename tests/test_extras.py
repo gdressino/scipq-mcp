@@ -238,8 +238,8 @@ def test_scope_filters(sample_root):
     assert "in com.example.app: 6 references in 3 files" in svc.references(
         "Entity#setState", scope="com.example.app")
     out = svc.callers("Entity#setState", scope="core/*")
-    assert "Account#<init>()" in out and "Service#" not in out
-    assert "Store#load()" in svc.annotated("Deprecated", scope="com.example.model")
+    assert "Account#<init>(String)" in out and "Service#" not in out
+    assert "Store#load(long)" in svc.annotated("Deprecated", scope="com.example.model")
     assert "nothing" in svc.annotated("Deprecated", scope="com.example.app") or \
         "0 uses" in svc.annotated("Deprecated", scope="com.example.app")
 
@@ -278,7 +278,7 @@ def test_typed_with_subtypes_has_one_section_per_category(nav):
     headers = [line for line in out.splitlines() if line.endswith(":") and
                not line.startswith(" ")]
     assert len(headers) == len(set(headers)) and "field:" in headers
-    assert "[Account]  Service#seed" in out and "[Group]  Service#activateAll()" in out
+    assert "[Account]  Service#seed" in out and "[Group]  Service#activateAll(Group)" in out
 
 
 def test_index_status_profiles(sample_copy, tmp_path):
@@ -532,7 +532,7 @@ def test_persistence_model(refactor_root, tmp_path):
     state = svc.persistence("Order#state")
     assert "table ORDERS, column STATE (from the field name)" in state and \
         "in fetch groups: withLines" in state
-    assert "Order#setState()" in state and "a.setState(b.getState())" in state   # Lombok's
+    assert "Order#setState(int)" in state and "a.setState(b.getState())" in state   # Lombok's
     assert 'return "state == :p";' in state                     # by name: a JDOQL filter
     line = svc.persistence("Line#order")
     assert "relation to Order (other side: Order#lines, mappedBy)" in line
@@ -589,7 +589,7 @@ def test_impact_dispatches_through_template_methods(refactor_root, tmp_path):
         fh.write('[[entry_points]]\nkind = "page"\ntype_names = ["*Page"]\n')
     out = Service(refactor_root, cache_dir=str(tmp_path / "c")).impact("Pages#sales", depth=4)
     assert "d1  SalesPage#body()" in out and "d2  Page#render()" in out
-    assert "d3  Pages#show()" in out and "d3  Page#frame()" in out
+    assert "d3  Pages#show(Page)" in out and "d3  Page#frame()" in out
     assert "StockPage" not in out           # its super.render()/frame(), refresh(): its own
     assert "page  d1  SalesPage" in out and "page  d2  Page " not in out    # abstract
     # Page#render() overrides View#render(): View#measure() runs it on the same object, and
@@ -597,12 +597,12 @@ def test_impact_dispatches_through_template_methods(refactor_root, tmp_path):
     deep = Service(refactor_root, cache_dir=str(tmp_path / "c")).impact("Pages#sales", depth=5)
     assert "View#measure()" in deep and "StockPage" not in deep
     # measure() on a View may be a SalesPage's; on a StockPage it is not.
-    assert "Gallery#show()" in deep and "Dash#show()" not in deep
+    assert "Gallery#show(View)" in deep and "Dash#show()" not in deep
     assert "callers of methods these override were left out" in deep
     # From the override itself: the base's code runs on it, the sibling's does not.
     out = Service(refactor_root, cache_dir=str(tmp_path / "c")).impact("SalesPage#body",
                                                                        depth=4)
-    assert "Page#render()" in out and "Pages#show()" in out and "StockPage" not in out
+    assert "Page#render()" in out and "Pages#show(Page)" in out and "StockPage" not in out
 
 
 def test_impact_lifecycle_creators_layouts_and_startup_lambdas(refactor_root, tmp_path):
@@ -1008,7 +1008,7 @@ def test_path_goes_through_dispatch(refactor_root, tmp_path):
     from scipq_mcp.service import Service
     out = Service(refactor_root, cache_dir=str(tmp_path / "c")).path("Gallery#show",
                                                                      "Pages#sales")
-    assert "Gallery#show()" in out and "SalesPage#body()" in out and "Page#body()" in out
+    assert "Gallery#show(View)" in out and "SalesPage#body()" in out and "Page#body()" in out
 
 
 def test_impact_names_library_callbacks_and_deferred_calls(refactor_root, tmp_path):

@@ -13,7 +13,7 @@ def test_method_context(sample_copy, tmp_path):
     assert callers.startswith("7 in 5 files, 1 in tests)")
     # non-test callers first, the test one last and marked
     rows = [x for x in callers.split("\n\n")[0].splitlines()[1:]]
-    assert rows[-1].endswith("[test]") and "ServiceTest#main()" in rows[-1]
+    assert rows[-1].endswith("[test]") and "ServiceTest#main(String[])" in rows[-1]
     assert "gradle :app:test --tests 'com.example.app.ServiceTest'" in out
 
 
@@ -21,7 +21,7 @@ def test_context_uses_an_existing_index_for_impact(sample_copy, tmp_path):
     svc = Service(sample_copy, cache_dir=str(tmp_path / "cache"))
     svc.impact("Entity#setState")  # builds it
     out = svc.context("Entity#setState")
-    assert "impact (depth 3):" in out and "→ impact(Entity#setState())" in out
+    assert "impact (depth 3):" in out and "→ impact(Entity#setState(int))" in out
 
 
 def test_type_and_field_context(sample_copy, tmp_path):
@@ -40,7 +40,7 @@ def test_context_fits_the_budget_and_does_not_pad(sample_copy, tmp_path):
     svc = Service(sample_copy, cache_dir=str(tmp_path / "cache"))
     small = svc.context("Entity#setState", token_budget=250)
     assert len(small) <= 250 * C.CHARS_PER_TOKEN + 200
-    assert "→ callers(Entity#setState())" in small
+    assert "→ callers(Entity#setState(int))" in small
     big = svc.context("Group#getSize", token_budget=32000)
     assert len(big) < 1500 and "callers: none in this project" in big
 

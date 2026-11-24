@@ -70,8 +70,8 @@ def by_params(items: list, params: tuple, declared, qualified=None) -> list:
     return [x for _g, hits, unknown in per for x in (hits or unknown)]
 
 
-def _param_list(params: tuple) -> str:
-    return "(" + ", ".join(p or "T" for p in params) + ")"
+def _param_list(params: tuple, written: str = "") -> str:
+    return "(" + (written or ", ".join(p or "T" for p in params)) + ")"
 
 
 def _read_header(path: str, line: int, max_lines: int = 30) -> str:
@@ -276,7 +276,8 @@ class DocView:
         if self._containers is None:
             out = []
             for o in self.doc.definitions():
-                if o.enclosing is not None:
+                # A type parameter's range is its method's: the method contains the code.
+                if o.enclosing is not None and not S.is_parameter(o.symbol):
                     out.append((o.enclosing, o.symbol, S.is_local_like(o.symbol),
                                 self.structurally_generated(o)))
             out.sort(key=lambda t: t[0].size())
@@ -535,9 +536,11 @@ class Navigator:
             if q.params is not None else every
         if every and not found:
             return Resolution(None, every, f"no overload of {text.split('(')[0]!r} takes "
-                                           f"{_param_list(q.params)}; its overloads:")
+                                           f"{_param_list(q.params, q.params_text)}; its overloads:")
         syms = sorted({d.symbol for d in found})
-        if q.params == () and syms and len({(S.parent(x), S.name_of(x)) for x in syms}) == 1:
+        # (Constructors are not inherited: `X#<init>()` is one of X's, never a supertype's.)
+        if q.params == () and syms and len({(S.parent(x), S.name_of(x)) for x in syms}) == 1 \
+                and S.name_of(syms[0]) != S.CONSTRUCTOR:
             declared = [_declared_params(d) for d in found]
             if all(t for t in declared):   # every one takes parameters: look for an inherited
                 inh = self._inherited_parameterless(S.parent(syms[0]), S.name_of(syms[0]))
@@ -556,11 +559,11 @@ class Navigator:
         external = [e for e in external if not self._implicit_member(e)] if syms else external
         picked = False
         if external and q.params is not None:
-            narrowed, picked = self._library_by_params(external, q.params)
+            narrowed, picked, known = self._library_by_params(external, q.params)
             if not narrowed:
                 return Resolution(None, [], f"no overload of {text.split('(')[0]!r} takes "
-                                            f"{_param_list(q.params)}; those used here:",
-                                  external)
+                                            f"{_param_list(q.params, q.params_text)}; its "
+                                            "overloads:", known or external)
             external = narrowed
         if len(syms) == 1 and not external:
             return Resolution(syms[0], found, f"{text} → {syms[0]}"
@@ -580,7 +583,7 @@ class Navigator:
                 else "external"
             if picked:
                 label += ", the overload " + ("without parameters" if not q.params else
-                                              "taking " + _param_list(q.params))
+                                              "taking " + _param_list(q.params, q.params_text))
             return Resolution(external[0], [], f"{text} → {external[0]} ({label})")
         if external:   # listed by render.candidates
             return Resolution(None, [], f"{text!r} matches {len(external)} external symbols "
@@ -608,14 +611,16 @@ class Navigator:
                     return k[0]
         return None
 
-    def _library_by_params(self, external: list[str], params: tuple) -> tuple[list[str], bool]:
+    def _library_by_params(self, external: list[str], params: tuple
+                           ) -> tuple[list[str], bool, list[str]]:
         """The library overloads a parameter list means, among every overload in the sources
         jar (used here or not: `println()`); a method whose sources cannot be read keeps the
-        symbols the project uses. (symbols, whether the list picked them)."""
+        symbols the project uses. (symbols, whether the list picked them, every overload
+        known from the sources)."""
         groups: dict[tuple[str, str], list[str]] = {}
         for e in external:
             groups.setdefault((S.parent(e), S.name_of(e)), []).append(e)
-        out, picked = [], False
+        out, picked, every = [], False, []
         for group in groups.values():
             want_q = any(p and S.is_qualified_type(p) for p in params)
             known = self.library_overloads(group[0], want_q) \
@@ -624,6 +629,7 @@ class Navigator:
                 out += by_params(group, params, lambda _s: None)
                 continue
             types = {k[0]: k[1] for k in known}
+            every += list(types)
             quals = {k[0]: (k[2] if len(k) > 2 else None) for k in known}
             hits = [sym for sym, t in types.items() if t == ()] if not params else \
                 by_params(list(types), params, types.get, quals.get)
@@ -632,7 +638,7 @@ class Navigator:
                 picked = picked or len(known) > 1
             elif not params:
                 out += group
-        return out, picked
+        return out, picked, every
 
     @staticmethod
     def _overload_note(q: S.Query, symbol: str, every: list[Definition]) -> str:
@@ -646,7 +652,7 @@ class Navigator:
         if len(group) < 2:
             return ""
         out = " (the overload " + ("without parameters" if not q.params
-                                   else "taking " + _param_list(q.params))
+                                   else "taking " + _param_list(q.params, q.params_text))
         first = next((d for d in group if d.symbol.endswith("().")), None)
         if not q.params and first is not None and first.symbol != symbol:
             sig = " ".join(S.without_annotations(first.info.signature).split()) \

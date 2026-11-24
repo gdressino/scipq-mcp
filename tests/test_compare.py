@@ -41,7 +41,7 @@ def test_compare_worktrees(tmp_path, sample_root):
     run(b, "commit", "-qam", "drop Group")
     svc = Service(str(a), cache_dir=str(tmp_path / "cache"))
     out = svc.compare(str(b))
-    assert "removed in B" in out and "Group#add()" in out   # classified against the base
+    assert "removed in B" in out and "Group#add(Entity)" in out   # classified against the base
     assert "since the merge base" in out and "B 2 files (1 .java)" in out
     # A did not touch Service.java: after the merge it is B's version, adapted by B.
     assert "merging B into A would break, in files A changed since the base: none found" in out

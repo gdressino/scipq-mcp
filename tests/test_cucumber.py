@@ -67,12 +67,12 @@ def test_steps_tool(cucumber_root, tmp_path):
     assert "naming a .feature that is not there: 1" in check and "missing.feature" in check
     assert "CartSteps#unused()" in check.split("no step uses:")[1]
     feat = svc.steps("shop/src/test/resources/features/carrito.feature")
-    assert "Cuando I add 5 items  → CartSteps#iAdd()" in feat
+    assert "Cuando I add 5 items  → CartSteps#iAdd(int)" in feat
     glue = svc.steps("CartSteps#iAdd")
     assert "used by 6 steps (5 lines: an outline's steps count once per Examples row) in 3 " \
            "features" in glue
     assert "carry a tag the build leaves out" in glue and "@pending" in glue
-    assert "CartSteps#theCartHolds()" in svc.steps("Then the cart holds 2 items")
+    assert "CartSteps#theCartHolds(int)" in svc.steps("Then the cart holds 2 items")
     assert "undefined" in svc.steps("When I fly")
 
 

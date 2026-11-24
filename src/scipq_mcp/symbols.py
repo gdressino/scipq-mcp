@@ -35,6 +35,12 @@ def is_local(symbol: str) -> bool:
     return symbol.startswith("local ")
 
 
+def is_parameter(symbol: str) -> bool:
+    """A method's parameter (`…#m().(x)`) or a type parameter (`…#m().[T]`, `…#Box#[T]`):
+    scip-javac gives them an enclosing range, but they contain no code of their own."""
+    return symbol.endswith("]") or (symbol.endswith(")") and not symbol.startswith("local "))
+
+
 def is_local_like(symbol: str) -> bool:
     """Locals, plus the variables scip-javac gives a global symbol under a method (try-with-
     resources variables: ``…/Dao#load().#pm.``) — not members of any type."""
@@ -185,7 +191,12 @@ def short(symbol: str) -> str:
             label = None
             if k == len(parts) - 1:
                 hook = METHOD_LABELS.get()
-                label = hook(symbol) if hook is not None else None
+                if hook is not None:
+                    # Of the method itself, also for one of its parameters or type parameters.
+                    method = symbol
+                    while method and kind_of(method) not in ("method", "constructor"):
+                        method = parent(method)
+                    label = hook(method) if method else None
             out.append(f"{sep}{x.name}({x.disambiguator if label is None else label})")
         else:
             out.append(f"{sep}{x.name}")
@@ -230,7 +241,7 @@ def name_of(symbol: str) -> str:
     return d[-1].name if d else symbol
 
 
-_ANNOTATION = re.compile(r"@[\w$.]+(?:\s*\((?:[^()\"]|\"(?:[^\"\\\\]|\\\\.)*\"|\((?:[^()]|\([^()]*\))*\))*\))?")
+_ANNOTATION = re.compile(r"@[\w$.]+(?:\s*\((?:[^()\"]|\"(?:[^\"\\]|\\.)*\"|\((?:[^()]|\([^()]*\))*\))*\))?")
 
 
 def without_annotations(signature: str) -> str:
@@ -313,6 +324,7 @@ class Query:
     # The parameter list written, as erased simple types ("String", "int[]"; None for a type
     # variable: it matches any type); () for "m()"; None when none was written.
     params: tuple | None = None
+    params_text: str = ""   # as written, for messages
 
 
 def written_params(text: str) -> tuple:
@@ -397,9 +409,10 @@ def looks_like_symbol(text: str) -> bool:
 
 def parse_query(text: str) -> Query:
     t = text.strip().replace("`", "")
-    params = None
+    params, params_text = None, ""
     m = _TRAILING_PARAMS.search(t)
     if m and not re.fullmatch(r"\s*\+\d+\s*", m.group(1)):
+        params_text = " ".join(m.group(1).split())
         # `m(...)`, `m(…)`: the method, whatever it takes.
         if not re.fullmatch(r"\s*(?:\.{2,3}|…|\*)\s*", m.group(1)):
             params = written_params(m.group(1))
@@ -417,8 +430,9 @@ def parse_query(text: str) -> Query:
         else:
             method_only, disamb = False, None
     # Only the parentheses of the last token count.
-    return Query(text, tuple(names), method_only, disamb,
-                 params if method_only and disamb is None else None)
+    keep = method_only and disamb is None
+    return Query(text, tuple(names), method_only, disamb, params if keep else None,
+                 params_text if keep and params is not None else "")
 
 
 def matches(symbol: str, q: Query) -> bool:

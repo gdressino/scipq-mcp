@@ -143,7 +143,7 @@ def test_changed(tmp_path, sample_root, cache):
     os.utime(shard, (st.st_atime + 5, st.st_mtime + 5))
     out = Service(str(repo), cache_dir=cache).changed()
     assert "1 .java files, 1 definitions" in out, out
-    assert "Entity#setState()" in out and "changed 10–15 (2 lines)" in out, out
+    assert "Entity#setState(int)" in out and "changed 10–15 (2 lines)" in out, out
     assert "Entity  " not in out and "class body" not in out
     assert "--tests 'com.example.app.ServiceTest'" in out
     # A class annotation changed: reported, not expanded to every user of the class.
@@ -165,7 +165,7 @@ def test_changed(tmp_path, sample_root, cache):
 
 def test_service_tools(sample_root, cache):
     svc = Service(sample_root, cache_dir=cache)
-    assert "impact of Entity#setState()" in svc.impact("Entity#setState")
+    assert "impact of Entity#setState(int)" in svc.impact("Entity#setState")
     assert "reached by 1 test classes" in svc.tests("Entity#setState", transitive=True)
     assert "1 shortest call path" in svc.path("Service#seed", "Entity#setState")
     assert "app → core" in svc.deps()
@@ -407,7 +407,7 @@ def test_changed_when_the_build_is_a_subdirectory_of_the_repository(tmp_path, sa
     st = os.stat(src)
     os.utime(shard, (st.st_atime + 5, st.st_mtime + 5))
     out = Service(str(repo / "java"), cache_dir=cache).changed()
-    assert "Entity#setState()" in out and "not indexed" not in out, out
+    assert "Entity#setState(int)" in out and "not indexed" not in out, out
 
 
 def test_external_pruning_waits_for_unreadable_shards(sample_copy, cache):
@@ -499,18 +499,18 @@ def test_concepts(sample_copy, tmp_path):
     from scipq_mcp.service import Service
     svc = Service(sample_copy, cache_dir=str(tmp_path / "cache"))
     out = svc.concepts("lifecycle states")      # javadoc words; a plural finds the singular
-    assert out.index("Entity#setState()") < out.index("Entity#getState()")
+    assert out.index("Entity#setState(int)") < out.index("Entity#getState()")
     assert "— Changes the lifecycle state." in out
-    assert "Store#load()" in svc.concepts("deprecated")                 # its annotation
-    assert "Session#find()" in svc.concepts("session find", kind="method")
-    assert "Session#find()" not in svc.concepts("session find", kind="type")
+    assert "Store#load(long)" in svc.concepts("deprecated")                 # its annotation
+    assert "Session#find(long)" in svc.concepts("session find", kind="method")
+    assert "Session#find(long)" not in svc.concepts("session find", kind="type")
     assert "ServiceTest" not in svc.concepts("service test") and \
         "ServiceTest" in svc.concepts("service test", include_tests=True)
     assert "no words to search" in svc.concepts("de la")
     # Alternatives: each group is one word of the query, its forms searched as written.
     out = svc.concepts("lifecycle|lifecycles state|status")
     assert "definitions about lifecycle* state*|status*" in out   # lifecycles: one word
-    assert out.index("Entity#setState()") < out.index("Entity#getState()")
+    assert out.index("Entity#setState(int)") < out.index("Entity#getState()")
     assert "write a word's forms" not in out and "write a word's forms" in svc.concepts("state")
 
 

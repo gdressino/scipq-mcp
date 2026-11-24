@@ -29,7 +29,7 @@ from .cachedir import default_base, entry_dir
 from .scip import DEFINITION, KIND_NAMES, read_documents
 from .workspace import SUFFIX, Workspace
 
-SCHEMA_VERSION = "11"
+SCHEMA_VERSION = "12"
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
@@ -225,7 +225,8 @@ def extract(path: str, source: str, root: str) -> dict:
                 decl = declaration_line(lines(), o.enclosing.start_line, S.name_of(o.symbol))
                 if decl is not None and decl != o.range.start_line:
                     name_pos = (decl, 0)
-            if o.enclosing is not None:
+            if o.enclosing is not None and not S.is_parameter(o.symbol):
+                # (a type parameter's range is its method's: the method is the caller)
                 e = o.enclosing
                 containers.append((e.start_line, e.start_char, e.end_line, e.end_char, o.symbol,
                                    S.is_local_like(o.symbol), gen, name_pos))
