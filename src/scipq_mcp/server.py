@@ -488,11 +488,16 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
     def check_refs(
         project_root: ProjectRoot = "",
         files: Annotated[list[str] | None, Field(
-            description="Globs of the files to check (default ['**/*.md']: docs, skills, "
-                        "agent instructions)")] = None,
+            description="Globs or folders of the docs to check instead of the scope (any doc: "
+                        "a record, a plan). Default: the scope, see below")] = None,
+        since: Annotated[str, Field(
+            description="A commit or branch (HEAD, main): of the scope, only the docs changed "
+                        "since its merge base with HEAD and those that mention .java files "
+                        "changed since then (uncommitted changes included); in the latter, only "
+                        "those mentions")] = "",
         exclude: Annotated[list[str] | None, Field(
-            description="Globs to leave out (archived docs…), added to [check_refs] exclude "
-                        "of .scipq.toml")] = None,
+            description="Globs to leave out, added to [check_refs] exclude of "
+                        ".scipq.toml")] = None,
         offset: Offset = 0, limit: Limit(200, 2000) = 200,
         format: Annotated[Literal["text", "md"], Field(
             description="text (by file) or md (a table to hand over)")] = "text",
@@ -500,18 +505,28 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         """The code that docs mention, checked against the index: Type#member, Type.method(…),
         qualified type names, {@link}s and File.java:N paths. Reports types and members not
         there (with the closest names and where that name lives now), parameter lists no
-        overload has, names none of the same-named types has, missing files, and line
-        numbers that no longer fall in the symbol named next to them; counts by kind, then
-        by file, repeats merged. In a git checkout, line numbers are followed from the version
-        the doc was written against. What to do: "line N is now M" (the code only moved):
-        fix the number; "changed since the doc named X (date, commit)": re-read what the doc
-        claims, the code is different; "so in the doc's version too": the doc was wrong from
-        the start, not drift: check what it meant; "deleted (date, commit)": the file is
-        gone; "planned?" / "never had": nothing to fix in the code, maybe in the doc. [check_refs] other_versions in .scipq.toml lists the words a doc
-        writes before a path for another branch's version (v4). A folder in files means its
-        Markdown files. Library types, placeholders (Foo, getX), Object/Class/enum members
-        and mentions the line says are gone ("removed") are left alone."""
-        return service.check_refs(project_root, files, exclude, offset, limit, format)
+        overload has, missing files, and line numbers that no longer fall in the symbol named
+        next to them; counts by kind, then by file.
+        Scope: without files, the files agents read to work: CLAUDE.md and AGENTS.md (any
+        folder), .claude/**/*.md, .github/**/*.md and README*.md. A project opts in to more or
+        fewer with `[check_refs] files = ["docs/guides", "**/CLAUDE.md", …]` (globs or
+        folders; it replaces the default) in .scipq.toml at the checkout root, or in its
+        [[project]] entry of ~/.config/scipq/config.toml. The output's `scope:` line says
+        which set was read and how many other .md files were not.
+        When: after changing code, since="HEAD" (or the branch you started from) finds the
+        docs in scope your change left wrong; before committing a doc, files=[that doc];
+        before relying on an older doc's line numbers or names, files=[that doc].
+        In a git checkout, line numbers are followed from the version the doc was written
+        against. What to do: "line N is now M" (the code only moved): fix the number;
+        "changed since the doc named X (date, commit)": re-read what the doc claims, the code
+        is different; "so in the doc's version too": the doc was wrong from the start, check
+        what it meant; "deleted (date, commit)": the file is gone; "planned?" / "never had":
+        nothing to fix in the code, maybe in the doc. [check_refs] other_versions lists the
+        words a doc writes before a path for another branch's version (v4). Library types,
+        placeholders (Foo, getX), Object/Class/enum members, mentions the line says are gone
+        ("removed") and archive folders (archive/, old/…) are left alone."""
+        return service.check_refs(project_root, files, exclude, offset, limit, format,
+                                  since)
 
     @tool
     def doctor(project_root: ProjectRoot = "") -> str:

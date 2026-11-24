@@ -62,6 +62,8 @@ def _query_parser(sub) -> None:
     add("persistence", symbol={"default": ""}, scope={"default": ""},
         offset={"type": int, "default": 0}, limit={"type": int, "default": 100})
     add("check-refs", files={"nargs": "*", "default": None}, exclude={"nargs": "*", "default": None},
+        since={"default": "", "help": "a commit or branch: only docs changed since then and "
+                                      "those that mention .java files changed since then"},
         offset={"type": int, "default": 0}, limit={"type": int, "default": 200},
         format={"choices": ["text", "md"], "default": "text"})
     add("concepts", "query", offset={"type": int, "default": 0},
@@ -129,7 +131,7 @@ def _run_query(a) -> str:
         return svc.persistence(a.symbol, scope=a.scope, offset=a.offset, limit=a.limit)
     if t == "check-refs":
         return svc.check_refs(files=a.files, exclude=a.exclude, offset=a.offset,
-                              limit=a.limit, fmt=a.format)
+                              limit=a.limit, fmt=a.format, since=a.since)
     if t == "concepts":
         return svc.concepts(a.query, kind=a.kind, scope=a.scope, include_tests=a.tests,
                             offset=a.offset, limit=a.limit)
@@ -211,14 +213,17 @@ def _init_config(root: str | None) -> str:
     root = find_project_root(root or os.getcwd())
     from .graph import generated_dirs
 
+    from .checkrefs import md_folders
+
     generated = generated_dirs(root)
     generated_java = generated_dirs(root, java_only=True)
+    md = md_folders(root)
     try:
         ws = Workspace(root)
         ws.files()
     except WorkspaceError:
         return CFG.repo_template([], detected=False, generated=generated,
-                                 generated_java=generated_java)
+                                 generated_java=generated_java, md_folders=md)
     profiles, _warnings = CFG.load_profiles()
     found = []
     for name, data in profiles.items():
@@ -227,7 +232,7 @@ def _init_config(root: str | None) -> str:
         if anns and ws.grep(x.encode() for x in anns):
             found.append(name)
     return CFG.repo_template(found, detected=True, generated=generated,
-                             generated_java=generated_java)
+                             generated_java=generated_java, md_folders=md)
 
 
 def _cache(a) -> str:

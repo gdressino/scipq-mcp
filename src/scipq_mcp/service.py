@@ -1286,22 +1286,32 @@ class Service:
         return body
 
     def _b_check_refs(self, files: list[str] | None = None, exclude: list[str] | None = None,
-                      offset: int = 0, limit: int = 200, fmt: str = "text") -> Body:
+                      offset: int = 0, limit: int = 200, fmt: str = "text",
+                      since: str = "") -> Body:
         def body(nav: Navigator):
             from . import checkrefs as CR
-            globs = files or ["**/*.md"]
             try:        # library class names, to tell library types from missing ones
                 self._library_index(nav.ws.root).refresh()
             except Exception:  # noqa: BLE001 — without them, fewer types are recognized
                 pass
             with self._graph(nav) as (g, stats):
                 st = self.settings(nav.ws.root, g)
-                problems, checked, nfiles, archived = CR.check(
+                # the scope: the files named, else [check_refs] files, else what agents read
+                if files:
+                    globs, scope = list(files), CR.Scope(how="given", globs=tuple(files))
+                elif st.check_refs_files is not None:
+                    globs = list(st.check_refs_files)
+                    scope = CR.Scope(how="config", globs=tuple(globs),
+                                     origin=st.check_refs_files_from.split(" (")[0])
+                else:
+                    globs = list(CR.AGENT_FILES)
+                    scope = CR.Scope(how="default", globs=tuple(globs))
+                problems, checked, scope = CR.check(
                     g, nav.ws.root, globs, list(exclude or []) + list(st.check_refs_exclude),
                     self.cache_dir, skip_archives=not files,
-                    other_versions=st.check_refs_versions)
-            out = render.index_note(stats) + CR.render(problems, checked, nfiles, offset,
-                                                       limit, fmt, archived)
+                    other_versions=st.check_refs_versions, scope=scope, since=since.strip())
+            out = render.index_note(stats) + CR.render(problems, checked, scope, offset,
+                                                       limit, fmt)
             out += "".join(f"\nconfig warning: {w}" for w in st.warnings[:5])
             return out, set()
         return body
@@ -1452,8 +1462,9 @@ class Service:
 
     def check_refs(self, project_root: str | None = None, files: list[str] | None = None,
                    exclude: list[str] | None = None, offset: int = 0, limit: int = 200,
-                   fmt: str = "text") -> str:
-        return self._run(project_root, self._b_check_refs(files, exclude, offset, limit, fmt))
+                   fmt: str = "text", since: str = "") -> str:
+        return self._run(project_root, self._b_check_refs(files, exclude, offset, limit, fmt,
+                                                          since))
 
     def doctor(self, project_root: str | None = None) -> str:
         return self._run(project_root, self._b_doctor())

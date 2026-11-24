@@ -155,7 +155,7 @@ query, and pinned sessions upgrade when you choose, not all at once mid-day.
 | `steps(query, check)` | Cucumber-JVM: a step definition's feature steps and the scenarios to run; a .feature's steps and the method each runs; a step's text and its method; `check=True`: undefined, ambiguous, not understood and unused step definitions | — |
 | `concepts(query, kind, scope)` | definitions about something when you do not know their names: words of names, owners, annotation texts, call labels, signatures and javadoc, ranked | workspace/symbol by meaning (words, not embeddings) |
 | `persistence(symbol)` | the persistence model (jdo, jpa…): entities, tables, inheritance, columns, relations, fetch groups; for a field, who writes and reads it, also by name | — |
-| `check_refs(files, exclude)` | the code docs mention (`Type#m`, `Type.m(…)`, `File.java:N`…), checked: missing types and members, wrong parameter lists, moved lines | — |
+| `check_refs(files, since, exclude)` | the code docs mention (`Type#m`, `Type.m(…)`, `File.java:N`…), checked: missing types and members, wrong parameter lists, moved lines; by default in what agents read (`CLAUDE.md`, `AGENTS.md`, `.claude/**`, `.github/**`, `README*.md`), or the project's `[check_refs] files`; `since=REF`: only what changed since then or mentions changed code | — |
 | `doctor()` | what can make the index wrong here, with what to do: plugin setup, files without shards, IDE builds, failed javac, stale files, running builds, build cache, cache, config, JDKs | — |
 | `refactor(plan, dry_run)` / `refactor(plan_id, verify)` | runs a refactoring plan (see below) into a verified patch; after it is applied and compiled, checks the new index and lists what to test | rename / change signature / move |
 | `refactor_help(topic)` | the plan format, with examples | — |
@@ -297,9 +297,21 @@ exclude = ["ws-client/src/soap/*"]   # generated: names there would hide dead co
 
 [dead_code]
 exclude = ["ws-client/src/soap/*"]   # and its own unused members are not candidates
+
+[check_refs]   # the docs check_refs reads when the call names none
+files = ["**/CLAUDE.md", ".claude/**/*.md", "docs/guides"]   # replaces the default
+other_versions = ["v4"]              # a doc's "v4 `File.java:N`" is another branch's line
 ```
 
-`init-config` proposes both excludes for directories that look generated: named like generated
+`check_refs` checks by default what agents read to work: `CLAUDE.md` and `AGENTS.md` in any
+folder, `.claude/**/*.md`, `.github/**/*.md` and `README*.md`. Dated records (audits, the
+write-up of a fix) describe the code as it was and need not follow it, so they are left out
+unless `[check_refs] files` or the call's `files` names them; the output's `scope:` line says
+what was read and how many other Markdown files were not.
+
+`init-config` proposes a `[check_refs]` scope (the folders with Markdown outside the
+default, those named by date or ticket marked as likely records) and both excludes for
+directories that look generated: named like generated
 output (`*-out`, `generated`, `dist`…, without Java sources), or where nearly all files start
 with a "generated / do not edit" header; in a module that mixes its own code with generated
 packages, only those packages. Check the list before committing it.

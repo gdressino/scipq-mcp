@@ -7,6 +7,13 @@ version and date when releasing.
 
 ### Added
 
+- `check_refs(since=…)`: a commit or branch (`HEAD`, `main`); of the scope, only the docs
+  changed since its merge base with HEAD (uncommitted changes included) and those that
+  mention, as code, a `.java` file changed since then (in those, only those mentions); says
+  which docs out of the scope mention the changed code. CLI: `check-refs --since REF`.
+- `init-config` proposes a `[check_refs]` section: the default scope, and the folders with
+  Markdown outside it, those mostly named by date or ticket marked as likely records.
+
 - `impact` says where the call chain is handed to a library: overrides of library methods
   it reaches (listeners, `run()`, a servlet's `service()`, Vaadin's `onAttach`…), with where
   their objects are created as the type the chain runs on (`new X(…)` of it or its
@@ -26,6 +33,14 @@ version and date when releasing.
 
 ### Changed
 
+- `check_refs` reads by default only what agents read to work: `CLAUDE.md` and `AGENTS.md`
+  in any folder, `.claude/**/*.md`, `.github/**/*.md` and `README*.md`, instead of every
+  Markdown file of the checkout. A project sets its own scope with `[check_refs] files`
+  (globs or folders; it replaces the default) in `.scipq.toml` or its `[[project]]` entry;
+  `files` in the call still checks any doc. The output's `scope:` line says which set was
+  read and from where, and how many other Markdown files were not (and how many are under
+  archive folders or excluded). Archive folders are left out of a configured scope too,
+  unless a glob names them.
 - `check_refs` binds names to line numbers more finely. A name after an arrow, a
   preposition ("de X (File:N)") or before a parenthesis that goes on in prose still names
   the line but never makes the doc "wrong in its own version"; a member written alone in

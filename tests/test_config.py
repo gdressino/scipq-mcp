@@ -60,6 +60,42 @@ bogus = 1
         for w in st.warnings)
 
 
+def test_check_refs_scope_from_the_checkout_or_the_user(tmp_path):
+    root = tmp_path / "shop"
+    root.mkdir()
+    (root / "settings.gradle").write_text("rootProject.name = 'shop'\n")
+    home = tmp_path / "home"
+    home.mkdir()
+    st = CFG.settings_for(str(root), home=str(home))
+    assert st.check_refs_files is None                      # the default: what agents read
+    (root / ".scipq.toml").write_text('[check_refs]\nfiles = ["docs/guides", "/etc/*.md", '
+                                      '"../x/*.md"]\n')
+    st = CFG.settings_for(str(root), home=str(home))
+    assert st.check_refs_files == ["docs/guides"] and st.check_refs_files_from == ".scipq.toml"
+    assert sum("check_refs.files" in w and "must be relative" in w for w in st.warnings) == 2
+    write(str(home / "config.toml"), '[[project]]\nmatch = { root_project = "shop" }\n'
+          '[project.check_refs]\nfiles = []\n')
+    st = CFG.settings_for(str(root), home=str(home))
+    assert st.check_refs_files == [] and "config.toml" in st.check_refs_files_from  # replaces
+
+
+def test_init_config_suggests_a_check_refs_scope(tmp_path):
+    root = tmp_path / "repo"
+    for rel in ("CLAUDE.md", "docs/guides/a.md", "docs/guides/b.md", "docs/fixes/2026-01-02-x.md",
+                "docs/fixes/2026-02-03-y.md", "docs/fixes/PROJ-123_z.md", "docs/fixes/index.md",
+                "docs/archive/old.md", "notes.md", "docs/guides/v2-2026.md"):
+        write(str(root / rel), "x\n")
+    from scipq_mcp.checkrefs import md_folders
+    assert md_folders(str(root)) == [("docs/fixes", 4, 3), ("docs/guides", 3, 0), (".", 1, 0)]
+    text = CFG.repo_template([], detected=False, md_folders=md_folders(str(root)))
+    import tomllib
+    tomllib.loads(text)
+    assert '#   "docs/fixes": 4 .md files, 3 named by date or ticket: records? leave them ' \
+        'out' in text
+    assert '#   "docs/guides": 3 .md files\n' in text and "the checkout's root: 1 .md file" in text
+    assert '# files = ["**/CLAUDE.md", "**/AGENTS.md"' in text
+
+
 def test_user_profile_overrides_builtin(tmp_path):
     home = tmp_path / "home"
     write(str(home / "profiles" / "junit.toml"), '[profile]\nname = "junit"\n'

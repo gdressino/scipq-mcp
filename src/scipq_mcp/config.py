@@ -113,6 +113,9 @@ class Settings:
     # reaches whoever creates that object.
     lifecycle_methods: set[str] = field(default_factory=set)
     concepts_exclude: list[str] = field(default_factory=list)   # path globs (vendored code)
+    # The docs check_refs reads when the call names none (None: the files agents read)
+    check_refs_files: list[str] | None = None
+    check_refs_files_from: str = ""      # where it came from
     check_refs_exclude: list[str] = field(default_factory=list)  # docs not to check (archives)
     # Words a doc writes before a path for another branch's version (v4 `path:N`), like main
     check_refs_versions: list[str] = field(default_factory=list)
@@ -278,6 +281,9 @@ def sanitize_repo_config(data: dict) -> tuple[dict, list[str]]:
         cc["exclude"] = [g for g in _as_list(cc["exclude"], "concepts.exclude", warnings)
                          if _relative_glob(g, "concepts.exclude", warnings)]
     cr = out.get("check_refs")
+    if isinstance(cr, dict) and "files" in cr:
+        cr["files"] = [g for g in _as_list(cr["files"], "check_refs.files", warnings)
+                       if _relative_glob(g, "check_refs.files", warnings)]
     if isinstance(cr, dict) and "exclude" in cr:
         cr["exclude"] = [g for g in _as_list(cr["exclude"], "check_refs.exclude", warnings)
                          if _relative_glob(g, "check_refs.exclude", warnings)]
@@ -360,8 +366,27 @@ def _relative_glob(g, where: str, warnings: list[str]) -> bool:
     return True
 
 
+def _check_refs_template(md_folders) -> str:
+    """The [check_refs] section of init-config's template: the default scope, and the folders
+    with Markdown out of it (those mostly named by date look like records)."""
+    lines = ["# [check_refs]   # the docs check_refs reads when the call names none",
+             '# files = ["**/CLAUDE.md", "**/AGENTS.md", ".claude/**/*.md", ".github/**/*.md",',
+             '#          "**/README*.md"]   # the default (what agents read); this list '
+             "replaces it"]
+    if md_folders:
+        lines.append("#   Markdown out of it here (add the folders whose docs agents follow):")
+        for folder, n, dated in md_folders:
+            where = "the checkout's root" if folder == "." else f'"{folder}"'
+            rec = (f", {dated} named by date or ticket: records? leave them out"
+                   if dated * 2 > n else f", {dated} named by date or ticket" if dated else "")
+            lines.append(f"#   {where}: {n} .md file{'s' if n != 1 else ''}{rec}")
+    lines += ['# exclude = ["docs/audits/**"]   # never read, not even when files names them',
+              '# other_versions = ["v4"]   # words a doc writes before a path of another branch']
+    return "\n".join(lines)
+
+
 def repo_template(profiles: list[str], detected: bool, generated: list[str] = (),
-                  generated_java: list[str] | None = None) -> str:
+                  generated_java: list[str] | None = None, md_folders=()) -> str:
     """A `.scipq.toml` to start from (printed by `scipq-mcp init-config`)."""
     names = ", ".join(f'"{p}"' for p in profiles)
     if generated:
@@ -398,6 +423,8 @@ profiles = [{names}]   # {why}
 #   placeholders: {{module}} {{task}} {{fqcn}} {{simple}} {{classes}} {{tests}}
 
 {by_name}
+
+{_check_refs_template(md_folders)}
 
 # [[entry_points]]                  # framework entry points beyond the profiles
 # kind = "screen"
@@ -550,6 +577,9 @@ def _apply(s: Settings, data: dict, origin: str = "") -> None:
                             if g]
     s.concept_attributes += list(data.get("concepts", {}).get("attributes", []))
     s.concepts_exclude += strings(data.get("concepts", {}).get("exclude", []))
+    if isinstance(data.get("check_refs", {}).get("files"), (list, str)):  # replaces, not adds
+        s.check_refs_files = [g for g in strings(data["check_refs"]["files"]) if g.strip()]
+        s.check_refs_files_from = origin
     s.check_refs_exclude += strings(data.get("check_refs", {}).get("exclude", []))
     s.check_refs_versions += strings(data.get("check_refs", {}).get("other_versions", []))
     s.lifecycle_methods |= set(strings(data.get("lifecycle", {}).get("methods", [])))

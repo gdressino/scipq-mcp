@@ -209,10 +209,16 @@ section. Unknown keys are reported, not ignored silently.
    (built without the plugin) and shards without classes (failed javac), stale files, running
    builds, the Gradle build cache, the cache and indexes of deleted checkouts, configuration
    warnings, JDKs, what refactoring would use.
-6. `check_refs(files)`: `Type#member`, `Type.method(…)`, qualified names, `{@link}` and
+6. `check_refs(files, since)`: `Type#member`, `Type.method(…)`, qualified names, `{@link}` and
    `File.java:N` mentioned in Markdown, resolved at once from the auxiliary index; missing types
    and members, wrong parameter lists, missing files, moved lines. Library types, placeholders,
    examples, negated mentions, other languages' snippets and archive folders are left alone.
+   Scope: the files named, else `[check_refs] files`, else what agents read (`CLAUDE.md`,
+   `AGENTS.md`, `.claude/**`, `.github/**`, `README*.md`); records (audits, fix write-ups)
+   describe the code of their day and are read only when named. The output says the scope
+   and how many Markdown files it left out. `since=REF`: from the merge base with HEAD to the
+   working tree, the docs changed and those that name a changed `.java` file or its types as
+   code (backticks, `X.java`, `X#`, `X.m(`), keeping in the latter only those mentions.
    A line number is checked against the names of its own part of the line (the name glued
    to it, else its parentheses, clause or table cell; a name after another path or a bare
    `:N` is that one's), at any of the lines listed with it (`:40,42-43`, `:12 + 80`);
