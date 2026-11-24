@@ -4,6 +4,7 @@ changed code, dependencies between modules or packages, dead-code candidates and
 from __future__ import annotations
 
 import fnmatch
+import bisect
 import os
 import re
 import unicodedata
@@ -482,6 +483,38 @@ class Graph:
 
     # impact / tests / path -------------------------------------------------------------------
 
+    def _runs_given(self, caller: int, shard_id: int, line: int, col: int, root: str,
+                    masked: dict, cache: dict, depth: int = 0) -> bool:
+        """The method called at line:col of caller's code (in that shard) is the project's
+        and runs the lambda or method reference it is given before returning (a helper
+        that opens a transaction and calls it): the call is direct, not kept for later."""
+        key = (caller, shard_id)
+        if key not in cache:
+            cache[key] = {x.split("@", 1)[0]: sid for sid, sites in self.con.execute(
+                "SELECT symbol_id, sites FROM refs WHERE caller_id = ? AND shard_id = ?", key)
+                for x in sites.split(",") if x}
+        sid = cache[key].get(f"{line}:{col}")
+        if sid is None:
+            return False
+        if ("body", sid) not in cache:
+            row = self.con.execute("SELECT shard_id, body_start, body_end, signature FROM defs "
+                                   "WHERE symbol_id = ? AND body_start IS NOT NULL", (sid,)
+                                   ).fetchone()
+            sh = self.shards()
+            ok = False
+            if row and row[0] in sh and row[2] is not None and row[2] - row[1] < 400:
+                text, starts = _masked(root, sh[row[0]][0], masked)
+                lo, hi = row[1], min(row[2] + 1, len(starts) - 1)
+                cache[("body", sid)] = False        # while it is looked at (recursion)
+
+                def passed(k: int, base=starts[lo], shard=row[0]) -> bool:
+                    n = bisect.bisect_right(starts, base + k) - 1
+                    return depth < 3 and self._runs_given(sid, shard, n, base + k - starts[n],
+                                                          root, masked, cache, depth + 1)
+                ok = _runs_its_argument(text[starts[lo]:starts[hi]], passed)
+            cache[("body", sid)] = ok
+        return cache[("body", sid)]
+
     def impact(self, symbol: str, depth: int = 3, include_overridden: bool = True,
                max_nodes: int = 20000, root: str = "", lifecycle: set[str] | None = None
                ) -> tuple[list[Node], bool]:
@@ -547,6 +580,7 @@ class Graph:
             return shard_id not in shards_naming(others)
         self.left_out = 0                   # calls to overridden methods left out
         masked: dict[str, tuple] = {}       # source -> its masked text, line starts
+        given: dict = {}                    # what runs a lambda it is given in place
         nodes: dict[int, Node] = {}
         names: dict[int, str] = self.names(frontier)
         truncated = False
@@ -623,8 +657,11 @@ class Graph:
                 src, mod, test = sh[shard_id]
                 nodes[caller] = Node("", level, names.get(target, ""), src, 0, module_of(mod),
                                      bool(test), _lines(sites), mod,
-                                     inner=all(_deferred_site(root, src, x, masked)
-                                               for x in sites.split(",") if x))
+                                     inner=all(_deferred_site(
+                                         root, src, x, masked,
+                                         lambda ln, col, c=caller, s_=shard_id:
+                                         self._runs_given(c, s_, ln, col, root, masked, given))
+                                         for x in sites.split(",") if x))
                 if len(nodes) >= max_nodes:
                     truncated = True
                     break
@@ -1466,10 +1503,11 @@ _RUNS_NOW = {"forEach", "forEachOrdered", "forEachRemaining", "ifPresent", "ifPr
              "toMap", "groupingBy", "partitioningBy", "or"}
 
 
-def _in_lambda(t: str, pos: int, limit: int = 30000) -> bool:
+def _in_lambda(t: str, pos: int, limit: int = 30000, runs_at=None) -> bool:
     """The code at pos of a masked source (javasrc.mask) runs in a lambda's body or is a
     method reference (::name), handed to code that calls it later: not to a method that
-    runs it in place (forEach, ifPresent, map…), unless that is inside such a lambda too."""
+    runs it in place (forEach, ifPresent, map…, or what runs_at(offset of the called name)
+    says), unless that is inside such a lambda too."""
     paren = brace = 0
     arrow_ok = True         # an arrow at this level still holds pos (no , or ; since)
     pending = t[max(0, pos - 2):pos] == "::"   # in a lambda: to whom is it given?
@@ -1483,8 +1521,10 @@ def _in_lambda(t: str, pos: int, limit: int = 30000) -> bool:
                 paren -= 1
             else:
                 if pending:
-                    name = re.search(r"([\w$]+)\s*(?:<[^<>()]*>\s*)?$", t[max(0, i - 200):i])
-                    if not (name and name.group(1) in _RUNS_NOW):
+                    head = t[max(0, i - 200):i]
+                    name = re.search(r"([\w$]+)\s*(?:<[^<>()]*>\s*)?$", head)
+                    if not (name and (name.group(1) in _RUNS_NOW or runs_at is not None and
+                                      runs_at(i - len(head) + name.start(1)))):
                         return True     # an argument of a call that keeps it
                     pending = False     # run in place: what holds that call decides
                 arrow_ok = True     # out of an argument list, into the expression holding it
@@ -1516,13 +1556,8 @@ def _in_lambda(t: str, pos: int, limit: int = 30000) -> bool:
     return pending
 
 
-def _deferred_site(root: str, source: str, site: str, cache: dict) -> bool:
-    """A call site ("line:col", 0-based) inside an anonymous class (@), a lambda's body or a
-    method reference."""
-    if "@" in site:
-        return True
-    if not root:
-        return False
+def _masked(root: str, source: str, cache: dict) -> tuple[str, list[int]]:
+    """A source's masked text (javasrc.mask) and where each line starts."""
     got = cache.get(source)
     if got is None:
         from .javasrc import mask
@@ -1536,13 +1571,94 @@ def _deferred_site(root: str, source: str, site: str, cache: dict) -> bool:
             k += len(line) + 1
             starts.append(k)
         got = cache[source] = (text, starts)
-    text, starts = got
+    return got
+
+
+def _call_named_before(t: str, k: int) -> int | None:
+    """Where the name of the call whose argument list holds t[k] starts."""
+    depth, i = 0, k - 1
+    while i >= 0:
+        if t[i] in ")]":
+            depth += 1
+        elif t[i] in "([":
+            if not depth:
+                if t[i] != "(":
+                    return None
+                name = re.search(r"([\w$]+)\s*$", t[max(0, i - 200):i])
+                return i - len(t[max(0, i - 200):i]) + name.start(1) if name else None
+            depth -= 1
+        elif t[i] in ";{}" and not depth:
+            return None
+        i -= 1
+    return None
+
+
+def _runs_its_argument(body: str, runs_at=None) -> bool:
+    """A method body that runs a parameter it is given before returning: the parameter is
+    only called (p.accept(…), p.get()) or handed as it is to a call that runs it
+    (runs_at(offset of that call's name in body)), never kept or returned, and not from a
+    lambda kept for later (executor.submit(() -> p.run()))."""
+    k = body.find("(")
+    if k < 0:
+        return False
+    depth, j = 0, k
+    while j < len(body):
+        depth += {"(": 1, ")": -1}.get(body[j], 0)
+        if depth == 0:
+            break
+        j += 1
+    params = body[k + 1:j]
+    names, depth, part = [], 0, ""
+    for ch in params + ",":
+        if ch in "<([":
+            depth += 1
+        elif ch in ">)]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            ident = re.findall(r"[\w$]+", part)
+            if ident:
+                names.append(ident[-1])
+            part = ""
+        else:
+            part += ch
+    open_ = body.find("{", j)
+    if open_ < 0:
+        return False            # abstract, or an interface's: no body here
+    inner = body[open_:]
+    for p_ in names:
+        uses = [mo.start() for mo in re.finditer(r"(?<![\w$.])" + re.escape(p_) + r"(?![\w$])",
+                                                 inner)]
+        calls = [mo.start() for mo in re.finditer(r"(?<![\w$.])" + re.escape(p_) +
+                                                  r"\s*\.\s*[A-Za-z_$][\w$]*\s*\(", inner)]
+        handed = [u for u in uses if u not in calls]
+        on = [(u, _call_named_before(inner, u)) for u in handed]
+        if (calls or handed) and not any(_in_lambda(inner, c) for c in calls) and all(
+                c is not None and re.search(r"[(,]\s*$", inner[max(0, u - 50):u]) and
+                re.match(r"\s*[,)]", inner[u + len(p_):])
+                and runs_at is not None and runs_at(open_ + c) for u, c in on):
+            return True
+    return False
+
+
+def _deferred_site(root: str, source: str, site: str, cache: dict, runs_at=None) -> bool:
+    """A call site ("line:col", 0-based) inside an anonymous class (@), a lambda's body or a
+    method reference; runs_at(line, col) tells whether the call named there runs what it is
+    given in place."""
+    if "@" in site:
+        return True
+    if not root:
+        return False
+    text, starts = _masked(root, source, cache)
     line, _, col = site.partition(":")
     try:
         ln, c = int(line), int(col.split("@", 1)[0] or 0)
     except ValueError:
         return False
-    return ln < len(starts) - 1 and _in_lambda(text, starts[ln] + c)
+
+    def at(k: int) -> bool:
+        n = bisect.bisect_right(starts, k) - 1
+        return runs_at is not None and runs_at(n, k - starts[n])
+    return ln < len(starts) - 1 and _in_lambda(text, starts[ln] + c, runs_at=at)
 
 
 def _lines(sites: str) -> list[int]:

@@ -29,7 +29,9 @@ version and date when releasing.
 - `impact` marks the rows whose calls are all inside a lambda (one line or a block, cast,
   nested in another), a method reference or an anonymous class, and lists every such
   caller (twenty, then how many more); a lambda given to a method that runs it in place
-  (`forEach`, `ifPresent`, `map`, `computeIfAbsent`…) counts as a direct call. A helper
+  (`forEach`, `ifPresent`, `map`, `computeIfAbsent`…, or a method of the project that only
+  calls it, or hands it to one that does: a helper that opens a transaction and runs it)
+  counts as a direct call. A helper
   method of an entry point's type says it "is in a screen" (the type is the entry point),
   not that it is one itself.
 

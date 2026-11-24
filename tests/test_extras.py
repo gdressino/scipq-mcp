@@ -1048,3 +1048,27 @@ def test_calls_inside_lambdas_are_told_apart():
         assert not inside(head + code + "\n  }\n}"), code
     assert inside(head + "b.add(this::go);\n  }\n}", "go)")       # a method reference kept
     assert not inside(head + "list.forEach(this::go);\n  }\n}", "go)")
+
+
+def test_project_helpers_that_run_the_lambda_they_are_given():
+    # A helper that opens a transaction and calls the lambda runs it in place (the call is
+    # direct); one that keeps it, hands it to another thread or stores it does not.
+    from scipq_mcp.graph import _runs_its_argument
+    from scipq_mcp.javasrc import mask
+    runs = ["static void inTx(Consumer<Pm> work) {\n  Pm pm = open();\n  try { work.accept(pm); }"
+            " finally { pm.close(); }\n}",
+            "<T> T get(Function<Pm, T> f) {\n  return f.apply(open());\n}",
+            "<T> T get(String name, Function<Pm, T> f) {\n  if (cur != null) return f.apply(cur);"
+            "\n  return f.apply(open(name));\n}"]
+    keeps = ["Task(Runnable r) {\n  this.r = r;\n}",
+             "void later(Runnable r) {\n  executor.submit(() -> r.run());\n}",
+             "void pass(Runnable r) {\n  other(r);\n}",
+             "Runnable wrap(Runnable r) {\n  return r;\n}"]
+    for body in runs:
+        assert _runs_its_argument(mask(body)), body
+    for body in keeps:
+        assert not _runs_its_argument(mask(body)), body
+    # handed as it is to an overload: as that one does
+    one = "<T> T get(Function<Pm, T> f) {\n  return get(DEFAULT, f);\n}"
+    assert _runs_its_argument(mask(one), lambda k: True)
+    assert not _runs_its_argument(mask(one), lambda k: False)
