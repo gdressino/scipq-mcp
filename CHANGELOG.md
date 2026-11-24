@@ -59,6 +59,12 @@ version and date when releasing.
 - `check_refs` says where a field is declared and the lines that use it ("x is declared at
   59; named at 122, 130"), not "x is at 59", and for a line moved with others listed with
   it (`:1258/1282/1349`) where each of them went.
+- `check_refs` places a line whose text repeats in the file (a try-with-resources in every
+  method) only in the same method, by its order there when the method has as many copies
+  then as now; else the lines are said to have changed. A path that stands for a file of
+  the checkout is shown as that file's path. A word that opens a sentence in parentheses
+  ("(form bound to …)") is not taken for a name, and a call followed by the next line
+  number ("+ tx.commit() at :1373") is that number's.
 - `check_refs` no longer places a blank or brace-only line by its text, no longer gives
   "now at" for names like `add` or `get`, does not take an older version of the file for a
   name written further from the line number, and reads a path cut at a `/` over two lines

@@ -834,9 +834,10 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
     # branch's code, not this one's.
     elsewhere = re.compile(r"(?:\b(?:en|in|on|de)\s+(?:main|master)|(?<![\w-])(?:main|master)\s+"
                            r"[0-9a-f]{7,40}|(?:^|[(\[,;—–]\s*)(?:main|master)|"
-                           r"(?<![\w-])(?=[0-9a-f]*\d)[0-9a-f]{7,40}(?=:)" +
+                           r"(?<![\w-])(?=[0-9a-f]*\d)[0-9a-f]{7,40}(?:…|\.\.\.)?(?=:)|"
+                           r"\bgit\s+show\s+[^\s`]*" +
                            "".join("|(?<![\\w-])" + re.escape(v) for v in other_versions) +
-                           r")(?:\s+|(?<=[0-9a-f]):)`?$", re.I)
+                           r")(?:\s+|(?<=[0-9a-f….]):)`?$", re.I)
     # A configured label covers the rest of its sentence or list, up to another version
     # word (v4 `A`, `B`; v5 `C`), across a line break too.
     label = re.compile(r"(?<![\w/.-])(?:" + "|".join(map(re.escape, other_versions)) +
@@ -1344,6 +1345,41 @@ def _renamed_from(root: str, paths: list[str]) -> dict[str, str]:
     return found
 
 
+_ENCLOSING: dict[int, tuple] = {}
+_HEADS = {"if", "for", "while", "switch", "catch", "synchronized", "try", "return", "new"}
+
+
+def _enclosing(lines: list[str], n: int) -> str | None:
+    """The name of the method or constructor whose body holds line n (1-based) of a source,
+    by its braces (strings and comments masked); None at class level or when not found."""
+    got = _ENCLOSING.get(id(lines))
+    if got is None or got[0] is not lines:
+        from .javasrc import mask
+        got = (lines, mask("\n".join(lines)).split("\n"))
+        if len(_ENCLOSING) > 64:
+            _ENCLOSING.clear()
+        _ENCLOSING[id(lines)] = got
+    masked = got[1]
+    depth = 0
+    for j in range(min(n, len(masked)) - 1, -1, -1):
+        row = masked[j] if j < n - 1 else masked[j][:0]
+        for k in range(len(row) - 1, -1, -1):
+            c = row[k]
+            if c == "}":
+                depth += 1
+            elif c == "{":
+                if depth:
+                    depth -= 1
+                    continue
+                head = " ".join(masked[max(0, j - 3):j] + [row[:k]]).rstrip()
+                if re.search(r"\b(?:class|interface|enum|record)\b[^;{}()]*$", head):
+                    return None
+                mo = re.search(r"([\w$]+)\s*\([^;{}]*\)\s*(?:throws\s+[\w$.,\s<>]+)?$", head)
+                if mo and mo.group(1) not in _HEADS and not head.endswith("->"):
+                    return mo.group(1)
+    return None
+
+
 def _block_at(old: list[str], cur: list[str], n: int, end: int, near: int):
     """Where the lines n..end of an older version stand, unchanged, in the current one (the
     occurrence nearest to near): (first, last) or None. Only a block with some text of its
@@ -1357,6 +1393,18 @@ def _block_at(old: list[str], cur: list[str], n: int, end: int, near: int):
             [y.strip() for y in cur[i - k0:i - k0 + len(block)]] == block]
     if not hits:
         return None
+    if len(hits) > 1 or sum(1 for i, x in enumerate(old) if x.strip() == block[k0] and
+                            [y.strip() for y in old[i - k0:i - k0 + len(block)]] == block) > 1:
+        # A repeated text (a try-with-resources in every method): only a copy in the same
+        # method is that block; else it is not known where it went.
+        was = _enclosing(old, n)
+        hits = [h for h in hits if was is not None and _enclosing(cur, h + 1) == was]
+        mine = [i - k0 for i, x in enumerate(old) if x.strip() == block[k0] and i - k0 >= 0 and
+                [y.strip() for y in old[i - k0:i - k0 + len(block)]] == block and
+                _enclosing(old, i - k0 + 1) == was]
+        if not hits or len(hits) != len(mine) or n - 1 not in mine:
+            return None     # as many copies in that method then and now, or it is not known
+        return hits[mine.index(n - 1)] + 1, hits[mine.index(n - 1)] + len(block)
     # A repeated line: the copy whose surroundings match the old ones best, then the
     # nearest.
     around = {x.strip() for x in old[max(0, n - 7):n - 1] + old[end:end + 6] if len(x.strip()) > 3}
@@ -1789,11 +1837,14 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         written = written[2:]           # a git diff's a/ and b/ prefixes
     if re.search(r"/tmp\b|\bscratch\b", line[max(0, mo.start() - 40):mo.start()]):
         return                          # a scratch copy, not the checkout's file
-    hits = _find_path(written, by_suffix, sources)
+    hits = list(_find_path(written, by_suffix, sources))    # a copy: by_suffix's lists stay
     if also:
         hits += [h for h in _find_path(also, by_suffix, sources) if h not in hits]
-    if not hits and written.startswith(("/", "~/")):
-        return              # an absolute path to a file this repository does not have
+    if written.startswith(("/", "~/")):
+        if not hits:
+            return          # an absolute path to a file this repository does not have
+        if len(hits) == 1:  # shown as the checkout's path it stands for
+            shown = shown.replace(mo.group(1), hits[0], 1)
     if not hits:
         for base_dir in ("", doc_dir):      # from the checkout, or from the document
             p = os.path.normpath(os.path.join(base_dir, written)).replace(os.sep, "/")
@@ -2473,6 +2524,9 @@ def _glued_calls(line: str, mo, code: list, a: int, b: int, tight: bool = False)
     after = re.split(r"(?:,|\s(?:y|and|e))\s*`?:\d", after)[0]
     nxt = [x.start() for x in (*_PATH.finditer(after), *_BARE.finditer(after)) if x.start() > 0]
     after = after[:min(nxt)] if nxt else after      # up to the next path or line number
+    if nxt:     # "… + tx.commit() en :1373": the last item is the next number's
+        cut = re.search(r"(?:\s\+\s|,\s|\s(?:y|and|e)\s)[^+,]*?\s(?:en|at|in|on)\s*`?$", after)
+        after = after[:cut.start()] if cut else after
     if re.match(r"`?\s*(?:—|–|-|:|\()", after):
         pieces.append(after[:40] if tight else after[:160])
     before = line[a:mo.start()]
@@ -2572,6 +2626,8 @@ def _glued_names(segment: str, path_mention: str) -> set[str]:
             if k == 2 and not (re.search(r"[a-z][A-Z]|[_$]", name) or
                                segment[max(0, m_.start(1) - 1):m_.start(1)] in ("`", ".", "#") or
                                re.match(r"[\w$]+\s*[(=]", tail)):
+                if re.match(r"\s+[^\W\d_]{2,}\s+[^\W\d_]{2,}", segment[m_.end(1):]):
+                    continue    # "(form bindeado a …)": a sentence, not a name
                 name = "?" + name   # "(aforo)": a word; code only if the file declares it
             # After a dash, prose follows unless the word looks like code; before the path's
             # parenthesis, likewise (`foo` (File:N), foo() (File:N), not "por eval (File:N)").

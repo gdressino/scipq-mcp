@@ -842,9 +842,9 @@ def test_check_refs_continuations_bind_to_their_file(sample_copy, tmp_path):
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs(files=["NOTES.md"])
     # 1: Session's line 4 is fine; 3: far from the path, and only `get`; 5: past its
     # parenthesis; 6: a path cut at a "/" over two lines
-    assert f"line 1 ×4 (also 3, 5, 6)  {e}:15  — line 15 is now 18" in out, out
-    # 8: an absolute path to another checkout of the repository: its tail
-    assert f"line 8  /home/someone/other-worktree/{e}:15  — line 15 is now 18" in out
+    # 8: an absolute path to another checkout of the repository: shown as the file it is
+    assert f"line 1 ×5 (also 3, 5, 6 …)  {e}:15  — line 15 is now 18" in out, out
+    assert "/home/someone" not in out
     assert "line 9  " not in out                                      # another version's
     assert "line 10  Entity.java:19  — line 19 is now 22" in out      # T.m (:N), no path
     assert "line 12  " not in out                                     # past its own list
@@ -1082,3 +1082,22 @@ def test_project_helpers_that_run_the_lambda_they_are_given():
     one = "<T> T get(Function<Pm, T> f) {\n  return get(DEFAULT, f);\n}"
     assert _runs_its_argument(mask(one), lambda k: True)
     assert not _runs_its_argument(mask(one), lambda k: False)
+
+
+def test_repeated_lines_are_placed_only_in_their_method():
+    from scipq_mcp.checkrefs import _block_at
+    old = ["class A {", "  void one() {", "    try (Pm pm = open()) {", "      a();", "    }",
+           "  }", "  void two() {", "    try (Pm pm = open()) {", "      b();", "    }", "  }",
+           "}"]
+    # one() lost its try; two() moved down: line 3 (one's) is nowhere now
+    cur = ["class A {", "  int f;", "  void one() {", "    a();", "  }", "  void two() {",
+           "    try (Pm pm = open()) {", "      b();", "    }", "  }", "}"]
+    assert _block_at(old, cur, 3, 3, 3) is None
+    assert _block_at(old, cur, 8, 8, 8) == (7, 7)           # two()'s, in two()
+    assert _block_at(old, cur, 4, 4, 4) == (4, 4)           # a unique line: by its text
+    # several copies in one method: by their order, when as many then as now
+    two = ["class A {", "  void m() {", "    x = 1;", "    y();", "    x = 1;", "  }", "}"]
+    two_now = ["class A {", "  int f;", "  void m() {", "    x = 1;", "    y();", "    x = 1;",
+               "  }", "}"]
+    assert _block_at(two, two_now, 5, 5, 5) == (6, 6)
+    assert _block_at(two, ["class A {", "  void m() {", "    x = 1;", "  }", "}"], 5, 5, 5) is None
