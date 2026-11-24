@@ -76,7 +76,7 @@ _IMPLICIT = {"toString", "hashCode", "equals", "compareTo", "close", "iterator",
 # More line numbers of the same file after a path's: ,42-43 /50 , :61 + 80-84 y :61 →:70
 _MORE_LINES = re.compile(r"(?:[,/]:?(\d+)(?:-(\d+))?|`?(?:,\s*|\s+(?:y|and|e)\s+|\s*(?:\+|→|->)\s*)"
                          r"`?:(\d+)(?:-(\d+))?|\s*(?:\+|→|->)\s*(\d+)(?:-(\d+))?"
-                         r"|\s+(?:y|and)\s+(\d+)(?:-(\d+))?(?=\)|,|;|\s*$))(?![\w.])")
+                         r"|\s+(?:y|and)\s+(\d+)(?:-(\d+))?(?=\)|,|;|\s*$|\s+[—–]\s))(?![\w.])")
 # A line number alone after a path, for the same file: `:30`, (:41, :45)
 _BARE = re.compile(r"(?:(?<=[\s`(,/])|^):(\d+)(?:-(\d+))?(?![\w.])")
 _ENHANCER = re.compile(r"(dn|jdo)[A-Z_]\w*")
@@ -2109,6 +2109,14 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
             re.search(r"(?<![\w$.])" + q + r"\s*(?:\.|=[^=])", spans_text) is not None and \
             re.search(r"(?<![\w$])" + q + r"\(|[.#]" + q + r"(?![\w$])", spans_text) is None
     names = [x for x in names if not receiver_only(x)]
+    # `A.java:367 + B.java:1357 — a() en b()`: of the names after the group, each file's own
+    if re.search(r"\.java(?::[\d,\-–]+)?`?\s*\+\s*`?$", line[max(0, mo.start() - 60):mo.start()]) \
+            or re.match(r"`?\s*\+\s*`?[\w/.…-]+\.java", line[mo.end():]):
+        near = re.findall(r"`(?:[\w$]+[.#])?([a-z_$][\w$]*)(?:\([^()`]*\))?`",
+                          line[mo.end():mo.end() + 200])
+        own_names = [x for x in dict.fromkeys(names + fallback + near)
+                     if any(m.member_syms.get((t, x)) for f in hits for t in m.types_in.get(f, []))]
+        names = own_names or names
     # More lines of the same file listed after it (:40,42-43, :12/20, :12 + 80-84, :30, :35):
     # the name may be at any of them.
     more: list[tuple[int, int]] = []
@@ -2170,6 +2178,16 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         ordered = list(dict.fromkeys(
             g.group(1) for p, q in code if oa <= p < mo.start() and ours(p)
             for g in [re.fullmatch(r"(?:[\w$]+\.)*([a-z_$][\w$]*)", line[p + 1:q - 1])] if g))
+    if more and len(ordered) != len(more) + 1:
+        # `X.java:1358 y 1373 — a(true) + b()`: the calls after the dash, one per line
+        tail = line[mo.end():mo.end() + 200]
+        nxt = _PATH.search(tail)
+        tail = re.split(r";|\s·\s|\||\s→\s|:\s|`", tail[:nxt.start()] if nxt else tail)[0]
+        dash = re.search(r"\s[—–-]\s", tail)
+        listed = list(dict.fromkeys(re.findall(r"(?<![\w$])([a-z_$][\w$]*)\s*\(",
+                                               tail[dash.end():]))) if dash else []
+        if len(listed) == len(more) + 1 and re.search(r"\)\s*(?:\+|,|y|and)\s", tail):
+            ordered = listed
     if more and len(ordered) == len(more) + 1 and verdict(n, end_n, fits, more) is not None:
         src = fits[0]
         for x, (lo, hi) in zip(ordered, [(n, end_n), *more]):
