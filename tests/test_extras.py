@@ -1192,8 +1192,8 @@ def test_source_of_a_file_changed_after_its_compilation(sample_copy, tmp_path):
     assert "was not found in it as it is now: these are lines 14–16 of the current file" in out
     assert "renamed? a method with the same parameters is there now: changeState(int) at " \
            "lines 17–19" in out, out
-    assert "body 14–16 — not in the file as it is now (it changed after its compilation)" in \
-        svc.context("Entity#setState")
+    assert "body 14–16 — not in the file as it is now (it changed after its compilation; " \
+           "renamed? changeState(int) at lines 17–19)" in svc.context("Entity#setState")
 
 
 def _edit(root, rel, old, new, when):
@@ -1287,3 +1287,11 @@ def test_quoted_sites_review_cases(sample_copy, refactor_root, tmp_path):
         "javax/jdo/annotations/VersionStrategy#`<init>`().")
     assert "  5: NONE, VERSION_NUMBER, DATE_TIME (×3)  [VersionStrategy#NONE]  (compiled at 4)" \
         in out, out
+
+
+def test_context_head_of_a_definition_that_did_not_move(sample_copy, tmp_path):
+    from scipq_mcp.service import Service
+    _edit(sample_copy, "core/src/main/java/com/example/model/Entity.java",
+          "        return state;", "        return state; // edited below setState", 1_700_000_500)
+    ctx = Service(sample_copy, cache_dir=str(tmp_path / "c")).context("Entity#setState")
+    assert "body 14–16\n" in ctx and "as it is now" not in ctx.split("\n")[2], ctx

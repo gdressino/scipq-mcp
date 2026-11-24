@@ -8,8 +8,8 @@ version and date when releasing.
 ### Changed
 
 - `context` of a definition whose file changed after its compilation says, next to its
-  compiled location, where it is now (or that it is no longer in the file), as its body
-  does.
+  compiled location, where it is now when it moved, that it is no longer in the file (with
+  the renamed one `source` suggests), or that it may have moved, as its body does.
 
 ## 0.9.3 — 2026-11-24
 

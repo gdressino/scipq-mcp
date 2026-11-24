@@ -162,27 +162,40 @@ def head_of(nav: Navigator, d: Definition) -> list[str]:
     return out + _javadoc(d)
 
 
+def _source_of(nav: Navigator, d: Definition):
+    """X.source of a definition, once per answer (the head and the body both need it, and in
+    a changed file it parses the file)."""
+    cache = nav.__dict__.setdefault("_context_sources", {})
+    if d.symbol not in cache:
+        cache[d.symbol] = X.source(nav, d.symbol, max_lines=100_000)
+    return cache[d.symbol]
+
+
 def _where_now(nav: Navigator, d: Definition) -> str:
     """After the compiled location, when the file changed after its compilation: where the
-    definition is now (found as `source` finds it), or that it is no longer there."""
+    definition is now (found as `source` finds it, if it moved), that it is no longer there
+    (with the renamed one `source` suggests), or that it may have moved."""
     if not nav.ws.freshness_of({d.location.source}).stale:
         return ""
-    src = X.source(nav, d.symbol, max_lines=1)
+    src = _source_of(nav, d)
     if src is None or src.compiled is None:
         return ""
     if src.located == "found" and src.lines:
         a, b = src.lines[0][0], src.end_line
+        if (a, b) == src.compiled:
+            return ""   # the file changed elsewhere
         return (f" — as it is now: {'line ' + str(a) if a == b else f'lines {a}–{b}'} (the "
                 "file changed after its compilation)")
     if src.located == "absent":
-        return " — not in the file as it is now (it changed after its compilation)"
-    return ""
+        return (" — not in the file as it is now (it changed after its compilation"
+                + (f"; renamed? {src.hint}" if src.hint else "") + ")")
+    return " — the file changed after its compilation: this may have moved"
 
 
 def body_section(nav: Navigator, d: Definition, short: str) -> Section | None:
     if d.generated or d.enclosing is None:
         return None
-    src = X.source(nav, d.symbol, max_lines=100_000)
+    src = _source_of(nav, d)
     if src is None or not src.lines:
         return None
     width = len(str(src.lines[-1][0]))
