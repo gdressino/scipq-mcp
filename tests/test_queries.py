@@ -294,3 +294,13 @@ def test_qualified_parameter_types_compare_the_package(refactor_root):
     assert nav.resolve("Overloaded#pick(java.lang.String, int)").symbol == base + "(+2)."
     r = nav.resolve("Overloaded#pick(java.awt.Map, String[])")
     assert r.symbol is None and "no overload" in r.note
+
+
+def test_overloads_of_a_library_method_by_its_name(refactor_root, tmp_path):
+    from scipq_mcp import libsrc as L
+    if not L.jdk_src_zip():
+        pytest.skip("no JDK src.zip on this machine")
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"), library_roots=[L.jdk_src_zip()])
+    out = svc.overloads("HashSet#<init>")
+    assert "5 overloads" in out and "HashSet#<init>()  " in out and \
+        "HashSet#<init>(int, float)" in out

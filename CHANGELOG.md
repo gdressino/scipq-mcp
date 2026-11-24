@@ -43,6 +43,8 @@ version and date when releasing.
 - `refactor`: a select by `files` matching more than 5000 `.java` files stopped there without
   a word (and reported what it saw as everything); it is refused now, to narrow or split. A
   type that does not exist in `where` types is an error instead of leaving every site out.
+- `overloads` with the name of a library method used here in several overloads
+  (`List#remove`) listed the symbols instead of the overloads.
 - Library members are parsed once per source, not once per lookup (`members` of a library
   type, overloads, labels).
 - Library supertypes read from a sources jar missed those of a type whose type parameters

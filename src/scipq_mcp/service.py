@@ -785,7 +785,7 @@ class Service:
             r = nav.resolve(symbol)
             if r.symbol is None:
                 # A name matching several overloads of one method is what this tool is for.
-                syms = sorted({d.symbol for d in r.candidates})
+                syms = sorted({d.symbol for d in r.candidates} | set(r.externals))
                 if syms and all(S.is_method(x) and S.parent(x) == S.parent(syms[0])
                                 and S.name_of(x) == S.name_of(syms[0]) for x in syms):
                     sym, note = syms[0], f"-- {symbol} → {len(syms)} overloads\n"

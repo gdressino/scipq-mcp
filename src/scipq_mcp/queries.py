@@ -559,8 +559,8 @@ class Navigator:
             narrowed, picked = self._library_by_params(external, q.params)
             if not narrowed:
                 return Resolution(None, [], f"no overload of {text.split('(')[0]!r} takes "
-                                            f"{_param_list(q.params)}; pass one of: "
-                                            + ", ".join(external[:20]), external)
+                                            f"{_param_list(q.params)}; those used here:",
+                                  external)
             external = narrowed
         if len(syms) == 1 and not external:
             return Resolution(syms[0], found, f"{text} → {syms[0]}"
@@ -582,10 +582,10 @@ class Navigator:
                 label += ", the overload " + ("without parameters" if not q.params else
                                               "taking " + _param_list(q.params))
             return Resolution(external[0], [], f"{text} → {external[0]} ({label})")
-        if external:
-            shown = ", ".join(external[:20]) + (" …" if len(external) > 20 else "")
+        if external:   # listed by render.candidates
             return Resolution(None, [], f"{text!r} matches {len(external)} external symbols "
-                                        f"(not defined in this project); pass one of: {shown}")
+                                        f"(not defined in this project); pass one of them",
+                              external)
         return Resolution(None, [], f"no symbol in this project matches {text!r}")
 
     def _inherited_parameterless(self, owner: str, name: str) -> str | None:
