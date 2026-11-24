@@ -1180,8 +1180,10 @@ def test_source_of_a_file_changed_after_its_compilation(sample_copy, tmp_path):
     assert "\n17      public void setState(int state) {\n19      }" in out.replace(
         "\n18          this.state = state;", "")
     assert "a line quoted from these files is looked for where it is now" in out
-    assert "body (as it is now; compiled at 14–16, before the file changed):" in \
-        svc.context("Entity#setState")
+    ctx = svc.context("Entity#setState")
+    assert "body (as it is now; compiled at 14–16, before the file changed):" in ctx
+    assert "method at core/src/main/java/com/example/model/Entity.java:14, body 14–16 — as it " \
+           "is now: lines 17–19 (the file changed after its compilation)" in ctx, ctx
     # Gone from the file: the compiled lines, said to be what they are.
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text.replace("setState(int state)", "changeState(int state)"))
@@ -1190,6 +1192,8 @@ def test_source_of_a_file_changed_after_its_compilation(sample_copy, tmp_path):
     assert "was not found in it as it is now: these are lines 14–16 of the current file" in out
     assert "renamed? a method with the same parameters is there now: changeState(int) at " \
            "lines 17–19" in out, out
+    assert "body 14–16 — not in the file as it is now (it changed after its compilation)" in \
+        svc.context("Entity#setState")
 
 
 def _edit(root, rel, old, new, when):

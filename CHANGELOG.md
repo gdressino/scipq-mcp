@@ -3,6 +3,14 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Changed
+
+- `context` of a definition whose file changed after its compilation says, next to its
+  compiled location, where it is now (or that it is no longer in the file), as its body
+  does.
+
 ## 0.9.3 — 2026-11-24
 
 ### Fixed

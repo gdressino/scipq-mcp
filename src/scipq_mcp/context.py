@@ -142,6 +142,8 @@ def head_of(nav: Navigator, d: Definition) -> list[str]:
         where += "  (generated)"
     elif d.enclosing is not None and d.enclosing.end_line > d.enclosing.start_line:
         where += f", body {d.enclosing.start_line + 1}–{d.enclosing.end_line + 1}"
+    if not d.generated:
+        where += _where_now(nav, d)
     out = [d.symbol, where]
     if d.container:
         out.append(f"anonymous class member, in {d.container}")
@@ -158,6 +160,23 @@ def head_of(nav: Navigator, d: Definition) -> list[str]:
                        + (f" (+{len(impl) - len(direct)} indirect)" if len(impl) > len(direct)
                           else ""))
     return out + _javadoc(d)
+
+
+def _where_now(nav: Navigator, d: Definition) -> str:
+    """After the compiled location, when the file changed after its compilation: where the
+    definition is now (found as `source` finds it), or that it is no longer there."""
+    if not nav.ws.freshness_of({d.location.source}).stale:
+        return ""
+    src = X.source(nav, d.symbol, max_lines=1)
+    if src is None or src.compiled is None:
+        return ""
+    if src.located == "found" and src.lines:
+        a, b = src.lines[0][0], src.end_line
+        return (f" — as it is now: {'line ' + str(a) if a == b else f'lines {a}–{b}'} (the "
+                "file changed after its compilation)")
+    if src.located == "absent":
+        return " — not in the file as it is now (it changed after its compilation)"
+    return ""
 
 
 def body_section(nav: Navigator, d: Definition, short: str) -> Section | None:
