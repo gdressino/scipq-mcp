@@ -25,6 +25,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -528,7 +529,8 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                 return any(a <= pos < b for a, b in code)
 
             def add(mention: str, what: str, kind: str, **extra) -> None:
-                hypothetical = any(e <= at[0] <= e + 60 for e in examples) and \
+                hypothetical = any(e <= at[0] <= e + 60 and ln_of(e) == ln_of(at[0])
+                                   for e in examples) and \
                     kind in ("no-type", "no-member", "no-file")
                 ln = ln_of(at[0])
                 if ln not in gone_lines and not hypothetical and \
@@ -577,12 +579,19 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                 checked += 1
                 at[0] = mo.start()
                 named_here += [(x, mo.start()) for x in _check_qualified(m, mo.group(1), add)]
-            for mo in _PATH.finditer(line):
-                checked += 1
-                at[0] = mo.start()
-                _check_path(m, root, mo, by_suffix, sources | unindexed, named_here, line,
-                            code, count_lines, add, text_cache, os.path.dirname(path), abbrev,
-                            other_versions, before_line)
+            paths = list(_PATH.finditer(line))
+            heads: dict[int, list[str]] = {}
+            for k, mo in enumerate(paths):
+                # `X.java:12` and the line numbers alone after it (`:30`, :45-48), each a
+                # mention of that file, up to the next path
+                stop = paths[k + 1].start() if k + 1 < len(paths) else len(line)
+                for one in [mo] + ([_Continuation(line, b_, mo) for b_ in
+                                    _BARE.finditer(line, mo.end(), stop)] if mo.group(2) else []):
+                    checked += 1
+                    at[0] = one.start()
+                    _check_path(m, root, one, by_suffix, sources | unindexed, named_here, line,
+                                code, count_lines, add, text_cache, os.path.dirname(path),
+                                abbrev, other_versions, before_line, starts, heads)
     _since_written(root, problems)
     _gone(root, problems)
     return [p for p in problems if p.kind not in ("drop", "weak", "quoted") and
@@ -760,6 +769,35 @@ def _gone(root: str, problems: list[Problem]) -> None:
 def _also(what: str, more: str) -> str:
     """A message with one more remark in its parentheses."""
     return what[:-1] + "; " + more + ")" if what.endswith(")") else what + f" ({more})"
+
+
+def _blob_stream(root: str, names: list[str]):
+    """git cat-file --batch, one object at a time: (name, text) of each blob, so that many
+    versions of a big doc never sit in memory together."""
+    if not names:
+        return
+    try:
+        proc = subprocess.Popen(["git", *_GIT_CONFIG, "-C", root, "cat-file", "--batch"],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL)
+    except OSError:
+        return
+    feeder = threading.Thread(target=lambda: (proc.stdin.write(
+        "\n".join(names).encode() + b"\n"), proc.stdin.close()), daemon=True)
+    feeder.start()
+    try:
+        for name in names:
+            head = proc.stdout.readline().split()
+            if len(head) < 3 or head[1] != b"blob":
+                continue
+            size = int(head[2])
+            body = proc.stdout.read(size)
+            proc.stdout.read(1)             # the newline after the contents
+            yield name, body.decode(errors="replace")
+    finally:
+        proc.stdout.close()
+        proc.wait()
+        feeder.join()
 
 
 def _blobs(root: str, names: list[str]) -> dict[str, str]:
@@ -957,11 +995,7 @@ def _since_written(root: str, problems: list[Problem]) -> None:
                 versions.setdefault(doc_of[path], []).append((*commit, blob))
     for vs in versions.values():
         vs.sort(key=lambda v: v[1])         # oldest first, across the doc's paths
-    blobs = sorted({b for vs in versions.values() for *_x, b in vs})
-    doc_texts = {b: {x.rstrip("\r") for x in t.split("\n")}       # CRLF docs too
-                 for b, t in _blobs(root, blobs).items()}
     doc_lines: dict[str, list[str]] = {}
-    written: list[tuple[Problem, str, int]] = []           # (problem, commit, time)
     for p in todo:
         if p.path not in doc_lines:
             try:
@@ -969,7 +1003,16 @@ def _since_written(root: str, problems: list[Problem]) -> None:
                     doc_lines[p.path] = fh.read().split("\n")
             except OSError:
                 doc_lines[p.path] = []
-        text = doc_lines[p.path][p.line - 1] if p.line <= len(doc_lines[p.path]) else None
+    texts_of = {id(p): doc_lines[p.path][p.line - 1] if p.line <= len(doc_lines[p.path])
+                else None for p in todo}
+    wanted = {x for x in texts_of.values() if x is not None}
+    # Which of the lines looked for each version of a doc has (CRLF docs too), one at a time
+    blobs = sorted({b for vs in versions.values() for *_x, b in vs})
+    doc_texts = {b: wanted & {x.rstrip("\r") for x in t.split("\n")}
+                 for b, t in _blob_stream(root, blobs)}
+    written: list[tuple[Problem, str, int]] = []           # (problem, commit, time)
+    for p in todo:
+        text = texts_of[id(p)]
         first = next(((c, t) for c, t, b in versions.get(p.path, [])
                       if text is not None and text in doc_texts.get(b, ())), None)
         if first:
@@ -1273,8 +1316,13 @@ def _with_header(root: str, src: str, lo: int, cache: dict) -> int:
 
 def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, code,
                 count_lines, add, text_cache: dict, doc_dir: str = "",
-                abbrev: dict | None = None, other_versions=(), prev_line: str = "") -> None:
+                abbrev: dict | None = None, other_versions=(), prev_line: str = "",
+                starts=(0,), heads: dict | None = None) -> None:
     written, n0 = mo.group(1), mo.group(2)
+    shown = getattr(mo, "shown", None) or mo.group(0)     # a `:N` after a path: path:N
+
+    def physical(pos: int) -> int:
+        return bisect.bisect_right(starts, pos)
     for k, v in (abbrev or {}).items():
         if written.startswith(k):
             written = v + written[len(k):]
@@ -1310,7 +1358,7 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         if pkg_like and pkg_like.group(1) not in m.roots and "src/" not in bare:
             return          # another project's or a library's package path
         same = sorted({s for s in sources if os.path.basename(s) == base})
-        add(mo.group(0), "no such file" + (f" (a {base} is at {', '.join(same[:2])})"
+        add(shown, "no such file" + (f" (a {base} is at {', '.join(same[:2])})"
                                           if same else ""), "no-file", name="" if same else base,
             src="" if same else re.split(r"(?:\.\.\.|…)/", bare)[-1])
         return
@@ -1395,10 +1443,12 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     for x0, y0 in extra_spans:          # `getX()` vacío (`:106`) in the next cell
         others |= {x for b_ in _BARE.finditer(line, x0, y0)
                    for x in (y.lstrip("?") for y in _glued_names(line[x0:y0], b_.group(0)))} - glued
-    in_segment = sorted({S.name_of(x) for x, at in named_here if inside(at) and ours(at)} |
-                        {g.group(1) for p, q in code if inside(p) for g in
-                         re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q])
-                         if ours(p + g.start())})
+    found = [(S.name_of(x), at) for x, at in named_here if inside(at) and ours(at)] + \
+        [(g.group(1), p + g.start()) for p, q in code if inside(p) for g in
+         re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q]) if ours(p + g.start())]
+    # A paragraph wrapped over lines: the names on the mention's own line first.
+    here = [x for x, at in found if physical(at) == physical(mo.start())]
+    in_segment = sorted(set(here or [x for x, _at in found]))
     bare = not in_segment
     if bare:                # "único llamador de `admitir`": a member written alone
         in_segment = sorted({line[p + 1:q - 1] for p, q in code if inside(p) and ours(p) and
@@ -1410,18 +1460,27 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         return mo.start() - at if at >= 0 else max(0, line.find(x, mo.end(), ob)) + 10_000
     names: list[str] = sorted(glued, key=lambda x: (distance(x), x)) or in_segment
     # When the glued names cannot be checked in the file, those of the mention's clause.
-    in_clause = {S.name_of(x) for x, at in named_here if oa <= at < ob and ours(at)} | \
-        {g.group(1) for p, q in code if oa <= p < ob for g in
-         re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q]) if ours(p + g.start())}
+    clause_found = [(S.name_of(x), at) for x, at in named_here if oa <= at < ob and ours(at)] + \
+        [(g.group(1), p + g.start()) for p, q in code if oa <= p < ob for g in
+         re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q]) if ours(p + g.start())]
+    in_clause = {x for x, at in clause_found if physical(at) == physical(mo.start())} or \
+        {x for x, _at in clause_found}
     fallback = sorted(x for x in in_clause if x not in names and x not in others)
     names += sorted(c for c in _glued_calls(line, mo, code, oa, ob)
                     if c not in names and c not in others)
+    if heads is not None:
+        if shown == mo.group(0):
+            heads[mo.start()] = list(names)     # for the `:N` that follow it
+        elif not names:
+            names = list(heads.get(getattr(mo, "head_at", -1), []))   # the list's names
     # Names written right at the mention: only then may git say the doc was wrong.
     flow_cell = any(re.search(r"→|->", line[x:y]) for x, y in extra_spans)  # a call chain
-    tight = bool(glued - loose) or bool(extra_spans and names and not flow_cell and
-                                       not (bare and not glued)) or bool(
-        {c[4:] if c.startswith("new ") else c for c in
-         _glued_calls(line, mo, code, oa, ob, tight=True)} & set(names))
+    glued_here = {c[4:] if c.startswith("new ") else c
+                  for c in _glued_calls(line, mo, code, oa, ob, tight=True)}
+    tight = shown == mo.group(0) and (      # a `:N` alone after a path is a guess
+        bool(glued - loose) or
+        bool(extra_spans and names and not flow_cell and not (bare and not glued)) or
+        bool(glued_here & set(names)))
     if not names and re.fullmatch(r"\s*[(\[]?\s*`?", line[:mo.start()]):
         # `Type.query(…)`\n(`Type.java:719`): the paragraph goes on from the line before.
         last = re.search(r"`[^`]*?([a-z_$][\w$]*)\s*\([^`]*`\s*$", prev_line)
@@ -1486,9 +1545,11 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
                 failed = failed or bad + (src,)
         return failed
     fits = [s for s in hits if n <= count_lines(s)]
+    if not fits and shown != mo.group(0):
+        return              # a `:N` past this file's end is likely another file's
     if not fits:
         src = hits[0]
-        add(mo.group(0), f"line {n} is past the end ("
+        add(shown, f"line {n} is past the end ("
             + ", ".join(f"{s}: {count_lines(s)} lines" for s in hits[:3]) + ")", "past-end",
             src=src, lines=(n, end_n), names=tuple(names), tight=tight,
             recheck=lambda n2, m2, also=(): n2 <= count_lines(src) and
@@ -1532,7 +1593,7 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
             _with_header(root, fits[0], 1, text_cache)      # reads the file into the cache
         flat = [re.sub(r"\s+", "", x) for x in text_cache.get(fits[0]) or []]
         if quote not in "".join(flat[max(0, n - 3):end_n + 2]):      # over line breaks
-            add(mo.group(0), "", "quoted", src=fits[0], lines=(n, end_n), names=(quote,),
+            add(shown, "", "quoted", src=fits[0], lines=(n, end_n), names=(quote,),
                 recheck=lambda n2, m2, also=(): True)
     bad = verdict(n, end_n, fits, more)
     if bad is None:
@@ -1541,11 +1602,14 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         weak = verdict(n, end_n, fits, (), strict=True)     # its own lines start there?
         if weak is not None:
             x, where, src = weak
-            add(mo.group(0), "", "weak", src=src, lines=(n, end_n), name=x,
-                names=tuple(dict.fromkeys(names + fallback)), hint="; ".join(where),
+            every_name = list(dict.fromkeys(names + fallback))
+            add(shown, "", "weak", src=src, lines=(n, end_n), name=x,
+                names=tuple(every_name), hint="; ".join(where),
                 tight=tight, more=tuple(more),
                 span=_span_of(m, root, src, x, text_cache),
-                recheck=lambda n2, m2, also=(): verdict(n2, m2, [src], also, strict=True) is None)
+                recheck=lambda n2, m2, also=(): _verdict_in(
+                    m, root, src, n2, m2, every_name, as_code, text_cache, strict=True)
+                in (None, "unchecked"))
         return
     x, where, src = bad
     extra = {"src": src, "lines": (n, end_n), "name": x, "hint": "; ".join(where),
@@ -1555,11 +1619,35 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
                                                         follow=True) is None,
              "span": _span_of(m, root, src, x, text_cache)}
     if where:
-        add(mo.group(0), f"line {n} no longer mentions {x} ({'; '.join(where)})",
+        add(shown, f"line {n} no longer mentions {x} ({'; '.join(where)})",
             "line-moved", **extra)
     else:
-        add(mo.group(0), f"line {n} no longer calls {x} (no code in this file calls it now)",
+        add(shown, f"line {n} no longer calls {x} (no code in this file calls it now)",
             "line-moved", **extra)
+
+
+class _Continuation:
+    """A line number alone after a path (`X.java:12`, `:30`) as a mention of that file: a
+    match-like object for _check_path."""
+
+    def __init__(self, line: str, bare, head):
+        self._line, self._b, self._head = line, bare, head
+        self.head_at = head.start()
+        self.shown = f"{head.group(1)}:{bare.group(1)}" + (f"-{bare.group(2)}" if bare.group(2)
+                                                            else "")
+
+    def group(self, k: int = 0):
+        return (self._line[self._b.start():self._b.end()], self._head.group(1),
+                self._b.group(1), self._b.group(2))[k]
+
+    def start(self) -> int:
+        return self._b.start()
+
+    def end(self) -> int:
+        return self._b.end()
+
+    def span(self) -> tuple[int, int]:
+        return self._b.span()
 
 
 def _code_at(lines: list[str], code: str) -> list[int]:

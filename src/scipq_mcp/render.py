@@ -737,6 +737,11 @@ def entry_points(entries, per_kind: int = 12, depth: int = 0, searched: int = 0)
     return lines
 
 
+# Methods a framework calls on an entry point's type itself (a screen built by a router).
+_FRAMEWORK_CALLED = {"<init>", "main", "run", "call", "execute", "doGet", "doPost", "service",
+                     "init", "onAttach", "beforeEnter", "setParameter", "afterNavigation"}
+
+
 def library_callbacks(callbacks, deferred=()) -> str:
     """Methods a library calls (overrides of its methods): who creates their objects; and
     callers whose calls are all inside an anonymous class or a lambda."""
@@ -765,7 +770,12 @@ def library_callbacks(callbacks, deferred=()) -> str:
 def impact(symbol: str, nodes, truncated: bool, depth: int, group_by: str, offset: int,
            limit: int, entries=None, itself=None, searched: int = 0) -> str:
     """`entries` may come from deeper than `depth`; `itself`: the symbol's own entry points."""
-    head = [f"{S.short(symbol)} is itself an entry point: {e.kind} {e.detail}"
+    # A member of an entry point's type (a screen's helper) is not called by the framework
+    # itself: its type is the entry point.
+    head = [f"{S.short(symbol)} is in a {e.kind}: {S.short(S.owner_type(e.node.symbol))} "
+            f"{e.detail}" if e.on_type and S.kind_of(symbol) == "method" and
+            S.name_of(symbol) not in _FRAMEWORK_CALLED
+            else f"{S.short(symbol)} is itself an entry point: {e.kind} {e.detail}"
             for e in itself or []]
     if not nodes:
         return "\n".join(head + [f"nothing in this project calls {S.short(symbol)}"])
@@ -790,8 +800,9 @@ def impact(symbol: str, nodes, truncated: bool, depth: int, group_by: str, offse
         rows.append(f"{g}:")
         for n in ns:
             test = "  [test]" if n.test else ""
+            later = "  (from a lambda or anonymous class)" if n.inner else ""
             rows.append(f"  d{n.depth}  {S.short(n.symbol)}  {n.source}:{n.line}  "
-                        f"→ {S.short(n.via)}{test}")
+                        f"→ {S.short(n.via)}{later}{test}")
     shown, suffix = page(rows, offset, limit)
     if suffix:
         lines.append("rows" + suffix + ":")

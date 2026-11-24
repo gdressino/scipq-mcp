@@ -14,9 +14,15 @@ version and date when releasing.
   since those are their real callers; types already listed as entry points are left out;
   and the callers whose calls are all inside an anonymous class or a lambda.
 
+- `impact` marks the rows whose calls are all inside a lambda or an anonymous class, and
+  lists every such caller; a helper method of an entry point's type says it "is in a screen"
+  (the type is the entry point), not that it is one itself.
+
 ### Fixed
 
 - `impact` rows show the same representative call in any build of the index.
+- `check_refs` reads the versions of the docs one at a time (peak memory on a large
+  checkout from 1.4 GB to about 450 MB).
 
 ### Changed
 
@@ -29,8 +35,10 @@ version and date when releasing.
   count. Quoted code: before the path (`` `a.b()` (File:N) ``), up to an ellipsis, inherited
   by "idéntico en File:N", and matched over line breaks.
 - `check_refs` reads a paragraph or list item wrapped over several lines as one (names on
-  the line before a path, line lists on the next one), and reports each problem at the
-  line of its mention.
+  the line before a path, line lists on the next one; names on the mention's own line come
+  first), and reports each problem at the line of its mention. A line number alone after a
+  path (`` `X.java:12`, `:30` ``) is checked as a mention of that file, with the path's names
+  when it has none of its own (it never claims the doc was wrong in its own version).
 - `check_refs` pairs calls and line ranges respectively when the lines together do not
   hold the names: "`execute()` … y `close()` … (`F.java:403-421` y `:383-401`)" checks
   `execute` at 403-421 and `close` at 383-401 (names without parentheses too:
