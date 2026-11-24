@@ -474,7 +474,7 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                        r")(?![\w/-])", re.I) if other_versions else None
     # (not a folder: src/main/java)
     version_word = re.compile(r"(?<![\w/.-])(?:v\d+(?:\.\d+)*|main|master)(?![\w/-])", re.I)
-    sentence_end = re.compile(r"[.!?](?=\s+[A-Z¿¡`(-])|;\s| · |\|")
+    sentence_end = re.compile(r"[.!?](?=\s+[A-Z¿¡`(-])| · |\|")   # a ";" goes on
 
     def labelled(text: str, pos: int, before: str) -> bool:
         """The text up to pos belongs to a labelled stretch (another version)."""
@@ -1166,6 +1166,9 @@ def _since_written(root: str, problems: list[Problem]) -> None:
                         at = (max(at[0], p.span[0]), min(at[1], p.span[1]))   # its own lines
                     where = f"; now at {at[0]}" if at[0] == at[1] else \
                         f"; now in {at[0]}-{at[1]}"
+                elif not p.span and p.name and _declared(old, p.name):
+                    # declared there then, not now: its name elsewhere is someone else's
+                    where = f": {p.name} is no longer declared in {os.path.basename(p.src)}"
                 else:
                     where = f": {p.hint}" if p.hint else ""
                 p.what = (f"{span} changed since the doc named {p.name or 'them'} ({day}, "
@@ -1385,6 +1388,10 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
         return (before[-1] if before else after[0] if after else mo.start()) == mo.start()
     others = {x for p in [*paths, *bare] if p.start() != mo.start()
               for x in (y.lstrip("?") for y in _glued_names(line[oa:ob], p.group(0)))} - glued
+    for g_ in re.finditer(r"`?(?:[\w$]+[.#])*([a-z_$][\w$]*)(?:\([^()]*\))?`?\s+(?:de la |en la "
+                          r"|at |on |in |of )?(?:l[ií]nea|line)\s+(\d+)", line[oa:ob]):
+        if not n0 or int(g_.group(2)) != int(n0):
+            others.add(g_.group(1))     # "el `setDashboard()` de la línea 106": that line's
     for x0, y0 in extra_spans:          # `getX()` vacío (`:106`) in the next cell
         others |= {x for b_ in _BARE.finditer(line, x0, y0)
                    for x in (y.lstrip("?") for y in _glued_names(line[x0:y0], b_.group(0)))} - glued
@@ -1496,6 +1503,10 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
                                                for f in fits for t in m.types_in.get(f, []))))
     # A guess: only when the lines together do not hold the names, and it claims nothing
     # about the doc's own version.
+    if not ordered:         # `opts.onOpen`/`onClose` (…:403-421, :383-401): the names alone
+        ordered = list(dict.fromkeys(
+            g.group(1) for p, q in code if oa <= p < mo.start() and ours(p)
+            for g in [re.fullmatch(r"(?:[\w$]+\.)*([a-z_$][\w$]*)", line[p + 1:q - 1])] if g))
     if more and len(ordered) == len(more) + 1 and verdict(n, end_n, fits, more) is not None:
         src = fits[0]
         for x, (lo, hi) in zip(ordered, [(n, end_n), *more]):

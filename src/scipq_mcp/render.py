@@ -750,8 +750,8 @@ def library_callbacks(callbacks, deferred=()) -> str:
         return "\n".join(lines)
     lines += ["\nlibrary callbacks (the library calls these; their callers are whoever creates "
               "the object and hands it over):"]
-    for sym, lib, places, count, sub in callbacks:
-        owner = S.short(S.owner_type(sym))
+    for sym, lib, places, count, made, sub in callbacks:
+        owner = S.short(made)
         where = ", ".join(f"{src}:{ln}" for src, ln in places) + (" …" if count > len(places)
                                                                   else "")
         made = (f"{owner}{' ' + sub if sub else ''} created at {count} "

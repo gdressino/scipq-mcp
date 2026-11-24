@@ -1113,7 +1113,9 @@ class Service:
                 vias = {n.via for n in every}
                 tops = [sym] + [n.symbol for n in every if n.symbol not in vias and not n.test
                                 and S.is_method(n.symbol)][:300]
-                callbacks = g.library_callbacks(tops, root=nav.ws.root)
+                callbacks = g.library_callbacks(
+                    tops, root=nav.ws.root, bound=g.last_bound,
+                    skip={S.owner_type(e.node.symbol) for e in entries + itself})
                 # Calls made only from inside an anonymous class or a lambda: they run when
                 # whoever receives that object calls it (a library, often).
                 deferred = list({n.symbol: n for n in every if n.inner and

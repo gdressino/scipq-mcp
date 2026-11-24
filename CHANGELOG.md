@@ -9,9 +9,14 @@ version and date when releasing.
 
 - `impact` says where the call chain is handed to a library: overrides of library methods
   it reaches (listeners, `run()`, a servlet's `service()`, Vaadin's `onAttach`…), with where
-  their objects are created (`new X(…)`; for a base class, its subclasses; or that the
-  framework builds them), since those are their real callers; and the callers whose calls
-  are all inside an anonymous class or a lambda.
+  their objects are created as the type the chain runs on (`new X(…)` of it or its
+  subclasses, not a subclass constructor's `super(…)`; or that the framework builds them),
+  since those are their real callers; types already listed as entry points are left out;
+  and the callers whose calls are all inside an anonymous class or a lambda.
+
+### Fixed
+
+- `impact` rows show the same representative call in any build of the index.
 
 ### Changed
 
@@ -28,7 +33,10 @@ version and date when releasing.
   line of its mention.
 - `check_refs` pairs calls and line ranges respectively when the lines together do not
   hold the names: "`execute()` … y `close()` … (`F.java:403-421` y `:383-401`)" checks
-  `execute` at 403-421 and `close` at 383-401, and says which one moved or changed.
+  `execute` at 403-421 and `close` at 383-401 (names without parentheses too:
+  `` `opts.onOpen`/`onClose` ``), and says which one moved or changed; a name declared in the
+  doc's version and not now says so instead of listing calls of that name. "el `x()` de la
+  línea 106" binds x to line 106; a `;` does not end a version label's stretch.
 
 ## 0.7.0 — 2026-11-23
 

@@ -72,6 +72,7 @@ class Graph:
         self.con: sqlite3.Connection = index.connect()
         self._shards: dict[int, tuple[str, str, int]] | None = None
         self.left_out = 0       # impact: calls to overridden methods judged not to reach here
+        self.last_bound: dict[str, str] = {}    # impact: method -> the type it runs on
 
     def close(self) -> None:
         self.con.close()
@@ -394,10 +395,12 @@ class Graph:
                 (REL_IMPLEMENTATION, *chunk)))
         return [(c, t) for c, t in out]
 
-    def library_callbacks(self, symbols: list[str], limit: int = 5, root: str = ""
-                          ) -> list[tuple[str, str, list[tuple[str, int]], int]]:
-        """(method, the library method it overrides, where its type is created, how many
-        places) for the methods among `symbols` that override a library type's method
+    def library_callbacks(self, symbols: list[str], limit: int = 5, root: str = "",
+                          bound: dict[str, str] | None = None, skip: set[str] = frozenset()
+                          ) -> list[tuple[str, str, list[tuple[str, int]], int, str, str]]:
+        """(method, the library method it overrides, where its object is created, how many
+        places, the type created, "subclasses" when it is theirs) for the methods among
+        `symbols` that override a library type's method (`bound`: the type each runs on)
         (Object's left out): the library calls them, so their callers in the project are
         whoever creates the object and hands it over (for a base class, its subclasses)."""
         symbols = list(dict.fromkeys(symbols))
@@ -423,19 +426,20 @@ class Graph:
         for sym in symbols:
             if sym not in lib or len(out) >= limit:
                 continue
-            owner = S.owner_type(sym)
+            owner = (bound or {}).get(sym) or S.owner_type(sym)    # the object it runs on
+            if owner in skip or S.owner_type(sym) in skip:
+                continue            # already an entry point (a screen, an endpoint…)
             places = self._created(owner, root)
-            sub = ""
-            if not places:          # a base class: its subclasses are what gets created
-                tid = self.ids([owner]).get(owner)
-                subs = [x for (x,) in self.con.execute(
-                    "SELECT s.symbol FROM rels r JOIN symbols s ON s.id = r.symbol_id "
-                    "WHERE r.target_id = ? AND r.kind = ? AND r.symbol_id != r.target_id",
-                    (tid, REL_IMPLEMENTATION))] if tid is not None else []
-                for t in subs[:200]:
-                    places += self._created(t, root)
-                sub = "subclasses" if places else ""
-            out.append((sym, lib[sym], sorted(set(places))[:3], len(set(places)), sub))
+            # its subclasses run that code too
+            tid = self.ids([owner]).get(owner)
+            subs = [x for (x,) in self.con.execute(
+                "SELECT s.symbol FROM rels r JOIN symbols s ON s.id = r.symbol_id "
+                "WHERE r.target_id = ? AND r.kind = ? AND r.symbol_id != r.target_id",
+                (tid, REL_IMPLEMENTATION))] if tid is not None else []
+            theirs = [x for t in subs[:200] for x in self._created(t, root)]
+            sub = ("subclasses" if not places else "or its subclasses") if theirs else ""
+            places += theirs
+            out.append((sym, lib[sym], sorted(set(places))[:3], len(set(places)), owner, sub))
         return out
 
     def _created(self, owner: str, root: str) -> list[tuple[str, int]]:
@@ -571,7 +575,11 @@ class Graph:
                 names.update(self.names(extra0))
                 frontier += extra0
         for level in range(1, depth + 1):
-            rows = self.callers_of(frontier)
+            # The same order in any build of the index: the first target a caller is reached
+            # from is the one its row shows.
+            rows = sorted(self.callers_of(frontier),
+                          key=lambda r: (names.get(r[0], ""), sh[r[2]][0] if r[2] in sh else "",
+                                         r[3]))
             if bound or dispatch or (level == 1 and overridden):
                 names.update(self.names({c for t, c, _s, _x in rows
                                          if (t in bound or t in dispatch or t in overridden)
@@ -639,6 +647,9 @@ class Graph:
                     names.update(self.names(extra))
                     frontier = nxt + extra
         names.update(self.names(nodes))
+        # The type each reached method runs on, when the chain is bound to one (template
+        # methods, lifecycle calls): library callbacks are created as that type.
+        self.last_bound = {names.get(sid, ""): t for sid, t in {**dispatch, **bound}.items()}
         defs = self.definitions(nodes)
         for sid, n in nodes.items():
             n.symbol = names.get(sid, "")
