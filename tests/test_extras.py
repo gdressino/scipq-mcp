@@ -826,7 +826,12 @@ def test_check_refs_continuations_bind_to_their_file(sample_copy, tmp_path):
                  f"- (main `{e}:11` `setState`, :15 `getState`) was other code.\n"
                  f"- (`{e}:11`, :15 getState) and then `findById` :19 elsewhere.\n"    # 5
                  f"- `getState()` (`core/src/main/java/com/example/\n"
-                 f"  model/Entity.java:15`) reads it.\n")
+                 f"  model/Entity.java:15`) reads it.\n"
+                 f"- Checked in `/home/someone/other-worktree/{e}:15` (`getState`).\n"   # 8
+                 f"- `git show abc1234:{e}:15` (`getState`), :19 `findById`.\n"
+                 f"- Then `Entity.findById` (:19) returns it.\n"                       # 10
+                 f"- It casts the id to a Session (:19), see `findById` in `{e}:11`.\n"
+                 f"- (`{e}:11` y 30) and later `findById` (:19).\n")                   # 12
     _git(sample_copy, "init", "-q")
     _git(sample_copy, "add", "-A")
     _git(sample_copy, "commit", "-qm", "a", date="2026-01-02T10:00:00Z")
@@ -837,10 +842,15 @@ def test_check_refs_continuations_bind_to_their_file(sample_copy, tmp_path):
     out = Service(sample_copy, cache_dir=str(tmp_path / "c")).check_refs(files=["NOTES.md"])
     # 1: Session's line 4 is fine; 3: far from the path, and only `get`; 5: past its
     # parenthesis; 6: a path cut at a "/" over two lines
-    assert f"NOTES.md (3)\n  line 1 ×4 (also 3, 5, 6)  {e}:15  — line 15 is now 18" in out, out
+    assert f"line 1 ×4 (also 3, 5, 6)  {e}:15  — line 15 is now 18" in out, out
+    # 8: an absolute path to another checkout of the repository: its tail
+    assert f"line 8  /home/someone/other-worktree/{e}:15  — line 15 is now 18" in out
+    assert "line 9  " not in out                                      # another version's
+    assert "line 10  Entity.java:19  — line 19 is now 22" in out      # T.m (:N), no path
+    assert "line 12  " not in out                                     # past its own list
     assert f"line 2  {e}:19  — line 19 is now 22" in out             # a call described, not X's
     assert ":4" not in out and "line 4  " not in out                   # line 4: main's
-    assert out.count(":19  —") == 1
+    assert out.count(":19  —") == 2
 
 
 def test_check_refs_history_follows_doc_renames_and_the_parent_version(sample_copy, tmp_path):
@@ -915,7 +925,7 @@ def test_check_refs_default_scope_is_what_agents_read(sample_copy, tmp_path):
     assert out.count("Entity has no member a1") == 1
     assert "scope: the default, files agents read (CLAUDE.md, AGENTS.md, .claude/**, " \
         ".github/**, README*.md): 2 files; not checked: 5 other .md files of the checkout" \
-        in out and "; 1 README of third-party code" in out, out
+        in out and "; 1 file of third-party code" in out, out
 
 
 def test_check_refs_since_a_commit(sample_copy, tmp_path):

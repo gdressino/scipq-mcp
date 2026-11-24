@@ -47,7 +47,7 @@ _NOT_MEMBERS = {"class", "java", "feature", "md", "xml", "sql", "json", "propert
 # A dotted chain that starts lower case (a package): com.example.Type, com.x.IVA.model.Type,
 # com.example.Outer.Inner; type arguments (<…>) end it.
 _FQN = re.compile(r"(?<![\w$./])([a-z_][\w$]*(?:\.[\w$]+){2,})(?![\w$(])")
-_PATH = re.compile(r"(?<![\w$./-])((?:(?:[\w$.-]+|\.\.\.|…)/)*[\w$-]+\.java)"
+_PATH = re.compile(r"(?<![\w$./~-])((?:~?/)?(?:(?:[\w$.-]+|\.\.\.|…)/)*[\w$-]+\.java)"
                    r"(?::(\d+)(?:-(\d+))?)?")
 _CODE = re.compile(r"`[^`\n]+`|\{@link(?:plain)?\s[^}]+\}")
 _LIB_ROOTS = {"java/lang/Object#", "java/lang/Enum#", "java/lang/Record#"}
@@ -94,6 +94,10 @@ def _specific(names) -> list[str]:
 
 
 # A type named in prose, or alone in backticks, before a `:N`: Engine.run :587, IPOForm (:226)
+# Words before a type named as the object of the sentence, not as the place of the line:
+# "castea el itemId a T (:592)", "el ClickListener de btn (:81)" ("de T" alone is T's).
+_OBJECT_BEFORE = re.compile(r"(?i)(?<![\w$])(?:a|al|el|la|los|las|un|una|en|con|por|para|"
+                            r"sobre|the|an|to|into|from|with|by|for|on)\s+`?$")
 # Where a sentence or a table cell ends: a `:N` past it is not plainly the path's.
 _SENTENCE_END = re.compile(r"[.!?](?=\s+[A-Z¿¡`(*-])|\s·\s|\|")
 _TYPE_WORD = re.compile(r"(?<![\w$.#/])([A-Z][\w$]*[a-z][\w$]*)(?:[.#]([a-z_$][\w$]*))?"
@@ -641,7 +645,7 @@ def scope_line(sc: Scope, full: bool = False) -> str:
     if sc.excluded:
         head += f"; {sc.excluded} .md file{'s' if sc.excluded != 1 else ''} excluded"
     if sc.vendored:
-        head += (f"; {sc.vendored} README{'s' if sc.vendored != 1 else ''} of third-party code "
+        head += (f"; {sc.vendored} file{'s' if sc.vendored != 1 else ''} of third-party code "
                  "(vendor/, a LICENSE of its own) left out")
     out = [head]
     if sc.since:
@@ -820,7 +824,8 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
         sc.citing_docs = tuple(sorted(citing_only))
         sc.citing_outside = tuple(f for f in listed if _is_md(f) and f not in in_scope and
                                   not in_archive(f) and not is_excluded(f) and
-                                  not _generated(f) and cites(f))
+                                  not _generated(f) and not _RECORD_FILES.match(
+                                      os.path.basename(f)) and cites(f))
         edited = _edited_lines(root, sc.base, [f for f in files if f in changed_set])
     sc.read = len(files)
     line_counts: dict[str, int] = {}
@@ -828,7 +833,8 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
     # A mention right after a branch's name or label (main `X.foo()`, v4 `X.foo`): that
     # branch's code, not this one's.
     elsewhere = re.compile(r"(?:\b(?:en|in|on|de)\s+(?:main|master)|(?<![\w-])(?:main|master)\s+"
-                           r"[0-9a-f]{7,40}|(?:^|[(\[,;—–]\s*)(?:main|master)" +
+                           r"[0-9a-f]{7,40}|(?:^|[(\[,;—–]\s*)(?:main|master)|"
+                           r"(?<![\w-])(?=[0-9a-f]*\d)[0-9a-f]{7,40}(?=:)" +
                            "".join("|(?<![\\w-])" + re.escape(v) for v in other_versions) +
                            r")(?:\s+|(?<=[0-9a-f]):)`?$", re.I)
     # A configured label covers the rest of its sentence or list, up to another version
@@ -943,6 +949,14 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                 named_here += [(x, mo.start()) for x in _check_qualified(m, mo.group(1), add)]
             paths = list(_PATH.finditer(line))
             heads: dict[int, list[str]] = {}
+            taken = {b.start() for mo in paths for b in _BARE.finditer(line, *mo.span())}
+            if not paths:
+                for one in _typed_numbers(m, line, code, taken, heads):
+                    checked += 1
+                    at[0], at[1] = one.start(), one.head_at
+                    _check_path(m, root, one, by_suffix, sources | unindexed, named_here, line,
+                                code, count_lines, add, text_cache, os.path.dirname(path),
+                                abbrev, other_versions, before_line, starts, heads)
             for k, mo in enumerate(paths):
                 # `X.java:12` and the line numbers alone after it (`:30`, :45-48), each a
                 # mention of that file, up to the next path or the end of the parenthesis
@@ -951,9 +965,9 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                 ones = [mo]
                 if mo.group(2):
                     head, last = mo, mo.end()
-                    close = _group_end(line, mo.start(), code)
-                    if not _BARE.search(line, mo.end(), close):
-                        close = len(line)   # (`X.java:12`) alone: what follows is still X's
+                    # (`X.java:12`) alone: what follows is still X's; a parenthesis with more
+                    # in it (its own list, other words) ends the run
+                    close = _group_end(line, mo.start(), code, mo.span())
                     for b_ in _BARE.finditer(line, mo.end(), min(stop, close)):
                         th, right_after = _type_between(m, line, last, b_.start(),
                                                         mo.group(1), code)
@@ -971,6 +985,9 @@ def check(g, root: str, globs: list[str], exclude: list[str], cache_base: str | 
                             heads[th.start()] = th.names    # the member named with it
                         if head is not None:
                             ones.append(_Continuation(line, b_, head, strict=not near))
+                            taken.add(b_.start())
+                if k == len(paths) - 1:
+                    ones += _typed_numbers(m, line, code, taken, heads)
                 for one in ones:
                     checked += 1
                     at[0] = one.start()
@@ -1451,7 +1468,8 @@ def _since_written(root: str, problems: list[Problem]) -> None:
         if p.kind == "weak":            # the doc pointed at the declaration then
             return _at_declaration(text, *p.lines, p.names or (p.name,))
         return any(_holds(text, max(1, lo - slack), hi + slack, p.names or (p.name,))
-                   for lo, hi in [p.lines, *p.more])
+                   for lo, hi in [p.lines, *p.more]) or (
+            p.cont and _at_declaration(text, *p.lines, tuple(_specific(p.names or (p.name,)))))
     base: dict[tuple[str, int], list[Problem]] = {}
     holding: set[int] = set()           # problems whose version held the name there
     later: list[tuple[Problem, str, int]] = []
@@ -1769,6 +1787,8 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     hits = _find_path(written, by_suffix, sources)
     if also:
         hits += [h for h in _find_path(also, by_suffix, sources) if h not in hits]
+    if not hits and written.startswith(("/", "~/")):
+        return              # an absolute path to a file this repository does not have
     if not hits:
         for base_dir in ("", doc_dir):      # from the checkout, or from the document
             p = os.path.normpath(os.path.join(base_dir, written)).replace(os.sep, "/")
@@ -1882,7 +1902,10 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
                    for x in (y.lstrip("?") for y in _glued_names(line[x0:y0], b_.group(0)))} - glued
     found = [(S.name_of(x), at) for x, at in named_here if inside(at) and ours(at)] + \
         [(g.group(1), p + g.start()) for p, q in code if inside(p) for g in
-         re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q]) if ours(p + g.start())]
+         re.finditer(r"(?<![\w$.])([a-z_$][\w$]*)\s*\(", line[p:q]) if ours(p + g.start())] + \
+        [(g.group(1), p + g.start(1)) for p, q in code if inside(p) and ours(p) for g in
+         [re.fullmatch(r"`[A-Z][A-Z0-9_]+\.([a-z_$][\w$]*)`", line[p:q])] if g]
+    # (`CONSTANT.member`: the member, the constant's type is not the line's file)
     # A paragraph wrapped over lines: the names on the mention's own line first.
     here = [x for x, at in found if physical(at) == physical(mo.start())]
     in_segment = sorted(set(here or [x for x, _at in found]))
@@ -1908,6 +1931,8 @@ def _check_path(m: Model, root: str, mo, by_suffix, sources, named_here, line, c
     if heads is not None:
         if shown == mo.group(0):
             heads[mo.start()] = list(names)     # for the `:N` that follow it
+        elif getattr(mo, "also", None) and heads.get(getattr(mo, "head_at", -1)):
+            names = list(heads[mo.head_at])     # `T.m`:351: m, not the mention's before
         elif not names:
             names = list(heads.get(getattr(mo, "head_at", -1), []))   # the list's names
     # Names written right at the mention: only then may git say the doc was wrong.
@@ -2108,16 +2133,53 @@ class _TypeHead:
         return self._at
 
 
-def _group_end(line: str, pos: int, code: list) -> int:
-    """The end of the parenthesis that holds pos (outside code spans), else the line's."""
+def _group_end(line: str, pos: int, code: list, alone=None) -> int:
+    """The end of the parenthesis that holds pos (outside code spans), else the line's; the
+    line's too when that parenthesis has no numbers but alone's (a span: `(X.java:12)`,
+    `(con T, X.java:12)`): one with its own list (`(:102 → X.java:189)`, `(X.java:12 y 30)`)
+    ends the run."""
     def outside(k: int) -> bool:
         return not any(a <= k < b for a, b in code)
-    depth = 0
+    depth, opens = 0, []
     for k in range(pos):
         if line[k] in "()" and outside(k):
+            if line[k] == "(":
+                opens.append(k)
+            elif opens:
+                opens.pop()
             depth += 1 if line[k] == "(" else -1 if depth else 0
     if not depth:
         return len(line)
+    end = _group_close(line, pos, outside)
+    if alone is not None and opens and not re.search(
+            r"\d", line[opens[-1] + 1:alone[0]] + line[alone[1]:end]):
+        return len(line)        # no other numbers in it: what follows may be the path's
+    return end
+
+
+def _typed_numbers(m, line: str, code: list, taken: set, heads: dict) -> list:
+    """Line numbers alone right after a project type's member (`T.addRows` (:1745),
+    `` `T.refresh`:237 ``) that no path took: mentions of that type's file; a list right
+    after (:10, :20) too."""
+    out, head, last = [], None, 0
+    for b in _BARE.finditer(line):
+        if b.start() in taken:
+            head, last = None, b.end()
+            continue
+        th, right = _type_between(m, line, max(last, b.start() - 160), b.start(), "", code)
+        if isinstance(th, _TypeHead) and right and th.names:
+            head = th
+            heads[th.start()] = th.names
+        elif th is not None or not re.fullmatch(r"[\s`,;()]*(?:and|y|e)?[\s`,(]*",
+                                                line[last:b.start()]):
+            head = None
+        last = b.end()
+        if head is not None:
+            out.append(_Continuation(line, b, head))
+    return out
+
+
+def _group_close(line: str, pos: int, outside) -> int:
     inner = 0
     for k in range(pos, len(line)):
         if line[k] in "()" and outside(k):
@@ -2145,6 +2207,11 @@ def _type_between(m, line: str, a: int, b: int, written: str, code: list):
         if sp and t.start() != sp[0] + 1:
             continue        # inside quoted code (`pm.get(Helper.id(o))`): not the subject
         name = t.group(1)
+        before = line[max(0, t.start() - 12):t.start()]
+        library = name not in m.types and m.is_library(name)
+        if not t.group(2) and (_OBJECT_BEFORE.search(before) or
+                               library and re.search(r"(?i)\b(?:de|del|of)\s+`?$", before)):
+            continue        # "castea … a T (:592)", "el catch de E (:158)": not where it is
         gap = line[t.end():b]
         pure = re.fullmatch(r"[\s`()]*" if t.group(2) else r"[\s`(]*(?:[\w-]+\s+[\s`(]*)?",
                             gap) is not None
@@ -2517,6 +2584,12 @@ def _in_order(want: list[str], have: list[str]) -> bool:
 def _find_path(written: str, by_suffix: dict, sources: set[str]) -> list[str]:
     """Sources a written path names: a suffix of a path, or with `.../` standing for any
     folders (core/.../model/Account.java)."""
+    if written.startswith(("/", "~/")):
+        # An absolute path (this checkout's, or another worktree's of the same repository):
+        # the longest of its tails the checkout has, with a folder at least.
+        parts = written.split("/")
+        return next((by_suffix[t] for k in range(1, len(parts) - 1)
+                     if (t := "/".join(parts[k:])) in by_suffix), [])
     w = written.lstrip("./") if not written.startswith("...") else written
     if "..." not in w and "…" not in w:
         return by_suffix.get(w, [])

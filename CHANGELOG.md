@@ -48,6 +48,14 @@ version and date when releasing.
   when git shows the doc's version had the name at that line, and never on a name like
   `get`, `add` or `setValue`. A type further back in the sentence (a call the doc describes)
   is not taken for the line's file.
+- `check_refs` reads absolute paths (`/home/…/repo/core/src/…/X.java:12`, another worktree
+  of the same repository) by the longest tail the checkout has, and leaves alone those to
+  files it does not have; `git show <sha>:path:N` and `<sha>:path` are another version's,
+  with the line numbers that follow. A line number right after a type's member with no path
+  before (`` `T.m` (:1745) ``) is that type's; a type named as the object of the sentence
+  ("casts it to T (:592)") is not taken for the line's file; a parenthesis with numbers
+  besides its path (`(X.java:12 y 30)`, `(:102 → X.java:189)`) ends the run of line numbers
+  after it. Far from its path, a line inside the method the doc names also confirms it.
 - `check_refs` no longer places a blank or brace-only line by its text, no longer gives
   "now at" for names like `add` or `get`, does not take an older version of the file for a
   name written further from the line number, and reads a path cut at a `/` over two lines
