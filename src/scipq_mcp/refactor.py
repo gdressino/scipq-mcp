@@ -118,10 +118,12 @@ Macros (one per step, as {"<macro>": {...}}):
     "select": """\
 Primitive step: {"select": {...}, "do": {"<action>": ...}, "imports": [...]?}
 select by symbol: {"symbol": "Type#member" | "symbols": [...], "overloads": bool,
-  "role": "all|definition|references", "family": bool (methods; with a library method it
-  adds the project's overrides, not the library's subtypes: list those in symbols, e.g.
-  ["java.util.List#size", "java.util.Set#size", "java.util.Collection#size"]; a listed
-  symbol nobody uses is skipped), "accessors": bool (fields), "files": "glob" | [...],
+  "role": "all|definition|references", "family": bool (methods; with a library method, the
+  library methods it overrides and the overrides in library subtypes this project calls, from
+  the sources jars: java.util.Collection#size brings List#size, Set#size, ArrayList#size…,
+  plus the project's overrides; or list symbols, e.g. ["java.util.List#size",
+  "java.util.Set#size"]: a listed symbol nobody uses is skipped), "accessors": bool
+  (fields), "files": "glob" | [...],
   "in": "Type or Type#method" (only sites inside it), "node": ..., "where": ...}
 select by kind: {"in": "Type#method" | "files": "glob", "kind": "<JavaParser class>",
   "where": ...}: every node of that kind (CatchClause, IfStmt, MethodCallExpr, BinaryExpr,
@@ -131,7 +133,13 @@ node (what a symbol's site selects): name (the identifier), expr (the use: call,
   (e.g. ancestor:BinaryExpr: `x.size() == 0` around a size() call).
 where: a pattern the node must match structurally, e.g. "$x.size() == 0" or
   {"pattern": "if ($c) { $$body }", "kind": "statement"}: $name captures one subtree, $$name
-  the rest of a list; captures can be used in the do template.""",
+  the rest of a list; captures can be used in the do template. The shape alone does not tell
+  types apart (a table's isEmpty() is not a list's): {"pattern": "$x.size() == 0", "types":
+  {"$x": "java.util.Collection"}} keeps the sites where $x is that type or a subtype
+  (qualified, or a simple name: any type so named; primitives match themselves), told from
+  the index: names, fields, calls (return types), new, casts, literals. A capture whose type
+  cannot be told (another kind of expression, a type variable, an array) leaves its site out,
+  listed.""",
     "actions": """\
 do actions (the node comes from select.node; defaults in brackets):
   rename: "newName" [name]            replace: "template" [expr]
@@ -290,6 +298,8 @@ class Op:
     unmatched: list[tuple[Site, str]] = field(default_factory=list)
     expect: str = ""                # the new identifier, for verify (renames)
     filtered: int = 0               # sites the node spec or where left out
+    where_types: dict = field(default_factory=dict)    # "$x" -> the type it must be
+    untyped: list = field(default_factory=list)        # (capture, Site) whose type is unknown
 
 
 @dataclass
@@ -303,8 +313,11 @@ class FileState:
 
 class Planner:
     def __init__(self, nav: Navigator, settings, members_named: Callable | None = None,
-                 types_named: Callable | None = None):
+                 types_named: Callable | None = None, library_family: Callable | None = None,
+                 type_facts: dict | None = None):
         self.nav = nav
+        # Supertypes of a type and return types of library methods (Service), for where types.
+        self.captures = CaptureTypes(self, type_facts or {})
         self.root = nav.ws.root
         self.st = settings
         self._members_fn = members_named or (lambda _t, subtypes=False: {})
@@ -315,6 +328,8 @@ class Planner:
         self.warnings: list[str] = []
         self.review: list[str] = []
         self.notes: list[str] = []
+        # The library part of a library method's family (Service.library_family), notes here.
+        self.library_family = library_family(self.notes) if library_family else None
         self.moves: dict[str, str] = {}
         self.creates: dict[str, str] = {}
         self.files: dict[str, FileState] = {}
@@ -840,8 +855,8 @@ class Planner:
             raise PlanError("replace_calls: template is required, e.g. \"Util.run($recv, $0)\"")
         members = []
         for s_ in syms:
-            if a.get("family") and self.nav.definition(s_) is not None:
-                members += [m.symbol for m in X.family(self.nav, s_)
+            if a.get("family") and S.kind_of(s_) == "method":
+                members += [m.symbol for m in X.family(self.nav, s_, self.library_family)
                             if not S.is_local(m.symbol)] or [s_]
             else:
                 members.append(s_)
@@ -1031,8 +1046,17 @@ class Planner:
         where = sel.get("where")
         if isinstance(where, str):
             where = {"pattern": where, "kind": "expression"}
+        where_types = _where_types(where)
+        if where_types:
+            where = {k_: v for k_, v in where.items() if k_ != "types"}
         op = Op(k, f"{action} ({json.dumps(sel)[:80]})", action, args, node=node, where=where,
-                imports=_imports(step))
+                imports=_imports(step), where_types=where_types)
+        if where and not where_types and sel.get("kind") and \
+                re.search(r"\$\w+\s*\.\s*\w+\s*\(", str(where.get("pattern", ""))):
+            self.notes.append(f"step {k}: where matches the code's shape only; its captures "
+                              "are not checked by type: a call on $x may be another type's "
+                              "method of that name (add \"types\": {\"$x\": "
+                              "\"java.util.Collection\"} to where)")
         if sel.get("symbol") or sel.get("symbols"):
             role = sel.get("role", "all")
             if role not in ("all", "definition", "references"):
@@ -1043,8 +1067,7 @@ class Planner:
                     if action == "rename":
                         fam = [m.symbol for m in self._family(sym, k)]
                     else:   # a call through a library supertype is still a call: keep it
-                        fam = [m.symbol for m in X.family(self.nav, sym)] \
-                            if self.nav.definition(sym) is not None else []
+                        fam = [m.symbol for m in X.family(self.nav, sym, self.library_family)]
                     members += [m for m in fam if not S.is_local(m)] or [sym]
                 else:
                     members.append(sym)
@@ -2240,6 +2263,257 @@ def _analyze(p: Planner, worker, ops: list[Op]) -> None:
                                         one.get("qualified", False), one.get("locals", []),
                                         one.get("enclosing", []), one.get("member"),
                                         one.get("captures", {})))
+    for op in ops:
+        if op.where_types:
+            _check_types(p, op)
+
+
+def _where_types(where) -> dict:
+    """where's "types": {"$x": "java.util.Collection"}: each capture named must be of that
+    type or a subtype (primitives: that one)."""
+    if not isinstance(where, dict) or "types" not in where:
+        return {}
+    types = where["types"]
+    if not isinstance(types, dict) or not all(isinstance(k, str) and isinstance(v, str)
+                                              and v.strip() for k, v in types.items()):
+        raise PlanError('where types: {"$x": "java.util.Collection", …}')
+    pattern = str(where.get("pattern", ""))
+    out = {}
+    for name, typ in types.items():
+        cap = name if name.startswith("$") else "$" + name
+        if cap.startswith("$$"):
+            raise PlanError(f"where types: {cap} captures a list; only $name captures have a "
+                            "type")
+        if not re.search(re.escape(cap) + r"(?![\w$])", pattern):
+            raise PlanError(f"where types: {cap} is not a capture of the pattern {pattern!r}")
+        out[cap] = typ.strip()
+    return out
+
+
+def _check_types(p: Planner, op: Op) -> None:
+    """Leaves out the sites whose where captures are not of the types asked; those whose type
+    cannot be told are left out too, and listed."""
+    kept = []
+    for loc in op.found:
+        ok = True
+        for cap, want in op.where_types.items():
+            c = (loc.captures or {}).get(cap)
+            if not isinstance(c, dict):
+                continue
+            typ = p.captures.type_of(loc.site.source, c)
+            if not typ:
+                op.untyped.append((cap, Site(loc.site.source, c["range"][0] - 1,
+                                             c["range"][1] - 1, "")))
+                ok = False
+                break
+            hit = p.captures.is_a(typ, want)
+            if hit is None:   # a library type without its sources: its supertypes unknown
+                op.untyped.append((cap, Site(loc.site.source, c["range"][0] - 1,
+                                             c["range"][1] - 1, "", why=S.short(typ))))
+                ok = False
+                break
+            if not hit:
+                op.filtered += 1
+                ok = False
+                break
+        if ok:
+            kept.append(loc)
+    op.found = kept
+    if op.untyped:
+        where = ", ".join(f"{s.source}:{s.line + 1}" + (f" ({s.why})" if s.why else "")
+                          for _c, s in op.untyped[:5])
+        caps = ", ".join(dict.fromkeys(c for c, _s in op.untyped))
+        p.notes.append(f"step {op.step}: {len(op.untyped)} sites left out: the type of {caps} "
+                       f"could not be told, or its supertypes (a library type without its "
+                       f"sources jar, named in parentheses) ({where}"
+                       f"{' …' if len(op.untyped) > 5 else ''}); check them by hand")
+
+
+_LITERAL_TYPES = {"StringLiteralExpr": "java/lang/String#", "TextBlockLiteralExpr":
+                  "java/lang/String#", "IntegerLiteralExpr": "int", "LongLiteralExpr": "long",
+                  "BooleanLiteralExpr": "boolean", "CharLiteralExpr": "char",
+                  "DoubleLiteralExpr": "double"}
+
+
+class CaptureTypes:
+    """The static type of a where capture, from the SCIP occurrences in its range: a name or
+    a field access (its declared type), a call (its return type), `new T(…)`, a cast, a
+    literal. A SCIP type symbol (`java/util/List#`), a primitive, or "" when it cannot be
+    told (a type variable, an array, another kind of expression)."""
+
+    def __init__(self, p: Planner, facts: dict):
+        self.p = p
+        self.ancestors = facts.get("ancestors") or (lambda _t: [])
+        self.returns = facts.get("returns") or (lambda _m: "")
+        self.defined = facts.get("defined") or (lambda sym: p.nav.definition(sym) is not None)
+        self._docs: dict = {}
+        self._declared_cache: dict = {}
+        self._named: dict = {}
+
+    def _doc(self, source: str):
+        if source not in self._docs:
+            views = list(self.p.nav._views(self.p.nav.ws.shard_for_source(source)))
+            self._docs[source] = views[0] if views else None
+        return self._docs[source]
+
+    def type_of(self, source: str, cap: dict) -> str:
+        kind = cap.get("kind", "")
+        fs = self.p.file(source)
+        lo, hi = fs.text.span(cap["range"])
+        if kind == "DoubleLiteralExpr":
+            return "float" if fs.text.text[lo:hi].rstrip().endswith(("f", "F")) else "double"
+        if kind in _LITERAL_TYPES:
+            return _LITERAL_TYPES[kind]
+        v = self._doc(source)
+        if v is None:
+            return ""
+        occs = []
+        for o in v.doc.occurrences:
+            a = fs.text.scip(o.range.start_line, o.range.start_char)
+            b = fs.text.scip(o.range.end_line, o.range.end_char)
+            if lo <= a and b <= hi and not o.is_definition:
+                occs.append((a, b, o.symbol))
+        occs.sort()
+        if kind == "EnclosedExpr":
+            inner = fs.text.text[lo:hi].strip()
+            if inner.startswith("(") and inner.endswith(")"):
+                return ""   # (x): not looked into
+        if kind == "NameExpr":
+            hit = [x for x in occs if x[0] == lo]
+            return self._declared(source, hit[0][2]) if hit else ""
+        if kind == "FieldAccessExpr":
+            hit = [x for x in occs if x[1] == hi]
+            return self._declared(source, hit[-1][2]) if hit else ""
+        if kind == "MethodCallExpr":
+            sym = self._outer_call(fs.text.text, occs, hi)
+            if not sym:
+                return ""
+            if self.defined(sym):
+                return self._declared(source, sym)
+            return self.returns(sym)
+        if kind in ("ObjectCreationExpr", "CastExpr"):
+            for _a, _b, sym in occs:
+                if S.kind_of(sym) == "type":
+                    return sym
+                if S.kind_of(sym) == "constructor":
+                    return S.parent(sym)
+        return ""
+
+    @staticmethod
+    def _outer_call(text: str, occs: list, hi: int) -> str:
+        """The method whose call ends the range: its name is followed by `(` closing at hi."""
+        for a, b, sym in reversed(occs):
+            if S.kind_of(sym) != "method":
+                continue
+            k = b
+            while k < hi and text[k].isspace():
+                k += 1
+            if k >= hi or text[k] != "(":
+                continue
+            depth = 0
+            for j in range(k, hi):
+                if text[j] == "(":
+                    depth += 1
+                elif text[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        return sym if text[j + 1:hi].strip() == "" else ""
+        return ""
+
+    def _declared(self, source: str, sym: str) -> str:
+        """The declared type of a variable, field or parameter, or a method's return type, from
+        its signature; its simple name resolved through the type occurrences of the file that
+        declares it."""
+        key = (source, sym) if S.is_local(sym) else sym
+        if key not in self._declared_cache:
+            self._declared_cache[key] = self._declared_type(source, sym)
+        return self._declared_cache[key]
+
+    def _declared_type(self, source: str, sym: str) -> str:
+        info, where = None, source
+        if S.is_local(sym):
+            v = self._doc(source)
+            info = v.info(sym) if v else None
+        else:
+            d = self.p.nav.definition(sym) if self.defined(sym) else None
+            if d is None:
+                return ""   # a library field: not looked up
+            info, where = d.info, d.location.source
+        if info is None or not info.signature:
+            return ""
+        sig = S.without_annotations(info.signature)
+        if S.is_method(sym):
+            at = re.search(r"\b" + re.escape(S.name_of(sym)) + r"\s*\(", sig)
+            if not at:
+                return ""
+            head = sig[:at.start()]
+        else:
+            head = sig.rsplit(None, 1)[0] if len(sig.split()) > 1 else ""
+        while "<" in head:
+            erased = re.sub(r"<[^<>]*>", " ", head)
+            if erased == head:
+                break
+            head = erased
+        words = head.split()
+        if not words or "[" in words[-1] or words[-1].endswith("..."):
+            return ""
+        typ = words[-1]
+        if typ in S.PRIMITIVES:
+            return typ
+        if "." in typ and typ[:1].islower():
+            parts = typ.split(".")
+            pkg = [x for x in parts if x[:1].islower()]
+            return "/".join(pkg) + "/" + "".join(x + "#" for x in parts[len(pkg):])
+        return self._type_named(where, typ)
+
+    def _type_named(self, source: str, name: str) -> str:
+        """A simple type name as the file that wrote it means it: the type (or constructor)
+        occurrences of that file with that name."""
+        if source not in self._named:
+            names: dict[str, set] = {}
+            v = self._doc(source)
+            for o in (v.doc.occurrences if v is not None else []):
+                sym = o.symbol
+                if S.kind_of(sym) == "constructor":
+                    sym = S.parent(sym)
+                if S.kind_of(sym) == "type":
+                    names.setdefault(S.name_of(sym), set()).add(sym)
+            self._named[source] = names
+        last = name.rsplit(".", 1)[-1]
+        found = set(self._named[source].get(last, ()))
+        if len(found) == 1:
+            return found.pop()
+        from .libsrc import JAVA_LANG_TYPES
+        if not found and last in JAVA_LANG_TYPES:
+            return f"java/lang/{last}#"
+        return ""
+
+    def is_a(self, typ: str, want: str) -> bool | None:
+        """`typ` is `want` or one of its subtypes; `want` written qualified (java.util.List)
+        or simple (List: any type of that name); primitives only match themselves. None when
+        typ is not it and its supertypes cannot be read (a library type without sources)."""
+        if typ in S.PRIMITIVES or typ == "void":
+            return typ == want
+        if want in ("Object", "java.lang.Object"):
+            return True
+        if "." in want and want[:1].islower():
+            parts = want.split(".")
+            pkg = [x for x in parts if x[:1].islower()]
+            target = "/".join(pkg) + "/" + "".join(x + "#" for x in parts[len(pkg):])
+
+            def same(t: str) -> bool:
+                return t == target
+        else:
+            simple = want.rsplit(".", 1)[-1]
+
+            def same(t: str) -> bool:
+                return S.name_of(t) == simple
+        if same(typ):
+            return True
+        ancestors = self.ancestors(typ)
+        if ancestors is None:
+            return None
+        return any(same(a) for a in ancestors)
 
 
 def _file_ops(p: Planner, op: Op) -> None:
@@ -2368,9 +2642,10 @@ def _imports_of_steps(p: Planner) -> None:
 
 def run(nav: Navigator, settings, plan, worker_factory: Callable, cache_base: str | None,
         dry_run: bool = False, members_named: Callable | None = None,
-        level: str = "", types_named: Callable | None = None) -> Result:
+        level: str = "", types_named: Callable | None = None,
+        library_family: Callable | None = None, type_facts: dict | None = None) -> Result:
     plan = load_plan(plan)
-    p = Planner(nav, settings, members_named, types_named)
+    p = Planner(nav, settings, members_named, types_named, library_family, type_facts)
     p.expand(plan)
     total = sum(len(op.sites) for op in p.ops)
     if total > MAX_SITES:

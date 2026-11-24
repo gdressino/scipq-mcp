@@ -40,6 +40,7 @@ DEFAULT_LIMIT = 100
 ENTRY_DEPTH = 6     # impact searches entry points (screens, jobs…) at least this deep
 FRESHNESS_MODES = ("full", "results", "off")
 JDK_CHOICE_SECONDS = 60  # how long the JDK picked for a checkout (from its build files) is kept
+LIBRARY_FAMILY_TYPES = 300  # library types with a same-named method checked for a family
 T = TypeVar("T")
 Body = Callable[[Navigator], "tuple[str, set[str]]"]
 
@@ -501,10 +502,145 @@ class Service:
     def _b_family(self, symbol: str, offset: int = 0, limit: int = DEFAULT_LIMIT,
                   show_uses: bool = True) -> Body:
         def body(nav: Navigator):
-            sym, note, fam = self._resolved(nav, symbol, lambda s: X.family(nav, s))
+            notes: list[str] = []
+            lib = self.library_family(nav, notes)
+            sym, note, fam = self._resolved(nav, symbol, lambda s: X.family(nav, s, lib))
             srcs = {r.location.source for m in fam for r in m.uses}
-            return note + render.family(sym, fam, nav.ws, offset, limit, show_uses), srcs
+            return note + "".join(dict.fromkeys(notes)) + \
+                render.family(sym, fam, nav.ws, offset, limit, show_uses), srcs
         return body
+
+    def library_family(self, nav: Navigator, notes: list[str]) -> Callable:
+        """For X.family: the library part of a library method's override family."""
+        return lambda method: self._library_family(nav, method, notes)
+
+    def _library_family(self, nav: Navigator, method: str, notes: list[str]) -> list:
+        """A library method's library family, from the sources jars: the library methods it
+        overrides ("ancestor"), and the overrides in library subtypes that the project calls
+        ("descendant": List#size, Set#size, ArrayList#size… for Collection#size; a subtype
+        nobody here uses is left out). Its own entry ("this") carries its declaration."""
+        if S.kind_of(method) != "method":
+            return []
+        root = nav.ws.root
+        own = dict(self._library_overload_params(method, root))
+        base = own.get(method)
+        if base is None:
+            notes.append(f"-- {S.short(method)}: its sources were not found (or not parsed): "
+                         "no library subtypes or supertypes searched\n")
+            return []
+        owner, name = S.parent(method), S.name_of(method)
+        try:
+            index = self._library_index(root)
+        except (CacheError, OSError, sqlite3.Error):
+            return []
+
+        def member(sym: str, relation: str):
+            d = self._library(sym, root)
+            if d is None or d.member is None:
+                return X.FamilyMember(None, sym, relation)
+            return X.FamilyMember(None, sym, relation, [], d.member.declaration,
+                                  f"{d.lib.coordinates} {d.lib.entry}:{d.member.line}")
+
+        out = [member(method, "this")]
+        try:
+            for anc in L.library_ancestors(index, owner):
+                first = S.overload_symbol(f"{anc}{S._format_name(name)}().", 0)
+                for sym, params in self._library_overload_params(first, root):
+                    if params is not None and L._same_signature(params, base):
+                        out.append(member(sym, "ancestor"))
+                        break
+            used = self._external_methods_named(nav, name)
+            owners = sorted({S.parent(x) for x in used} - {owner})
+            if len(owners) > LIBRARY_FAMILY_TYPES:
+                notes.append(f"-- {len(owners) - LIBRARY_FAMILY_TYPES} more library types "
+                             f"with a {name} method used here were not checked\n")
+                owners = owners[:LIBRARY_FAMILY_TYPES]
+            unread = []
+            for o in owners:
+                if owner not in L.library_ancestors(index, o):
+                    continue
+                mine = [x for x in used if S.parent(x) == o]
+                known = self._library_overload_params(mine[0], root)
+                if not known:
+                    unread.append(S.short(o))
+                    continue
+                for sym, params in known:
+                    if sym in mine and params is not None and L._same_signature(params, base):
+                        out.append(member(sym, "descendant"))
+            if unread:
+                notes.append(f"-- library subtypes whose sources were not found, left out: "
+                             f"{', '.join(unread[:8])}{' …' if len(unread) > 8 else ''}\n")
+        except L.LibraryBusy as e:
+            raise QueryError(str(e)) from e
+        return out
+
+    def _type_facts(self, nav: Navigator, g) -> dict:
+        """For refactor's where types: whether a symbol is defined in the project (from the
+        index: a library symbol would make Navigator.definition grep every shard), every
+        supertype of a type, a library method's return type. Memoized for the plan."""
+        defined: dict[str, bool] = {}
+        ancestors: dict[str, list[str]] = {}
+        returns: dict[str, str] = {}
+
+        def is_defined(sym: str) -> bool:
+            if sym not in defined:
+                defined[sym] = g.con.execute(
+                    "SELECT 1 FROM symbols s JOIN defs d ON d.symbol_id = s.id WHERE s.symbol = ?"
+                    " LIMIT 1", (sym,)).fetchone() is not None
+            return defined[sym]
+
+        def ancestors_of(t: str) -> list[str]:
+            if t not in ancestors:
+                ancestors[t] = self._type_ancestors(nav, t, is_defined)
+            return ancestors[t]
+
+        def return_of(m: str) -> str:
+            if m not in returns:
+                returns[m] = self._library_return(nav, m)
+            return returns[m]
+
+        return {"defined": is_defined, "ancestors": ancestors_of, "returns": return_of}
+
+    def _type_ancestors(self, nav: Navigator, type_symbol: str,
+                        defined: Callable) -> list[str] | None:
+        """Every supertype of a type: a project type's from SCIP (which lists them all, library
+        ones included); a library type's from its sources jar, None without one."""
+        if defined(type_symbol):
+            _d, supers = nav.supertypes(type_symbol)
+            return [x.symbol for x in supers if x.symbol != type_symbol]
+        try:
+            index = self._library_index(nav.ws.root)
+            path, _types = L.class_path_of(type_symbol)
+            if not path or index.find_class(path) is None:
+                return None
+            return L.library_ancestors(index, type_symbol)
+        except L.LibraryBusy as e:
+            raise QueryError(str(e)) from e
+        except (CacheError, OSError, sqlite3.Error):
+            return None
+
+    def _library_return(self, nav: Navigator, method: str) -> str:
+        try:
+            return L.return_type(self._library_index(nav.ws.root), method)
+        except L.LibraryBusy as e:
+            raise QueryError(str(e)) from e
+        except (CacheError, OSError, sqlite3.Error):
+            return ""
+
+    def _external_methods_named(self, nav: Navigator, name: str) -> list[str]:
+        """Library methods named `name` that the project uses (declared nowhere in it)."""
+        like = "%#" + re.sub(r"([\\%_])", r"\\\1", name) + "(%"
+        try:
+            with self._graph(nav) as (g, _stats):
+                rows = g.con.execute(
+                    "SELECT s.symbol FROM symbols s WHERE s.symbol LIKE ? ESCAPE '\\' AND NOT "
+                    "EXISTS (SELECT 1 FROM defs d WHERE d.symbol_id = s.id) AND "
+                    "EXISTS (SELECT 1 FROM refs r WHERE r.symbol_id = s.id)", (like,))
+                found = [x for (x,) in rows]
+        except QueryError:
+            found = nav.find_external(f"{name}()")
+        return sorted({x for x in found if S.kind_of(x) == "method" and S.name_of(x) == name
+                       and not S.is_local(x)})
 
     def _b_overloads(self, symbol: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> Body:
         def body(nav: Navigator):
@@ -708,7 +844,9 @@ class Service:
                                 lambda t, subtypes=False: self._members_named(
                                     nav, g, t, subtypes, lib_cache),
                                 JVM.language_level(root),
-                                types_named=lambda name: self._types_named(g, name))
+                                types_named=lambda name: self._types_named(g, name),
+                                library_family=lambda notes: self.library_family(nav, notes),
+                                type_facts=self._type_facts(nav, g))
                 except JVM.ToolError as e:
                     raise QueryError(str(e)) from e
             return res.text, set()

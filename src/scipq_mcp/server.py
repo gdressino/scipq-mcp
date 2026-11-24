@@ -283,7 +283,9 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
                show_uses: Annotated[bool, Field(description="List the uses too")] = True) -> str:
         """The override family of a method — what it overrides, its overrides, and the other
         overrides of its ancestors — with the uses of each. references on an abstract method
-        does not see calls through the overrides; this does."""
+        does not see calls through the overrides; this does. For a library method it adds,
+        from the sources jars, the library methods it overrides and the overrides in library
+        subtypes this project calls (Collection#size: List#size, ArrayList#size…)."""
         return service.family(symbol, project_root, offset, limit, show_uses)
 
     @tool

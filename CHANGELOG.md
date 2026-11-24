@@ -5,6 +5,19 @@ version and date when releasing.
 
 ## Unreleased
 
+### Added
+
+- `refactor`: `where` takes the types its captures must be: `{"pattern": "$x.size() == 0",
+  "types": {"$x": "java.util.Collection"}}` keeps the sites where `$x` is that type or a
+  subtype, told from the index (names, fields, parameters, `var`, calls by their return type,
+  `new`, casts, literals). A site whose capture's type cannot be told is left out and listed.
+  A select by kind whose `where` calls a method on a capture without `types` gets a note:
+  the shape alone does not tell a list's `isEmpty()` from a table's.
+- `family` on a library method (and `refactor`'s `family: true` on one, in a select or in
+  `replace_calls`): the library methods it overrides and the overrides in library subtypes
+  the project calls, from the sources jars (`Collection#size` brings `List#size`,
+  `Set#size`, `ArrayList#size`…), plus the project's overrides. Before, only the project's.
+
 ### Changed
 
 - A name written with a parameter list picks overloads as Java reads it, in every tool:
@@ -17,6 +30,10 @@ version and date when releasing.
 
 ### Fixed
 
+- Library supertypes read from a sources jar missed those of a type whose type parameters
+  have bounds (`class Nodes<T extends Node> extends ArrayList<T>`: none instead of
+  `ArrayList`), in `members(inherited)`, `typed(subtypes)` and the rest. The cached rows are
+  dropped once.
 - `overloads` of a library constructor: the symbols were built without SCIP's backquotes
   (`` `<init>` ``), so their uses were not found.
 

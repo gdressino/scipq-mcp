@@ -142,7 +142,7 @@ query, and pinned sessions upgrade when you choose, not all at once mid-day.
 | `implementations(symbol, direct_only)` | subtypes of a type or overrides of a method, at any depth; anonymous classes included | implementation |
 | `supertypes(symbol)` | supertypes of a type, or the methods a method overrides, direct first | type hierarchy |
 | `members(symbol, inherited)` | own and inherited members of a type, marking overrides and generated ones | — |
-| `family(symbol)` | a method's override family (ancestors, descendants, siblings) and the uses of each | — |
+| `family(symbol)` | a method's override family (ancestors, descendants, siblings) and the uses of each; for a library method, also the overrides in library subtypes the project calls | — |
 | `overloads(symbol)` | every overload of a method (also library ones) and the uses of each | — |
 | `outline(file)` | definitions in a file, nested, with signatures; takes a path or a type name | documentSymbol |
 | `callers(symbol, depth, include_overridden)` | incoming calls grouped by enclosing method | incomingCalls |

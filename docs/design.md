@@ -253,7 +253,8 @@ section. Unknown keys are reported, not ignored silently.
    Lombok included, plus assignments found in the line) and who names it in strings.
 9. Refactoring plans (done ahead of 4–8): JSON data the agent writes — macros (rename,
    change_signature, replace_calls, move, annotate, create) or select/do primitives over the
-   index's sites or nodes of a kind, with structural `where` patterns. Edits are text edits of
+   index's sites or nodes of a kind, with structural `where` patterns (and, optionally, the type
+   each capture must be, told from the index). Edits are text edits of
    the original ranges composed inside-out (`edits.py`); JavaParser (`worker/`, not bundled)
    only locates nodes and validates that every edited file parses with the expected node over
    each edit (expressions are parenthesized when they would merge). Checks a compiler does not

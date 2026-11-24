@@ -393,15 +393,18 @@ class FamilyMember:
     where: str = ""                 # and location in the sources jar
 
 
-def family(nav: Navigator, method: str) -> list[FamilyMember]:
+def family(nav: Navigator, method: str, library=None) -> list[FamilyMember]:
     """The override family of a method: what it overrides, what overrides it, and the other
     overrides of its ancestors, each with its uses (a call through any of them may dispatch to
-    any other)."""
+    any other). For a library method, library(method) adds the library's part (Service.
+    _library_family): its library supertypes' methods and the overrides in library subtypes
+    the project uses."""
     if not S.is_method(method):
         raise QueryError(f"{method} is not a method")
     _d, supers = nav.supertypes(method)
     ancestors = [s.symbol for s in supers]
-    top = set(ancestors) | {method}
+    extra = library(method) if library is not None and _d is None else []
+    top = set(ancestors) | {method} | {m.symbol for m in extra if m.relation == "ancestor"}
     impl: dict[str, tuple[Definition, set[str]]] = {}
     for sym in top:
         for i in nav.implementations(sym):
@@ -410,9 +413,12 @@ def family(nav: Navigator, method: str) -> list[FamilyMember]:
             impl.setdefault(i.definition.symbol, (i.definition, rels))
     members: OrderedDict[str, FamilyMember] = OrderedDict()
     me = nav.definition(method)
-    members[method] = FamilyMember(me, method, "this")
+    members[method] = next((m for m in extra if m.relation == "this"), None) or \
+        FamilyMember(me, method, "this")
     for s in supers:
         members[s.symbol] = FamilyMember(s.definition, s.symbol, "ancestor")
+    for m in extra:
+        members.setdefault(m.symbol, m)
     for sym, (d, rels) in impl.items():
         if sym in members:
             continue

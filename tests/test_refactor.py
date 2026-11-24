@@ -331,3 +331,85 @@ def test_review_regressions_without_a_jvm():
     assert not S.is_private('@Named("private") public void open()')
     assert R._param_types('@Deprecated(since = "2") void m(int a, int b)') == ("int", "int")
     assert CMP.shape('@Deprecated(since = "2") void m(int a)') == "void m(int)"
+
+
+def _jdk_service(root, cache):
+    from scipq_mcp import libsrc as L
+    if not L.jdk_src_zip():
+        pytest.skip("no JDK src.zip on this machine")
+    return Service(root, cache_dir=cache, library_roots=[L.jdk_src_zip()])
+
+
+def _lines(out: str) -> list[int]:
+    return sorted(int(m) for m in re.findall(r"Sizes\.java:(\d+)  BinaryExpr", out))
+
+
+def test_where_types_check_captures(refactor_root, javaparser_cache):
+    svc = _jdk_service(refactor_root, javaparser_cache)
+    sel = {"in": "Sizes#empties", "kind": "BinaryExpr"}
+    out = plan(svc, [{"select": {**sel, "where": "$x.size() == 0"},
+                      "do": {"replace": "$x.isEmpty()"}}], dry_run=True)
+    assert _lines(out) == [22, 23, 24, 25, 26, 27, 29]     # box.size() (24) too
+    assert "where matches the code's shape only" in out
+    typed = {**sel, "where": {"pattern": "$x.size() == 0",
+                              "types": {"$x": "java.util.Collection"}}}
+    out = plan(svc, [{"select": typed, "do": {"replace": "$x.isEmpty()"}}], dry_run=True)
+    # fields, parameters, a method's return type, `var` (HashSet): not Box
+    assert _lines(out) == [22, 23, 25, 26, 27, 29], out
+    assert "1 sites left out by node/where" in out and "shape only" not in out
+    out = plan(svc, [{"select": {**sel, "where": {"pattern": "$x.size() == 0",
+                                                  "types": {"x": "Box"}}},
+                      "do": {"replace": "$x.isEmpty()"}}], dry_run=True)
+    assert _lines(out) == [24]                              # a project type, simple name
+    out = plan(svc, [{"select": {**sel, "where": {"pattern": "$x == 0", "types": {"$x": "int"}}},
+                      "do": {"replace": "$x < 1"}}], dry_run=True)
+    assert _lines(out) == [22, 23, 24, 25, 26, 27, 29, 30]  # library and project returns, length()
+    out = plan(svc, [{"select": {**sel, "where": {"pattern": "$a && $b",
+                                                  "types": {"$a": "boolean"}}},
+                      "do": {"replace": "$b && $a"}}], dry_run=True)
+    assert _lines(out) == [31]                              # x && y: the innermost
+    assert "6 sites left out: the type of $a could not be told" in out
+    out = plan(svc, [{"select": {**sel, "where": {"pattern": "$x.size() == 0",
+                                                  "types": {"$y": "List"}}},
+                      "do": {"replace": "$x.isEmpty()"}}], dry_run=True)
+    assert "$y is not a capture of the pattern" in out
+
+
+def test_family_of_a_library_method_reaches_library_subtypes(refactor_root, javaparser_cache):
+    svc = _jdk_service(refactor_root, javaparser_cache)
+    out = svc.family("java.util.Collection#size()")
+    for name in ("List#size()", "Set#size()", "ArrayList#size()", "HashSet#size()",
+                 "Sizes.Bag#size()"):
+        assert re.search(r"descendant +" + re.escape(name), out), (name, out)
+    assert "AbstractCollection" not in out          # in the hierarchy, called nowhere here
+    assert "Box#size" not in out
+    out = svc.family("java.util.List#size()")
+    assert re.search(r"ancestor +Collection#size\(\)", out)
+    assert re.search(r"descendant +ArrayList#size\(\)", out) and "Set#size" not in out
+    sel = {"symbol": "java.util.Collection#size()", "family": True,
+           "node": "ancestor:BinaryExpr", "where": "$x.size() == 0"}
+    out = plan(svc, [{"select": sel, "do": {"replace": "$x.isEmpty()"}}], dry_run=True)
+    assert _lines(out) == [22, 23, 25, 26, 27, 29], out
+
+
+def test_type_ancestors_for_where_types(refactor_root, tmp_path):
+    from scipq_mcp import libsrc as L
+    from scipq_mcp.queries import Navigator
+    from scipq_mcp.workspace import Workspace
+    if not L.jdk_src_zip():
+        pytest.skip("no JDK src.zip on this machine")
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"), library_roots=[L.jdk_src_zip()])
+    nav = Navigator(Workspace(refactor_root))
+    ours = lambda s: s.startswith("com/example/")   # noqa: E731
+    # A project type: SCIP lists every supertype, the library's included.
+    assert "java/util/Collection#" in svc._type_ancestors(nav, "com/example/shop/Sizes#Bag#",
+                                                          ours)
+    assert "java/util/Collection#" in svc._type_ancestors(nav, "java/util/HashSet#", ours)
+    # A library type without sources: unknown, not "no supertypes".
+    assert svc._type_ancestors(nav, "org/nowhere/Thing#", ours) is None
+    from scipq_mcp.refactor import CaptureTypes
+    ct = CaptureTypes(None, {"ancestors": lambda t: None if t.startswith("org/") else []})
+    assert ct.is_a("org/nowhere/Thing#", "java.util.Collection") is None
+    assert ct.is_a("int", "int") is True and ct.is_a("int", "long") is False
+    assert ct.is_a("java/util/Map#", "Map") is True
+    assert ct.is_a("java/util/Map#", "java.util.Collection") is False

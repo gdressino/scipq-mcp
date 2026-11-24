@@ -32,6 +32,7 @@ REFRESH_SECONDS = 600
 LOCK_WAIT_SECONDS = 45  # how long to wait for another session that is building the map
 OPEN_ZIPS = 8           # jars kept open: opening the JDK's src.zip alone reads ~15,000 entries
 PARSED_SOURCES = 64     # parsed .java files kept (hierarchies read the same files repeatedly)
+SUPERTYPES_VERSION = "2"  # of the cached supertypes rows: bumped when their parsing changes
 
 
 class LibraryBusy(Exception):
@@ -304,6 +305,13 @@ class LibraryIndex:
             CREATE TABLE IF NOT EXISTS supertypes (symbol TEXT PRIMARY KEY,
                 jar TEXT NOT NULL, supers TEXT NOT NULL) WITHOUT ROWID;
         """)
+        # The supertypes rows are a cache of library_supertypes: dropped when it changes.
+        row = con.execute("SELECT value FROM meta WHERE key = 'supertypes'").fetchone()
+        if row is None or row[0] != SUPERTYPES_VERSION:
+            con.execute("DELETE FROM supertypes")
+            con.execute("INSERT OR REPLACE INTO meta VALUES ('supertypes', ?)",
+                        (SUPERTYPES_VERSION,))
+            con.commit()
         self._schema_ready = True
         return con
 
@@ -717,8 +725,15 @@ _PACKAGE_DECL = re.compile(r"^\s*package\s+([\w.]+)\s*;", re.M)
 
 
 def _declared_names(declaration: str) -> list[str]:
-    """Type names after extends/implements in a declaration (generics stripped)."""
+    """Type names after extends/implements in a declaration (generics stripped: the type
+    parameters' bounds, `class Nodes<T extends Node> extends ArrayList<T>`, are not
+    supertypes)."""
     out = []
+    while "<" in declaration:
+        erased = re.sub(r"<[^<>]*>", "", declaration)
+        if erased == declaration:
+            break
+        declaration = erased
     for kw in ("extends", "implements"):
         m = re.search(r"\b" + kw + r"\b(.*?)(?=\b(?:extends|implements|permits)\b|$)", declaration)
         if not m:
@@ -761,17 +776,7 @@ def library_supertypes(index: LibraryIndex, type_symbol: str) -> list[str]:
             return []
         header = " ".join(src.masked[decl[0]:decl[1]].split())
         header = _ANNOT.sub(" ", header)
-        pkg_m = _PACKAGE_DECL.search(src.masked)
-        pkg = pkg_m.group(1) if pkg_m else ""
-        single = {}
-        wildcards = []
-        for m in _IMPORT.finditer(src.masked):
-            if m.group(1):
-                continue
-            if m.group(3):
-                wildcards.append(m.group(2))
-            else:
-                single[m.group(2).rsplit(".", 1)[-1]] = m.group(2)
+        pkg, single, wildcards = _names_in(src)
         supers = []
         for name in _declared_names(header):
             supers.append(_resolve_type_name(index, name, pkg, single, wildcards, types))
@@ -782,6 +787,52 @@ def library_supertypes(index: LibraryIndex, type_symbol: str) -> list[str]:
         return supers
     finally:
         con.close()
+
+
+def _names_in(src: JavaSource) -> tuple[str, dict, list]:
+    """A source's package, single-type imports (simple name -> qualified) and wildcards."""
+    pkg_m = _PACKAGE_DECL.search(src.masked)
+    pkg = pkg_m.group(1) if pkg_m else ""
+    single, wildcards = {}, []
+    for m in _IMPORT.finditer(src.masked):
+        if m.group(1):
+            continue
+        if m.group(3):
+            wildcards.append(m.group(2))
+        else:
+            single[m.group(2).rsplit(".", 1)[-1]] = m.group(2)
+    return pkg, single, wildcards
+
+
+def return_type(index: LibraryIndex, symbol: str) -> str:
+    """The erased return type of a library method: a SCIP type symbol (`java/util/List#`), a
+    primitive or `void`, or "" (an array, a type variable, or sources not found)."""
+    d = lookup(index, symbol)
+    if d is None or d.member is None or d.member.kind != "method":
+        return ""
+    decl = _ANNOT.sub(" ", d.member.declaration)
+    at = re.search(r"\b" + re.escape(d.member.name) + r"\s*\(", decl)
+    if not at:
+        return ""
+    head = decl[:at.start()]
+    while "<" in head:
+        erased = re.sub(r"<[^<>]*>", " ", head)
+        if erased == head:
+            break
+        head = erased
+    words = head.split()
+    if not words or "[" in words[-1] or "]" in words[-1]:
+        return ""
+    typ = words[-1]
+    if typ in S.PRIMITIVES or typ == "void":
+        return typ
+    _path, types = class_path_of(symbol)
+    tvars = _type_variables(d.member.declaration, "") | _type_variables(
+        " ".join(d.type_declaration.split()), types[-1] if types else "")
+    if typ in tvars:
+        return ""
+    pkg, single, wildcards = _names_in(d.source)
+    return _resolve_type_name(index, typ, pkg, single, wildcards, types)
 
 
 def _resolve_type_name(index: LibraryIndex, name: str, pkg: str, single: dict,

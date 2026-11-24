@@ -443,3 +443,11 @@ def test_library_enum_constants_and_record_components(tmp_path, sample_root):
     assert d is not None and "implicit accessor" in d.member.javadoc
     svc = Service(sample_root, cache_dir=str(tmp_path / "cache"), library_roots=[root])
     assert "enum constant: START" in svc.members("org/acme/shapes/Shapes#Align#")
+
+
+def test_declared_supertypes_skip_type_parameter_bounds():
+    assert L._declared_names("public class Nodes<T extends Node> extends ArrayList<T>") == [
+        "ArrayList"]
+    assert L._declared_names("class A<T extends Comparable<T>> extends B<T> implements C, "
+                             "D<T>") == ["B", "C", "D"]
+    assert L._declared_names("public interface Map<K, V>") == []
