@@ -100,3 +100,14 @@ def test_annotations_with_scip_strings_are_left_out():
     assert S.is_parameter("a/B#m().[T]") and S.is_parameter("a/B#m().(x)") and \
         S.is_parameter("a/B#[T]")
     assert not S.is_parameter("a/B#m().") and not S.is_parameter("local 3")
+
+
+def test_annotations_nested_to_any_depth_are_left_out():
+    sig = ('@ApiResponses({@ApiResponse(responseCode = "200", description = "ok (done", '
+           'content = @Content(schema = @Schema(implementation = Res.class)))})\n'
+           '@Operation(summary = "x")\npublic Res login(@Param(d = "a)", r = true) Req account, '
+           '@Context HttpServletRequest request)')
+    assert " ".join(S.without_annotations(sig).split()) == \
+        "public Res login( Req account, HttpServletRequest request)"
+    assert S.without_annotations("public @interface Foo") == "public @interface Foo"
+    assert S.without_annotations("@A('(') int g(char c)").split() == ["int", "g(char", "c)"]

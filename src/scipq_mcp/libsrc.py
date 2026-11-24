@@ -775,7 +775,7 @@ def library_supertypes(index: LibraryIndex, type_symbol: str) -> list[str]:
         if decl is None:
             return []
         header = " ".join(src.masked[decl[0]:decl[1]].split())
-        header = _ANNOT.sub(" ", header)
+        header = S.without_annotations(header)
         pkg, single, wildcards = _names_in(src)
         supers = []
         for name in _declared_names(header):
@@ -810,7 +810,7 @@ def return_type(index: LibraryIndex, symbol: str) -> str:
     d = lookup(index, symbol)
     if d is None or d.member is None or d.member.kind != "method":
         return ""
-    decl = _ANNOT.sub(" ", d.member.declaration)
+    decl = S.without_annotations(d.member.declaration)
     at = re.search(r"\b" + re.escape(d.member.name) + r"\s*\(", decl)
     if not at:
         return ""
@@ -879,7 +879,6 @@ def library_ancestors(index: LibraryIndex, type_symbol: str, limit: int = 200) -
     return out
 
 
-_ANNOT = re.compile(r"@\s*(?!interface\b)[\w$.]+(\s*\((?:[^()]|\([^()]*\))*\))?")
 
 
 def param_types(declaration: str, type_vars: set[str] = frozenset(),
@@ -888,7 +887,7 @@ def param_types(declaration: str, type_vars: set[str] = frozenset(),
     variable (it matches anything: `setValue(T)` overrides `setValue(V)` and `setValue(String)`);
     None when the declaration has no parameter list. With written, the type names as written
     (`java.sql.Date`, `Date`: to resolve them), without array dimensions."""
-    decl = _ANNOT.sub(" ", declaration)
+    decl = S.without_annotations(declaration)
     tvars = set(type_vars)
     method_tv = re.match(r"\s*(?:(?:public|protected|private|static|final|abstract|default|"
                          r"synchronized|native|strictfp)\s+)*<", decl)

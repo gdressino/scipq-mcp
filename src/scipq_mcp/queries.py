@@ -539,18 +539,25 @@ class Navigator:
                                            f"{_param_list(q.params, q.params_text)}; its overloads:")
         syms = sorted({d.symbol for d in found})
         # (Constructors are not inherited: `X#<init>()` is one of X's, never a supertype's.)
-        if q.params == () and syms and len({(S.parent(x), S.name_of(x)) for x in syms}) == 1 \
-                and S.name_of(syms[0]) != S.CONSTRUCTOR:
+        none_without = ""
+        if q.params == () and syms and len({(S.parent(x), S.name_of(x)) for x in syms}) == 1:
             declared = [_declared_params(d) for d in found]
-            if all(t for t in declared):   # every one takes parameters: look for an inherited
-                inh = self._inherited_parameterless(S.parent(syms[0]), S.name_of(syms[0]))
+            if all(t for t in declared):   # every one takes parameters
+                sigs = "; ".join(" ".join(S.without_annotations(d.info.signature).split())
+                                 for d in found if d.info)
+                inh = self._inherited_parameterless(S.parent(syms[0]), S.name_of(syms[0])) \
+                    if S.name_of(syms[0]) != S.CONSTRUCTOR else None
                 if inh:
-                    sigs = "; ".join(" ".join(S.without_annotations(d.info.signature).split())
-                                     for d in found if d.info)
                     return Resolution(inh, found, f"{text} → {inh} (the overload without "
                                                   f"parameters, inherited: "
                                                   f"{S.short(S.parent(syms[0]))} declares only "
                                                   f"{sigs})")
+                if len(syms) > 1:
+                    return Resolution(None, found, f"no overload of {text.split('(')[0]!r} is "
+                                                   "without parameters; its overloads:")
+                what = "constructor" if S.name_of(syms[0]) == S.CONSTRUCTOR else "method"
+                none_without = f" (none without parameters: the {what}, which takes " \
+                               f"{_param_list(declared[0])})"
         # A bare type name may also be a JDK or library type used everywhere (e.g. `Button`).
         # Only when it changes the answer: no project match, or already ambiguous.
         bare_type = len(q.names) == 1 and q.names[0][:1].isupper() and not q.method_only
@@ -567,7 +574,7 @@ class Navigator:
             external = narrowed
         if len(syms) == 1 and not external:
             return Resolution(syms[0], found, f"{text} → {syms[0]}"
-                              + self._overload_note(q, syms[0], every))
+                              + (none_without or self._overload_note(q, syms[0], every)))
         if syms:
             n = len(syms) + len(external)
             return Resolution(None, found, f"{text!r} matches {n} symbols; pass one of them",

@@ -241,12 +241,68 @@ def name_of(symbol: str) -> str:
     return d[-1].name if d else symbol
 
 
-_ANNOTATION = re.compile(r"@[\w$.]+(?:\s*\((?:[^()\"]|\"(?:[^\"\\]|\\.)*\"|\((?:[^()]|\([^()]*\))*\))*\))?")
+_ANNOTATION_NAME = re.compile(r"@\s*([\w$.]+)")
+
+
+def _literal_end(text: str, i: int) -> int:
+    """The end of the string, text block or char literal starting at text[i]. Escapes are
+    skipped as written; scip-javac writes an annotation's strings unescaped (`(\\d+)` with
+    one backslash), which this reads the same."""
+    if text.startswith('"""', i):
+        j = text.find('"""', i + 3)
+        return len(text) if j < 0 else j + 3
+    quote, j = text[i], i + 1
+    while j < len(text):
+        if text[j] == "\\":
+            j += 2
+            continue
+        if text[j] == quote or text[j] == "\n":
+            return j + 1
+        j += 1
+    return len(text)
 
 
 def without_annotations(signature: str) -> str:
-    """A signature without its annotations (whose arguments may hold parentheses)."""
-    return _ANNOTATION.sub(" ", signature or "")
+    """A signature (or a declaration) without its annotations, whose arguments may nest
+    parentheses, other annotations and strings to any depth
+    (`@ApiResponses({@ApiResponse(content = @Content(schema = @Schema(…)))})`)."""
+    text = signature or ""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch in "\"'":
+            j = _literal_end(text, i)
+            out.append(text[i:j])
+            i = j
+            continue
+        m = _ANNOTATION_NAME.match(text, i) if ch == "@" else None
+        if m is None or m.group(1) == "interface":
+            out.append(ch)
+            i += 1
+            continue
+        j = m.end()
+        k = j
+        while k < n and text[k].isspace():
+            k += 1
+        if k < n and text[k] == "(":
+            depth = 0
+            while k < n:
+                c = text[k]
+                if c in "\"'":
+                    k = _literal_end(text, k)
+                    continue
+                if c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth -= 1
+                    if depth == 0:
+                        k += 1
+                        break
+                k += 1
+            j = k
+        out.append(" ")
+        i = j
+    return "".join(out)
 
 
 def is_private(signature: str) -> bool:

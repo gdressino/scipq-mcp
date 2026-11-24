@@ -21,7 +21,8 @@ version and date when releasing.
 ### Changed
 
 - README: how to install the server for every project (user scope) or for one project shared
-  with the team (`.mcp.json`, project scope), in Claude Code and other clients.
+  with the team (`.mcp.json`, project scope) in Claude Code, how to move a pinned one to
+  another version, and the configuration of other clients (Codex's TOML too).
 - A name written with a parameter list picks overloads as Java reads it, in every tool:
   `Type#m()` is the overload without parameters (SCIP numbers it `m(+N)` when it is not the
   first; the `--` line says so), and `Type#m(String, int)` the one taking those types
@@ -31,7 +32,8 @@ version and date when releasing.
   overload free of parameters still means the method, as `m(...)` does, and `m(+N)` is
   SCIP's numbering. On a type that only inherits the method without parameters, `Type#m()`
   is the inherited one (not for constructors, which are not inherited); across several
-  types, `m()` keeps those with one. A type written with
+  types, `m()` keeps those with one. When none is without parameters, `m()` still names the
+  method and the `--` line says what it takes; with several, it lists them. A type written with
   its package (`java.util.Date`) is compared by its package too.
 - Answers write a method that takes parameters with them (`Entity#setState(int)`,
   `Overloaded#pick(String, int)`) instead of SCIP's numbering (`setState()`, `pick(+2)`), in
@@ -47,8 +49,11 @@ version and date when releasing.
   (`m().[T]`), not to the method: `callers`, `impact`, `tests(transitive)` and the rest
   stopped there, and the method showed as its own caller. The index is rebuilt once
   (schema 12).
-- An annotation whose string holds a backslash, as scip-javac writes it (`@Then("^(\d+)
-  items$")`), was not left out of a signature: a glue method's parameters were not found.
+- Annotations were not left out of a signature when their arguments nested more than two
+  levels (`@ApiResponses({@ApiResponse(content = @Content(schema = @Schema(…)))})`) or a
+  string held a backslash, as scip-javac writes it (`@Then("^(\d+) items$")`): their
+  remains were read as the parameters, so the method could not be named by its parameter
+  list.
 - `refactor`: a select by `files` matching more than 5000 `.java` files stopped there without
   a word (and reported what it saw as everything); it is refused now, to narrow or split. A
   type that does not exist in `where` types is an error instead of leaving every site out.

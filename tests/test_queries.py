@@ -330,3 +330,10 @@ def test_constructors_are_not_inherited(nav):
     # Account declares only Account(String); Entity has the implicit one without parameters.
     r = nav.resolve("Account#<init>()")
     assert r.symbol == "com/example/model/Account#`<init>`()." and "inherited" not in r.note
+
+
+def test_m_without_parameters_when_none_is_says_so(nav):
+    r = nav.resolve("Account#<init>()")
+    assert "(none without parameters: the constructor, which takes (String))" in r.note
+    r = nav.resolve("Service#process()")
+    assert r.symbol is None and "no overload of 'Service#process' is without parameters" in r.note

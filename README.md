@@ -108,7 +108,16 @@ claude mcp add --scope project scipq -- uvx scipq-mcp
 
 Without `--scope`, the server is added for this project and only for you (local scope). In any
 scope, `uvx scipq-mcp@X.Y.Z` (a version from PyPI) instead of `uvx scipq-mcp` pins it (see
-the note on worktrees below). `claude mcp list` shows what is installed and where.
+the note on worktrees below). `claude mcp list` lists the servers and checks them;
+`claude mcp get scipq` shows the scope and command of this one.
+
+When the same name is added in several scopes, local wins, then project, then user. To move a
+pinned server to another version, remove it from its scope and add it again:
+
+```sh
+claude mcp remove --scope user scipq
+claude mcp add --scope user scipq -- uvx scipq-mcp@X.Y.Z
+```
 
 ### Other MCP clients
 
@@ -122,6 +131,14 @@ its project-level one, where the client has it (e.g. Cursor: `~/.cursor/mcp.json
     "scipq": { "command": "uvx", "args": ["scipq-mcp"] }
   }
 }
+```
+
+Codex reads TOML, in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.scipq]
+command = "uvx"
+args = ["scipq-mcp"]
 ```
 
 The server serves the project it is started in (any directory inside it). Every tool also
