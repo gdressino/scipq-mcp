@@ -239,6 +239,8 @@ class Service:
         self._lib_indexes: dict[tuple, L.LibraryIndex] = {}
         self._jdk_choices: dict[str, tuple[float, str, str]] = {}
         self._lib_lock = threading.Lock()
+        # Roots whose answers already explained the changed files in full (then a line).
+        self._explained: set[str] = set()
 
     def settings(self, root: str, graph=None) -> CFG.Settings:
         present = graph.annotations_present() if graph is not None else None
@@ -309,7 +311,11 @@ class Service:
             fresh = check.result()
         elif self.freshness == "results":
             fresh = ws.freshness_of(sources)
-        foot = render.freshness(fresh, sources)
+        foot = render.freshness(fresh, sources, brief=ws.root in self._explained)
+        if fresh and (fresh.stale or fresh.uncompiled):
+            self._explained.add(ws.root)
+        elif check is not None:     # compiled again: the next changes are explained again
+            self._explained.discard(ws.root)
         if nav.unreadable:
             foot = (foot + "\n" if foot else "") + render.unreadable(sorted(nav.unreadable))
         text = texts[0] if len(texts) == 1 else "\n\n".join(texts)
@@ -491,7 +497,9 @@ class Service:
                 lib = self._library(sym, nav.ws.root)
                 if lib is not None:
                     return note + render.library_definition(lib), set()
-            return note + render.definition(nav.ws, d, sym), {d.location.source} if d else set()
+            value = X.initializer_of(nav, d) if d else ""
+            return note + render.definition(nav.ws, d, sym, value), \
+                {d.location.source} if d else set()
         return body
 
     def _b_implementations(self, symbol: str, direct_only: bool = False, offset: int = 0,
@@ -534,6 +542,14 @@ class Service:
             if scope:
                 root.children = [c for c in root.children if c.sites and X.in_scope(
                     c.symbol, c.sites[0].location.source, scope)]
+                root.unfollowed = {m: kept for m, rs in root.unfollowed.items() if (kept := [
+                    r for r in rs if X.in_scope(r.container or "", r.location.source, scope)])}
+                kept_tree, stack = set(), list(root.children)
+                while stack:
+                    n = stack.pop()
+                    kept_tree.add(n.symbol)
+                    stack.extend(n.children)
+                root.overriders = [c for c in root.overriders if c in kept_tree]
             srcs = set()
             stack = [root]
             while stack:

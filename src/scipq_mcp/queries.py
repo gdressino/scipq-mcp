@@ -194,8 +194,8 @@ class CallNode:
     via: str = ""             # the overridden method actually called, when it is not the target
     truncated: bool = False
     # Root only, without include_overridden: the calls it leaves out (method it overrides ->
-    # call sites) and the callers in the tree that override project methods (not followed).
-    unfollowed: dict[str, int] = field(default_factory=dict)
+    # its call sites) and the callers in the tree that override project methods (not followed).
+    unfollowed: dict[str, list["Reference"]] = field(default_factory=dict)
     overriders: list[str] = field(default_factory=list)
 
 
@@ -884,9 +884,9 @@ class Navigator:
                 [o for o in overridden if not o.startswith("java/lang/Object#")]
             refs_by_target = self._references_many(set(targets) | set(unfollowed))
             for o in unfollowed:
-                n = len(dispatching(o, refs_by_target.get(o, [])))
-                if n:
-                    root.unfollowed[o] = n
+                sites = dispatching(o, refs_by_target.get(o, []))
+                if sites:
+                    root.unfollowed[o] = sites
             next_targets: dict[str, list[tuple[CallNode, str]]] = {}
             for target, parents in targets.items():
                 refs = refs_by_target.get(target, [])
@@ -920,7 +920,13 @@ class Navigator:
         noted in root.overriders."""
         defs = self._definitions_of({c for c in targets if S.is_method(c)})
         ups = {c: _overridden(d) for c, d in defs.items()}
-        project = self._definitions_of({o for os_ in ups.values() for o in os_})
+        # Only those whose top-level type has a file here (a library's would be looked for in
+        # every shard, to be left out anyway).
+        wanted = {o for os_ in ups.values() for o in os_}
+        files = {s.source.rsplit("/", 1)[-1] for s in self.ws.shards_by_basename(
+            {S.top_level_type_name(o) + ".java" for o in wanted if S.top_level_type_name(o)})}
+        project = self._definitions_of({o for o in wanted if S.top_level_type_name(o)
+                                        and S.top_level_type_name(o) + ".java" in files})
         for caller, os_ in sorted(ups.items()):
             os_ = [o for o in os_ if o in project]
             if not os_:

@@ -153,7 +153,7 @@ def test_callers_include_overridden(nav):
     assert {(c.symbol, c.via) for c in wide.children} >= {
         ("com/example/app/ServiceTest#main().", "com/example/model/Account#uid().")}
     # Without it, what was left out is counted (super.uid() in SubAccount itself is not).
-    assert plain.unfollowed.get("com/example/model/Account#uid().", 0) >= 1
+    assert len(plain.unfollowed.get("com/example/model/Account#uid().", [])) >= 1
     assert wide.unfollowed == {} and wide.overriders == []
 
 
@@ -180,10 +180,29 @@ def test_freshness(sample_copy):
         ["core/src/main/java/com/example/model/Group.java"]).stale == [
         "core/src/main/java/com/example/model/Group.java"]
 
-    text = Service(sample_copy).references("Entity#setState")
+    svc = Service(sample_copy)
+    text = svc.references("Entity#setState")
     assert "WARNING: 1 source changed after their last compilation" in text
     assert "in these results: core/src/main/java/com/example/model/Group.java" in text
     assert "created after the last compilation" in text
+    # Explained once: then a line for each.
+    again = svc.references("Entity#setState")
+    foot = again[again.index("\nWARNING"):].strip().splitlines()
+    assert foot == [
+        "WARNING: 1 source changed after its last compilation, in these results "
+        "(lines quoted from it are looked for where they are now): "
+        "core/src/main/java/com/example/model/Group.java",
+        "note: 1 .java file created after the last compilation, not indexed: "
+        "core/src/main/java/com/example/model/Fresh.java; recompile: :core:compileJava"]
+    other = svc.references("Validator#validate")
+    assert "note: 1 source changed after its last compilation, none in these results" in other
+    # Compiled again (as if): the next changes are explained in full again.
+    mtime = os.stat(src).st_mtime
+    os.utime(src, (1_000_000_000, 1_000_000_000))
+    os.remove(new)
+    assert "WARNING" not in svc.references("Entity#setState")
+    os.utime(src, (mtime, mtime))
+    assert "(results reflect the compiled version" in svc.references("Entity#setState")
     assert "WARNING" not in Service(sample_copy, freshness="off").references("Entity#setState")
 
 

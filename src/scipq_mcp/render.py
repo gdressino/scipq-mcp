@@ -183,7 +183,8 @@ def moved_note(compiled: int, how: str) -> str:
     return ""
 
 
-def definition(ws: Workspace, d: Definition | None, symbol: str) -> str:
+def definition(ws: Workspace, d: Definition | None, symbol: str, value: str = "") -> str:
+    """`value`: a field's initializer, read from the source."""
     if d is None:
         return (f"{symbol} is not defined in this project (external, e.g. JDK or a dependency, "
                 "or its file was not compiled)")
@@ -199,9 +200,11 @@ def definition(ws: Workspace, d: Definition | None, symbol: str) -> str:
     lines = [d.symbol, head]
     if d.container:
         lines.append(f"anonymous class member, in {d.container}")
+    if value and not (d.info and d.info.signature):
+        lines.append(f"= {value}")
     if d.info:
         if d.info.signature:
-            lines.append(d.info.signature.strip())
+            lines.append(d.info.signature.strip() + (f" = {value}" if value else ""))
         if d.info.enclosing_symbol and not S.is_local(d.info.enclosing_symbol):
             lines.append(f"enclosed by {d.info.enclosing_symbol}")
         impl = [r.symbol for r in d.info.relationships if r.is_implementation]
@@ -326,8 +329,8 @@ def _unfollowed_notes(root: CallNode) -> list[str]:
     overrides, and callers whose own overridden methods were not followed."""
     out = []
     if root.unfollowed:
-        n = sum(root.unfollowed.values())
-        which = ", ".join(f"{S.short(m)} ({k})" for m, k in list(root.unfollowed.items())[:5])
+        n = sum(len(v) for v in root.unfollowed.values())
+        which = ", ".join(f"{S.short(m)} ({len(v)})" for m, v in list(root.unfollowed.items())[:5])
         more = f" and {len(root.unfollowed) - 5} more" if len(root.unfollowed) > 5 else ""
         out.append(f"not counted: {n} call{'s' if n != 1 else ''} to methods it overrides, "
                    f"which may dispatch here: {which}{more} — include_overridden=true lists "
@@ -356,7 +359,10 @@ def callees(symbol: str, d: Definition | None, out: list[Callee], offset: int,
     return "\n".join(lines)
 
 
-def freshness(f: Freshness | None, result_sources: set[str] | None = None) -> str:
+def freshness(f: Freshness | None, result_sources: set[str] | None = None,
+              brief: bool = False) -> str:
+    """The warnings about the shards' freshness. `brief`: changed and new files in a line or
+    two, once the full text was given."""
     if not f:
         return ""
     lines = []
@@ -379,6 +385,8 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None) -> st
                          f"{at}): if a compilation is running in this checkout, results may be incomplete "
                          "(shards being written lose references and subtypes without an "
                          "error); retry when it finishes")
+    if brief and (f.stale or f.uncompiled):
+        return "\n".join(lines + _brief_staleness(f, result_sources))
     if f.stale:
         hit = sorted(set(f.stale) & result_sources) if result_sources else []
         lines.append(f"WARNING: {len(f.stale)} source{'s' if len(f.stale) != 1 else ''} changed "
@@ -401,6 +409,31 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None) -> st
     elif f.stale or f.uncompiled:
         lines.append("  recompile the project to refresh (scipq-mcp does not build)")
     return "\n".join(lines)
+
+
+def _brief_staleness(f: Freshness, result_sources: set[str] | None) -> list[str]:
+    out = []
+    if f.stale:
+        n = f"{len(f.stale)} source{'s' if len(f.stale) != 1 else ''}"
+        its = "their" if len(f.stale) != 1 else "its"
+        hit = sorted(set(f.stale) & result_sources) if result_sources else []
+        if hit:
+            some = "" if len(hit) == len(f.stale) else f"{len(hit)} of them "
+            out.append(f"WARNING: {n} changed after {its} last compilation, {some}in these "
+                       f"results (lines quoted from {'them' if len(hit) != 1 else 'it'} are looked for where "
+                       f"they are now): "
+                       f"{_some(hit)}")
+        else:
+            out.append(f"note: {n} changed after {its} last compilation, none in these results "
+                       f"(what changed in them is not indexed): {_some(f.stale)}")
+    if f.uncompiled:
+        k = len(f.uncompiled)
+        out.append(f"note: {k} .java file{'s' if k != 1 else ''} created after the last "
+                   f"compilation, not indexed: {_some(f.uncompiled)}")
+    tasks = sorted(t for t in f.tasks if t)
+    out[-1] += ("; recompile: " + ", ".join(tasks[:6]) + (" …" if len(tasks) > 6 else "")
+                if tasks else "; recompile to refresh")
+    return out
 
 
 def _some(items: list[str]) -> str:

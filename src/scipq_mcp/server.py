@@ -38,8 +38,8 @@ FIRST USE: the tools need the shards. If a tool answers that there are no SCIP s
 or pom snippet to add. Ask the user before changing their build or ~/.gradle, then compile.
 
 Results reflect the LAST COMPILATION. Answers end with a WARNING (and the task to recompile)
-when sources changed after it; a file that never compiled is not indexed. Paths are relative
-to the project root; lines are 1-based.
+when sources changed after it, explained in full once, then in a line; a file that never
+compiled is not indexed. Paths are relative to the project root; lines are 1-based.
 
 Symbols can be given as names: `Account`, `Account#setState`, `com.example.Account`,
 `Account#<init>` (constructor); with overloads, `pick(String, int)` (by parameter types),

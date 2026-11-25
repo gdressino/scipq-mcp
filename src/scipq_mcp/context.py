@@ -132,6 +132,16 @@ def _signature(d: Definition) -> list[str]:
     return [_clip(" ".join(lines), 300)]
 
 
+def _value(signature: list[str], value: str) -> list[str]:
+    """A field's signature with its initializer (` = 500`), read from the source; on a line
+    of its own when the signature was cut."""
+    if not value:
+        return signature
+    if not signature or signature[-1].endswith("…"):
+        return signature + [f"= {value}"]
+    return signature[:-1] + [f"{signature[-1]} = {value}"]
+
+
 def head_of(nav: Navigator, d: Definition) -> list[str]:
     where = f"{d.kind} at {render.loc(d)}"
     if d.generated_by is not None:
@@ -147,7 +157,8 @@ def head_of(nav: Navigator, d: Definition) -> list[str]:
     out = [d.symbol, where]
     if d.container:
         out.append(f"anonymous class member, in {d.container}")
-    out += _signature(d)
+    out += _value(_signature(d), X.initializer_of(nav, d, _source_of(nav, d))
+                  if S.kind_of(d.symbol) == "term" else "")
     if d.info:
         impl = [r.symbol for r in d.info.relationships if r.is_implementation]
         if impl and S.is_method(d.symbol):

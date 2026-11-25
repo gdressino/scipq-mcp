@@ -291,6 +291,98 @@ def record_accessor(nav: Navigator, symbol: str, defs: list[Definition]) -> str:
     return S.parent(symbol) + S.format_descriptors([S.Descriptor(S.name_of(symbol), S.METHOD)])
 
 
+INITIALIZER_CHARS = 200
+
+
+def field_initializer(declaration: str, name: str, limit: int = INITIALIZER_CHARS) -> str:
+    """The initializer of field `name` in the text of its declaration (`500` in
+    `static final int MAX = 500;`), "" when it has none; its line breaks joined, clipped to
+    `limit` characters."""
+    text = S.without_annotations(declaration)
+    n = len(text)
+
+    def skip(i: int) -> int:
+        """Past a literal or a comment starting at i, else i."""
+        if text[i] in "\"'":
+            return S._literal_end(text, i)
+        if text.startswith("//", i):
+            j = text.find("\n", i)
+            return n if j < 0 else j
+        if text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            return n if j < 0 else j + 2
+        return i
+
+    i, start = 0, -1
+    while i < n and start < 0:
+        j = skip(i)
+        if j != i:
+            i = j
+        elif text[i].isalpha() or text[i] in "_$":
+            j = i
+            while j < n and (text[j].isalnum() or text[j] in "_$"):
+                j += 1
+            k = j
+            while k < n and text[k].isspace():
+                k += 1
+            if text[i:j] == name and text.startswith("=", k) and not text.startswith("==", k):
+                start = k + 1
+            i = j
+        else:
+            i += 1
+    if start < 0:
+        return ""
+    depth = angles = 0
+    i, pieces, piece = start, [], start
+    while i < n:
+        j = skip(i)
+        if j != i:
+            if text[i] == "/":      # a comment: not part of the value shown
+                pieces.append(text[piece:i])
+                piece = j
+            i = j
+            continue
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth < 0:
+                break
+        elif c == "<" and (text[i - 1].isalnum() or text[i - 1] in "_$.") and \
+                not text.startswith(("<<", "<="), i):
+            angles += 1             # a type argument list (`HashMap<K, V>`), not `a < b`
+        elif c == ">" and angles and text[i - 1] != "-" and not text.startswith(">=", i):
+            angles -= 1
+        elif depth == 0 and (c == ";" or (c == "," and not angles)):
+            break
+        i += 1
+    pieces.append(text[piece:i])
+    value = ""
+    for part in (re.sub(r"\s*\n\s*", " ", x).strip() for x in pieces):
+        if part:    # the code around a comment left out, joined by a space
+            value += (" " if value and part[0] not in ")]},.;" else "") + part
+    return value if len(value) <= limit else value[:limit - 1] + "…"
+
+
+def initializer_of(nav: Navigator, d: Definition, src: Source | None = None) -> str:
+    """A field's initializer as it is in the file now ("" for a method or a type, a field
+    without one, or one no longer found in a changed file)."""
+    if S.kind_of(d.symbol) != "term" or d.generated:
+        return ""
+    src = src or source(nav, d.symbol, max_lines=50)
+    if src is None or not src.lines or src.located == "absent":
+        return ""
+    lines = [t for _n, t in src.lines]
+    rng = d.enclosing
+    if rng is not None and src.compiled is None:
+        # Unchanged since its compilation: only the declaration's columns of its lines.
+        if not src.truncated and src.end_line == rng.end_line + 1 and rng.end_char:
+            lines[-1] = lines[-1][:rng.end_char]
+        lines[0] = lines[0][rng.start_char:]
+    return field_initializer("\n".join(lines), S.name_of(d.symbol))
+
+
 def in_scope(symbol: str, source: str, scope: str) -> bool:
     """`scope` is a package (prefix, e.g. `com.example.billing`, or glob) or, when it contains
     a '/', a source path glob (`*/billing/*`, `core/src/**`)."""

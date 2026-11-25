@@ -580,6 +580,52 @@ def test_super_calls_of_other_overrides_do_not_dispatch_here(refactor_root, tmp_
     assert "paint" in out and "Circle" not in out
 
 
+def test_field_initializer():
+    f = X.field_initializer
+    assert f("static final int MAX = 500;", "MAX") == "500"
+    assert f('@Size(max = 5) String s = "a;b, c";', "s") == '"a;b, c"'
+    assert f("Map<String, Integer> m = new HashMap<String, Integer>(), n = null;", "m") == \
+        "new HashMap<String, Integer>()"
+    assert f("int a = 1, b = 2;", "b") == "2"
+    assert f("private final List<Integer> xs =\n        List.of(1,\n                2);",
+             "xs") == "List.of(1, 2)"
+    assert f("Runnable r = () -> { go(); };", "r") == "() -> { go(); }"
+    assert f("boolean b = x == 1;", "b") == "x == 1"
+    assert f("int x = y < z ? 1 : 2;", "x") == "y < z ? 1 : 2"
+    assert f("int count; // count = 3", "count") == ""
+    assert f("/** count = 3 */ int count;", "count") == ""
+    assert f('String s = "' + "x" * 300 + '";', "s").endswith("…")
+    assert f("boolean f = a < b, g = c;", "f") == "a < b"
+    assert f("int m = 1 << 4, n = 2;", "m") == "1 << 4"
+    assert f("boolean k = a<=b, j = c;", "k") == "a<=b"
+    assert f("Map<String, List<Integer>> m = new HashMap<String, List<Integer>>(), n;", "m") \
+        == "new HashMap<String, List<Integer>>()"
+    assert f("List<String> xs = Collections.<String>emptyList(), ys;", "xs") == \
+        "Collections.<String>emptyList()"
+    assert f("List<Integer> XS = List.of(1, // one\n        2 /* two */);", "XS") == \
+        "List.of(1, 2)"
+
+
+def test_context_and_definition_show_a_constant_value(refactor_root, tmp_path):
+    from scipq_mcp.service import Service
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    assert '\npublic static final String CSV = "csv"\n' in svc.context("Format#CSV")
+    assert '\npublic static final String CSV = "csv"' in svc.definition("Format#CSV")
+
+
+def test_initializer_only_within_the_declaration(tmp_path):
+    from types import SimpleNamespace as NS
+    from scipq_mcp.queries import Definition, Location, Range
+    line = "    private int count; void reset() { count = 0; }"
+    rng = Range(0, 4, 0, 22)
+    d = Definition("a/B#count.", Location("B.java", Range(0, 16, 0, 21)), None, rng)
+    src = X.Source(d, [(1, line)], 1, False)
+    assert X.initializer_of(NS(), d, src) == ""
+    src = X.Source(d, [(1, "    private int count = 7; void reset() { count = 0; }")], 1, False)
+    d.enclosing = Range(0, 4, 0, 26)
+    assert X.initializer_of(NS(), d, src) == "7"
+
+
 def test_callers_follow_overrides_at_every_level(refactor_root, tmp_path):
     # SalesPage#body() overrides Page#body(), which Page#render() calls: without
     # include_overridden the tree stops there, and says so; with it, it goes on (View#render()
@@ -601,6 +647,10 @@ def test_callers_follow_overrides_at_every_level(refactor_root, tmp_path):
     assert "not counted: 1 call to methods it overrides, which may dispatch here: " \
         "Shapes.Shape#draw() (1)" in out
     assert "not counted" not in svc.callers("Shapes#Circle#draw", include_overridden=True)
+    # The notes keep to the scope, as the callers do.
+    assert "not counted" not in svc.callers("Shapes#Circle#draw", scope="com.other")
+    assert "not followed" not in svc.callers("Pages#sales", depth=3, scope="com.other")
+    assert "not followed" in svc.callers("Pages#sales", depth=3, scope="com.example.shop")
 
 
 def test_impact_dispatches_through_template_methods(refactor_root, tmp_path):

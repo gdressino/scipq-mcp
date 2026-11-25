@@ -17,6 +17,11 @@ version and date when releasing.
 - Without `include_overridden`, `callers` says how many calls to the methods it overrides it
   left out (`no callers` of an interface's implementation looked like dead code), and which
   callers in the tree it did not follow; the tool's description says when to use it.
+- The warning about files changed after their compilation is explained in full in the first
+  answer about a checkout, then given in a line or two (the files in the results, or that
+  none are, and the task to recompile), instead of five lines in every answer.
+- `context` and `definition` of a field show its initializer (`MAX = 500`), read from the
+  source as it is now.
 
 ## 0.9.4 — 2026-11-24
 
