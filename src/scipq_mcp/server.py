@@ -243,11 +243,15 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
     @tool
     def source(symbol: Symbol, project_root: ProjectRoot = "",
                max_lines: Annotated[int, Field(ge=1, le=5000,
-                                               description="Maximum source lines")] = 200) -> str:
+                                               description="Maximum source lines")] = 200,
+               git_ref: Annotated[str, Field(description=(
+                   "Read it from this git branch, tag or commit (`origin/main`) instead of "
+                   "the checkout: found by its type's file and parsed, without the index, "
+                   "so also code never compiled here"))] = "") -> str:
         """The exact source of a definition (method, field, class) with line numbers, so you do
         not have to read the whole file; also for JDK and library symbols (from their sources
-        jars)."""
-        return service.source(symbol, project_root, max_lines)
+        jars), and as it is in another git ref (git_ref)."""
+        return service.source(symbol, project_root, max_lines, git_ref)
 
     @tool
     def implementations(

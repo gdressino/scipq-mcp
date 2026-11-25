@@ -393,7 +393,7 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None,
                      f"after their last compilation (results reflect the compiled version; a "
                      f"line quoted from these files is looked for where it is now, marked "
                      f"\"compiled at N\" when it moved, or said to maybe be other code): "
-                     + _some(f.stale))
+                     + _some([_with_times(x, f.times.get(x)) for x in f.stale]))
         if hit:
             lines.append(f"  of them, in these results: {_some(hit)}")
     if f.uncompiled:
@@ -409,6 +409,22 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None,
     elif f.stale or f.uncompiled:
         lines.append("  recompile the project to refresh (scipq-mcp does not build)")
     return "\n".join(lines)
+
+
+def _with_times(source: str, times: tuple[float, float] | None) -> str:
+    """`a/B.java (compiled 14:02:10, changed 14:05:31)`: the shard's and the file's times."""
+    if not times:
+        return source
+    today = time.strftime("%Y-%m-%d")
+
+    def when(t: float) -> str:
+        day = time.strftime("%Y-%m-%d", time.localtime(t))
+        return time.strftime("%H:%M:%S" if day == today else "%Y-%m-%d %H:%M",
+                             time.localtime(t))
+    a, b = when(times[0]), when(times[1])
+    if a == b:      # within the same second (or minute, on another day)
+        return f"{source} (compiled {a}, changed {times[1] - times[0]:.1f} s later)"
+    return f"{source} (compiled {a}, changed {b})"
 
 
 def _brief_staleness(f: Freshness, result_sources: set[str] | None) -> list[str]:

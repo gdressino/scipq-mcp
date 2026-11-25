@@ -185,7 +185,7 @@ run different versions).
 | `find_symbols(name, match)` | definitions by name or part of it (exact, prefix, contains, camel humps; case-insensitive) | workspace/symbol |
 | `references(symbol, exclude_imports, by_name)` | every use, grouped by file, with the line of code and the enclosing method (imports left out for types; large results open with a summary); optionally possible uses by name in strings | findReferences |
 | `definition(symbol)` | location, kind, signature, javadoc, what it overrides or extends | definition + hover |
-| `source(symbol)` | the exact source of a definition, with line numbers | — |
+| `source(symbol, git_ref)` | the exact source of a definition, with line numbers; with `git_ref` (`origin/main`, a tag, a commit), as it is there, read with git and without the index, so also code never compiled here | — |
 | `implementations(symbol, direct_only)` | subtypes of a type or overrides of a method, at any depth; anonymous classes included | implementation |
 | `supertypes(symbol)` | supertypes of a type, or the methods a method overrides, direct first | type hierarchy |
 | `members(symbol, inherited)` | own and inherited members of a type, marking overrides and generated ones | — |

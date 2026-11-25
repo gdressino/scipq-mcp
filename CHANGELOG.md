@@ -5,6 +5,13 @@ version and date when releasing.
 
 ## Unreleased
 
+### Added
+
+- `source` with `git_ref` (a branch such as `origin/main`, a tag, a commit): the definition
+  as it is there, read with git (`ls-tree`, `show`) and parsed, without the index, so also
+  a class that only exists on another branch. The name finds its type's file there; a
+  parameter list, `(+N)` or an exact symbol picks the overload.
+
 ### Fixed
 
 - `callers` with `include_overridden` followed the calls through overridden methods only for
@@ -24,6 +31,9 @@ version and date when releasing.
   source as it is now.
 - `batch` takes a query's arguments next to `tool` too, not only in `args`; a missing or
   unknown argument names the tool and the expected shape instead of an internal method.
+- The full warning about files changed after their compilation says, for each one, when it
+  was compiled and when it changed (after mutation testing, the compilation may be a
+  mutant's).
 - `context`'s line about an auxiliary index far behind says that the tools reading it update
   it first, and that the rest of the answer, `callers` and `references` do not use it.
 

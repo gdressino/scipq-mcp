@@ -59,6 +59,8 @@ class Freshness:
     newest_age: float = 0.0                              # seconds since the newest shard was written
     build_running: bool | None = None                    # a gradle/mvn command in this checkout
     same_content: int = 0     # newer than their shard, but with the content compiled
+    # stale source -> (when its shard was written, when the source was modified): mtimes
+    times: dict[str, tuple[float, float]] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return bool(self.stale or self.uncompiled or self.recent)
@@ -403,12 +405,12 @@ class Workspace:
             task_of_source[source] = k
             task_of_dir.setdefault(source.rpartition("/")[0], k)
         modules = [m for _r, m in self.scip_roots()]
-        newer: list[tuple[str, str]] = []
+        newer: list[tuple[str, str, float, float]] = []
         for source, mt in java_mtimes.items():
             sm = shard_of.get(source)
             if sm is not None:
                 if mt > sm:
-                    newer.append((source, build_task(modules[task_of_source[source]])))
+                    newer.append((source, build_task(modules[task_of_source[source]]), sm, mt))
             else:
                 k = task_of_dir.get(source.rpartition("/")[0])
                 if k is not None and mt > newest.get(k, 0.0):
@@ -426,7 +428,7 @@ class Workspace:
         if not want:
             return result
         mtimes = []
-        newer: list[tuple[str, str]] = []
+        newer: list[tuple[str, str, float, float]] = []
         for k, rel in self.files():
             source = rel[:-len(SUFFIX)]
             if source not in want:
@@ -434,8 +436,9 @@ class Workspace:
             try:
                 sm = os.stat(os.path.join(self.scip_roots()[k][0], rel)).st_mtime
                 mtimes.append(sm)
-                if os.stat(os.path.join(self.root, source)).st_mtime > sm:
-                    newer.append((source, build_task(self.scip_roots()[k][1])))
+                mt = os.stat(os.path.join(self.root, source)).st_mtime
+                if mt > sm:
+                    newer.append((source, build_task(self.scip_roots()[k][1]), sm, mt))
             except OSError:
                 pass
         self._add_stale(result, newer)
@@ -443,21 +446,24 @@ class Workspace:
         self._note_recent(result, mtimes)
         return result
 
-    def _add_stale(self, result: Freshness, newer: list[tuple[str, str]]) -> None:
+    def _add_stale(self, result: Freshness, newer: list[tuple[str, str, float, float]]) -> None:
         """Sources newer than their shards are stale, unless their content is still the one
         compiled (written again unchanged: a build up to date by content does not touch the
         shard). That is told by `content_check` (the auxiliary index's hashes) when set."""
         same: set[str] = set()
         if newer and self.content_check is not None:
             try:
-                same = self.content_check(sorted({s for s, _t in newer}))
+                same = self.content_check(sorted({s for s, *_rest in newer}))
             except Exception:  # noqa: BLE001 - a missing or busy cache never breaks a query
                 same = set()
-        for source, task in newer:
+        for source, task, compiled, changed in newer:
             if source in same:
                 continue
-            result.stale.append(source)
+            if source not in result.times:     # once, also when two modules compile it
+                result.stale.append(source)
             result.tasks.add(task)
+            was = result.times.get(source)
+            result.times[source] = (max(compiled, was[0]) if was else compiled, changed)
         result.same_content = len(same)
 
     def _note_recent(self, result: Freshness, mtimes) -> None:

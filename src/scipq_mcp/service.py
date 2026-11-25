@@ -278,7 +278,9 @@ class Service:
             msg = str(e)
             return f"error: {msg}" + (f"\n{NO_SHARDS_HINT}" if "no SCIP shards" in msg else "")
         ws.files()
-        check = ws.start_freshness() if self.freshness == "full" else None
+        # Read from a git ref: the checkout's compilation does not apply.
+        from_git = all(getattr(b, "from_git", False) for b in bodies)
+        check = ws.start_freshness() if self.freshness == "full" and not from_git else None
         nav = Navigator(ws)
         nav.library_overloads = lambda sym, qualified=False: \
             self._library_overload_params(sym, ws.root, qualified)
@@ -568,7 +570,10 @@ class Service:
                     {d.location.source} if d else set())
         return body
 
-    def _b_source(self, symbol: str, max_lines: int = 200) -> Body:
+    def _b_source(self, symbol: str, max_lines: int = 200, git_ref: str = "") -> Body:
+        if git_ref:
+            return self._b_source_at_ref(symbol, max_lines, git_ref)
+
         def body(nav: Navigator):
             sym, note, src = self._resolved(nav, symbol, lambda s: X.source(nav, s, max_lines))
             if src is None:
@@ -577,6 +582,21 @@ class Service:
                     return note + render.library_source(lib, max_lines), set()
             return note + render.source(src, sym), (
                 {src.definition.location.source} if src else set())
+        return body
+
+    @staticmethod
+    def _b_source_at_ref(symbol: str, max_lines: int, git_ref: str) -> Body:
+        def body(nav: Navigator):
+            from . import gitref
+            hint = ""
+            try:    # compiled here: its file, when several at the ref are named like it
+                sym = nav.resolve(symbol).symbol
+                d = nav.definition(sym) if sym and not S.is_local(sym) else None
+                hint = d.location.source if d else ""
+            except Exception:  # noqa: BLE001 - only a hint: the read needs git alone
+                pass
+            return gitref.source_at(nav.ws.root, symbol, git_ref, max_lines, hint), set()
+        body.from_git = True    # not the checkout's compilation: no freshness warning
         return body
 
     def _b_members(self, symbol: str, inherited: bool = True, offset: int = 0,
@@ -1885,8 +1905,19 @@ class Service:
                 token_budget: int = 4000) -> str:
         return self._run(project_root, self._b_context(symbol, token_budget), foot_first=True)
 
-    def source(self, symbol: str, project_root: str | None = None, max_lines: int = 200) -> str:
-        return self._run(project_root, self._b_source(symbol, max_lines))
+    def source(self, symbol: str, project_root: str | None = None, max_lines: int = 200,
+               git_ref: str = "") -> str:
+        if git_ref:
+            try:
+                self.workspace(project_root)
+            except WorkspaceError:  # no shards: git alone reads it
+                from . import gitref
+                try:
+                    return gitref.source_at(self._root(project_root), symbol, git_ref,
+                                            max_lines)
+                except (QueryError, WorkspaceError) as e:
+                    return f"error: {e}"
+        return self._run(project_root, self._b_source(symbol, max_lines, git_ref))
 
     def members(self, symbol: str, project_root: str | None = None, inherited: bool = True,
                 offset: int = 0, limit: int = 300) -> str:

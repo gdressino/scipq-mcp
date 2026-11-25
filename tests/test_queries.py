@@ -1,4 +1,5 @@
 import os
+import re
 
 import pytest
 
@@ -185,6 +186,10 @@ def test_freshness(sample_copy):
     assert "WARNING: 1 source changed after their last compilation" in text
     assert "in these results: core/src/main/java/com/example/model/Group.java" in text
     assert "created after the last compilation" in text
+    # Each changed file with when it was compiled and when it changed (mutants, restores).
+    assert re.search(r"Group\.java \(compiled [\d: -]+, changed \d{4}-\d\d-\d\d \d\d:\d\d\)", text)
+    from scipq_mcp import render as R
+    assert R._with_times("a/B.java", (100.2, 100.7)).endswith("changed 0.5 s later)")
     # Explained once: then a line for each.
     again = svc.references("Entity#setState")
     foot = again[again.index("\nWARNING"):].strip().splitlines()

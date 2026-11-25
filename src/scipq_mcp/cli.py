@@ -75,7 +75,7 @@ def _query_parser(sub) -> None:
     add("compare", scope={"default": ""}, all={"action": "store_true"},
         limit={"type": int, "default": 50}, other={"default": ""},
         all_worktrees={"action": "store_true"})
-    add("source", "symbol", max_lines={"type": int, "default": 200})
+    add("source", "symbol", max_lines={"type": int, "default": 200}, git_ref={"default": ""})
     add("impl", "symbol", **paging, direct={"action": "store_true"})
     add("supertypes", "symbol")
     add("members", "symbol", **paging, own={"action": "store_true"})
@@ -152,7 +152,7 @@ def _run_query(a) -> str:
         return svc.compare(a.other, scope=a.scope, api_only=not a.all, limit=a.limit,
                            all_worktrees=a.all_worktrees)
     if t == "source":
-        return svc.source(a.symbol, max_lines=a.max_lines)
+        return svc.source(a.symbol, max_lines=a.max_lines, git_ref=a.git_ref)
     if t == "impl":
         return svc.implementations(a.symbol, direct_only=a.direct, limit=a.limit,
                                    offset=a.offset)
