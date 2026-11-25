@@ -193,6 +193,10 @@ class CallNode:
     definition: Definition | None = None
     via: str = ""             # the overridden method actually called, when it is not the target
     truncated: bool = False
+    # Root only, without include_overridden: the calls it leaves out (method it overrides ->
+    # call sites) and the callers in the tree that override project methods (not followed).
+    unfollowed: dict[str, int] = field(default_factory=dict)
+    overriders: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -852,31 +856,48 @@ class Navigator:
                 max_nodes: int = 200) -> CallNode:
         """Incoming references grouped by the enclosing non-local definition, `depth` levels up.
         Field initializers are attributed to the field; static and instance initializer blocks
-        to the class. With include_overridden, calls to the methods this one overrides (which
-        may dispatch here) are included too, marked with `via`."""
+        to the class. With include_overridden, calls to the methods each one in the tree
+        overrides (which may dispatch to it) are included too, marked with `via`: any method the
+        root overrides, and further up the project methods (a library calls its own). Without
+        it, the root keeps what was left out: `unfollowed` (the calls through the methods it
+        overrides) and `overriders` (callers in the tree overriding project methods)."""
         root = CallNode(symbol, definition=self.definition(symbol))
         targets: dict[str, list[tuple[CallNode, str]]] = {symbol: [(root, "")]}
-        if include_overridden and root.definition and root.definition.info:
-            for r in root.definition.info.relationships:
-                if r.is_implementation and S.is_method(r.symbol):
-                    targets.setdefault(r.symbol, []).append((root, r.symbol))
+        overridden = _overridden(root.definition)
+        if include_overridden:
+            for o in overridden:
+                targets.setdefault(o, []).append((root, o))
         visited = {symbol}
         nodes = 0
         level = 0
         texts: dict[str, list[str]] = {}
+
+        def dispatching(target: str, refs: list[Reference]) -> list[Reference]:
+            # super.m() in another class is bound to its own superclass: never here.
+            return [r for r in refs if not self._is_super_call(r, S.name_of(target), texts)]
+
         while targets and level < max(1, depth):
             level += 1
-            refs_by_target = self._references_many(set(targets))
+            # Without include_overridden, the calls left out are counted (Object's methods
+            # are not: calls on an Object, from generic code).
+            unfollowed = [] if include_overridden or level > 1 else \
+                [o for o in overridden if not o.startswith("java/lang/Object#")]
+            refs_by_target = self._references_many(set(targets) | set(unfollowed))
+            for o in unfollowed:
+                n = len(dispatching(o, refs_by_target.get(o, [])))
+                if n:
+                    root.unfollowed[o] = n
             next_targets: dict[str, list[tuple[CallNode, str]]] = {}
             for target, parents in targets.items():
-                grouped: dict[str, list[Reference]] = {}
-                for ref in refs_by_target.get(target, []):
-                    # super.m() in another class is bound to its own superclass: never here.
-                    if level == 1 and target != symbol and \
-                            self._is_super_call(ref, S.name_of(target), texts):
-                        continue
-                    grouped.setdefault(ref.container or "(top level)", []).append(ref)
+                refs = refs_by_target.get(target, [])
+                by_via: dict[bool, dict[str, list[Reference]]] = {}
                 for parent, via in parents:
+                    if bool(via) not in by_via:
+                        grouped: dict[str, list[Reference]] = {}
+                        for ref in (dispatching(target, refs) if via else refs):
+                            grouped.setdefault(ref.container or "(top level)", []).append(ref)
+                        by_via[bool(via)] = grouped
+                    grouped = by_via[bool(via)]
                     for caller, sites in sorted(grouped.items(), key=lambda kv: _site_key(kv[1][0])):
                         if nodes >= max_nodes:
                             parent.truncated = True
@@ -888,7 +909,30 @@ class Navigator:
                             visited.add(caller)
                             next_targets.setdefault(caller, []).append((node, ""))
             targets = next_targets
+            if level < depth and targets:
+                self._dispatching_targets(root, targets, include_overridden)
         return root
+
+    def _dispatching_targets(self, root: CallNode, targets: dict[str, list[tuple]],
+                             include_overridden: bool) -> None:
+        """The project methods the callers just reached override: added to `targets` (their
+        calls may dispatch to those callers) or, without include_overridden, the callers
+        noted in root.overriders."""
+        defs = self._definitions_of({c for c in targets if S.is_method(c)})
+        ups = {c: _overridden(d) for c, d in defs.items()}
+        project = self._definitions_of({o for os_ in ups.values() for o in os_})
+        for caller, os_ in sorted(ups.items()):
+            os_ = [o for o in os_ if o in project]
+            if not os_:
+                continue
+            if not include_overridden:
+                if caller not in root.overriders:
+                    root.overriders.append(caller)
+                continue
+            direct = [node for node, via in targets[caller] if not via]
+            for o in os_:
+                for node in direct:
+                    targets.setdefault(o, []).append((node, o))
 
     def _is_super_call(self, ref: Reference, name: str, cache: dict) -> bool:
         src = ref.location.source
@@ -974,3 +1018,11 @@ def _symbol_before(data: bytes, tag_pos: int, window: int = 600) -> str:
 
 def _site_key(ref: Reference):
     return (ref.location.source, ref.location.range.start_line)
+
+
+def _overridden(d: Definition | None) -> list[str]:
+    """The methods a method definition overrides (transitively, as SCIP records them)."""
+    if d is None or d.info is None:
+        return []
+    return [r.symbol for r in d.info.relationships
+            if r.is_implementation and S.is_method(r.symbol) and r.symbol != d.symbol]

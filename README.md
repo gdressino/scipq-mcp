@@ -192,7 +192,7 @@ run different versions).
 | `family(symbol)` | a method's override family (ancestors, descendants, siblings) and the uses of each; for a library method, also the overrides in library subtypes the project calls | — |
 | `overloads(symbol)` | every overload of a method (also library ones) and the uses of each | — |
 | `outline(file)` | definitions in a file, nested, with signatures; takes a path or a type name | documentSymbol |
-| `callers(symbol, depth, include_overridden)` | incoming calls grouped by enclosing method | incomingCalls |
+| `callers(symbol, depth, include_overridden)` | incoming calls grouped by enclosing method; with `include_overridden`, also the calls through the methods each one overrides (an interface's), which may dispatch to it, else it says how many it left out | incomingCalls |
 | `callees(symbol, include_fields, include_types)` | methods called from a body | outgoingCalls |
 | `annotated(annotation)` | definitions carrying an annotation, with its line (attribute values) | — |
 | `typed(symbol, categories)` | where a type is used: fields, parameters, return types, locals, supertypes, bodies, imports | — |

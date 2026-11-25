@@ -580,6 +580,29 @@ def test_super_calls_of_other_overrides_do_not_dispatch_here(refactor_root, tmp_
     assert "paint" in out and "Circle" not in out
 
 
+def test_callers_follow_overrides_at_every_level(refactor_root, tmp_path):
+    # SalesPage#body() overrides Page#body(), which Page#render() calls: without
+    # include_overridden the tree stops there, and says so; with it, it goes on (View#render()
+    # is overridden by Page#render(), called by View#measure()).
+    from scipq_mcp.service import Service
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    plain = svc.callers("Pages#sales", depth=3)
+    assert "Page#render()" not in plain
+    assert "not followed: 1 caller overrides project methods" in plain
+    assert "SalesPage#body() — include_overridden=true" in plain
+    wide = svc.callers("Pages#sales", depth=3, include_overridden=True)
+    assert "\n  Page#render()  shop/src/main/java/com/example/shop/Page.java:7  via Page#body()" \
+        in wide
+    assert "\n    View#measure()  " in wide and "via View#render()" in wide
+    assert "\n    Pages#show(Page)  " in wide and "not followed" not in wide
+    # A method called only through what it overrides: no callers, but the calls are counted.
+    out = svc.callers("Shapes#Circle#draw")
+    assert out.splitlines()[1] == "no callers of Shapes.Circle#draw() in this project"
+    assert "not counted: 1 call to methods it overrides, which may dispatch here: " \
+        "Shapes.Shape#draw() (1)" in out
+    assert "not counted" not in svc.callers("Shapes#Circle#draw", include_overridden=True)
+
+
 def test_impact_dispatches_through_template_methods(refactor_root, tmp_path):
     # SalesPage#body() overrides Page#body(), which Page#render() calls on this; StockPage's
     # super.render() runs StockPage's own body, so it is not reached.

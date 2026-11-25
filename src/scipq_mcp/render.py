@@ -279,8 +279,9 @@ def callers(root: CallNode, depth: int, offset: int, limit: int) -> str:
             count(c)
 
     count(root)
+    notes = _unfollowed_notes(root)
     if not root.children:
-        return f"no callers of {S.short(root.symbol)} in this project"
+        return "\n".join([f"no callers of {S.short(root.symbol)} in this project", *notes])
     distinct = set()
 
     def collect(n: CallNode):
@@ -317,7 +318,28 @@ def callers(root: CallNode, depth: int, offset: int, limit: int) -> str:
         row(c, 0)
     if root.truncated:
         lines.append("… truncated (max_nodes)")
-    return "\n".join(lines)
+    return "\n".join(lines + notes)
+
+
+def _unfollowed_notes(root: CallNode) -> list[str]:
+    """What callers left out without include_overridden: calls through what the root
+    overrides, and callers whose own overridden methods were not followed."""
+    out = []
+    if root.unfollowed:
+        n = sum(root.unfollowed.values())
+        which = ", ".join(f"{S.short(m)} ({k})" for m, k in list(root.unfollowed.items())[:5])
+        more = f" and {len(root.unfollowed) - 5} more" if len(root.unfollowed) > 5 else ""
+        out.append(f"not counted: {n} call{'s' if n != 1 else ''} to methods it overrides, "
+                   f"which may dispatch here: {which}{more} — include_overridden=true lists "
+                   "them")
+    if root.overriders:
+        k = len(root.overriders)
+        which = ", ".join(S.short(c) for c in root.overriders[:5])
+        more = f" and {k - 5} more" if k > 5 else ""
+        out.append(f"not followed: {k} caller{'s' if k != 1 else ''} override{'' if k != 1 else 's'} "
+                   f"project methods whose calls may dispatch to {'them' if k != 1 else 'it'}: "
+                   f"{which}{more} — include_overridden=true follows those calls")
+    return out
 
 
 def callees(symbol: str, d: Definition | None, out: list[Callee], offset: int,

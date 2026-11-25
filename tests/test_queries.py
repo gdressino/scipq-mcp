@@ -152,6 +152,9 @@ def test_callers_include_overridden(nav):
     wide = nav.callers("com/example/model/SubAccount#uid().", include_overridden=True)
     assert {(c.symbol, c.via) for c in wide.children} >= {
         ("com/example/app/ServiceTest#main().", "com/example/model/Account#uid().")}
+    # Without it, what was left out is counted (super.uid() in SubAccount itself is not).
+    assert plain.unfollowed.get("com/example/model/Account#uid().", 0) >= 1
+    assert wide.unfollowed == {} and wide.overriders == []
 
 
 def test_callees(nav):

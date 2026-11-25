@@ -3,6 +3,21 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Fixed
+
+- `callers` with `include_overridden` followed the calls through overridden methods only for
+  the method asked about: further up, the tree stopped at a caller that overrides a project
+  method (`SalesPage#body()` called through `Page#body()`). It now follows them at every
+  level, as `impact` does.
+
+### Changed
+
+- Without `include_overridden`, `callers` says how many calls to the methods it overrides it
+  left out (`no callers` of an interface's implementation looked like dead code), and which
+  callers in the tree it did not follow; the tool's description says when to use it.
+
 ## 0.9.4 — 2026-11-24
 
 ### Changed

@@ -313,8 +313,10 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
         project_root: ProjectRoot = "",
         depth: Annotated[int, Field(ge=1, le=5, description="Levels of callers")] = 1,
         include_overridden: Annotated[bool, Field(
-            description="Also calls to the methods this one overrides, which may dispatch "
-                        "here")] = False,
+            description="Also calls to the methods each one in the tree overrides (in an "
+                        "interface or base class), which may dispatch to it. Without it, a "
+                        "method called only through its interface has no callers, and the "
+                        "tree stops at a caller that is such a method")] = False,
         max_nodes: Annotated[int, Field(ge=1, le=2000, description=(
             "Stop after this many callers in the whole tree"))] = 200,
         offset: Offset = 0,
@@ -323,7 +325,11 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
                                                 "or, with '/', source path glob")] = "",
     ) -> str:
         """Incoming calls / uses grouped by the enclosing method (like incomingCalls). Exact:
-        only this symbol, not same-named members of other types. Calls in lambdas and anonymous
+        only this symbol, not same-named members of other types; so `shape.draw()` calls
+        Shape#draw, not Circle#draw, which overrides it. include_overridden adds those calls,
+        marked `via`, at every level of the tree; without it, the answer says how many it left
+        out and which callers it did not follow. impact follows them by default and keeps
+        only the calls that may run on the right objects. Calls in lambdas and anonymous
         classes count for the enclosing method; field initializers for the field; initializer
         blocks for the class. offset/limit page the direct callers."""
         return service.callers(symbol, project_root, depth, include_overridden, max_nodes,
