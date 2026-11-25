@@ -80,3 +80,18 @@ def test_one_bad_query_does_not_sink_the_batch(sample_root):
     first, _, second = out.partition("### 2.")
     assert "references" in first and "Service.java" in first
     assert "error: TypeError" in second
+
+
+def test_batch_arguments_without_the_args_wrapper(sample_root):
+    from scipq_mcp.service import Service
+    out = Service(sample_root).batch([
+        {"tool": "source", "symbol": "Entity#setState"},
+        {"tool": "source", "args": {}},
+        {"tool": "callers", "symbol": "Entity#setState", "args": {"depth": 1}},
+    ])
+    first, _, rest = out.partition("### 2.")
+    second, _, third = rest.partition("### 3.")
+    assert "setState" in first and "error" not in first
+    assert "error: source: missing 1 required positional argument: 'symbol' (each query is " \
+        "{'tool': 'source', 'args': {…}}" in second and "_b_source" not in second
+    assert "callers of Entity#setState" in third

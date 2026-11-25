@@ -22,6 +22,10 @@ version and date when releasing.
   none are, and the task to recompile), instead of five lines in every answer.
 - `context` and `definition` of a field show its initializer (`MAX = 500`), read from the
   source as it is now.
+- `batch` takes a query's arguments next to `tool` too, not only in `args`; a missing or
+  unknown argument names the tool and the expected shape instead of an internal method.
+- `context`'s line about an auxiliary index far behind says that the tools reading it update
+  it first, and that the rest of the answer, `callers` and `references` do not use it.
 
 ## 0.9.4 — 2026-11-24
 

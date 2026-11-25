@@ -637,7 +637,8 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
     def batch(
         queries: Annotated[list[dict[str, Any]], Field(
             description="[{'tool': 'references', 'args': {'symbol': 'Account#setState'}}, …] — "
-                        "any tool above except setup and batch, with its arguments")],
+                        "any tool above except setup and batch, with its arguments (in 'args' "
+                        "or next to 'tool')")],
         project_root: ProjectRoot = "",
     ) -> str:
         """Run several queries on the same checkout in one call (one freshness check)."""

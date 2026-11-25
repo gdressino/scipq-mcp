@@ -1292,8 +1292,10 @@ class Service:
                         f"large project) → impact({short})")
             behind = ix.pending()
             if behind > C.IMPACT_MAX_BEHIND:
-                return (f"impact: the auxiliary index is {behind} shards behind → "
-                        f"impact({short}) updates it")
+                return (f"impact: not computed here, the auxiliary index is {behind} shards "
+                        f"behind (the tools that read it, impact, path, dead_code…, update it "
+                        f"first; the rest of this answer, callers and references read the "
+                        f"shards) → impact({short})")
             if behind:
                 ix.update()
             g = Graph(ix)
@@ -1981,6 +1983,8 @@ class Service:
         for k, q in enumerate(queries, 1):
             tool = q.get("tool", "")
             args = dict(q.get("args") or {})
+            # The arguments may also come next to "tool", without the "args" wrapper.
+            args.update({k: v for k, v in q.items() if k not in ("tool", "args", *args)})
             args.pop("project_root", None)
             method = self.BATCH_TOOLS.get(tool)
             if method is None:
@@ -1990,7 +1994,10 @@ class Service:
             try:
                 inner = getattr(self, method)(**args)
             except TypeError as e:
-                bodies.append(_const(f"### {k}. {tool}\nerror: {e}"))
+                why = re.sub(r"^\S*_b_\w+\(\)\s*", "", str(e))
+                bodies.append(_const(f"### {k}. {tool}\nerror: {tool}: {why} (each query is "
+                                     f"{{'tool': '{tool}', 'args': {{…}}}} with the arguments "
+                                     f"of {tool})"))
                 continue
             bodies.append(_titled(f"### {k}. {tool} {_brief(args)}", inner))
         if not bodies:
