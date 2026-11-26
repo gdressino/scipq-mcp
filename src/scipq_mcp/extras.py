@@ -877,6 +877,7 @@ class Status:
     refresh: list[str]                    # tasks to recompile
     settings: object = None               # config.Settings, filled by the service
     same_content: int = 0                 # newer than their shard, content as compiled
+    aux: str = ""                         # the auxiliary index's state, filled by the service
 
 
 def index_status(nav: Navigator) -> Status:

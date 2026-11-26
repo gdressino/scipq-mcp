@@ -718,6 +718,8 @@ def status(st, root: str) -> str:
                      + (": " + _some(st.without_shard) if st.without_shard else "")
                      + (" (some may be legitimately excluded: not in a source set, or "
                         "empty/commented out)" if st.without_shard else ""))
+    if getattr(st, "aux", ""):
+        lines.append(st.aux)
     if getattr(st, "settings", None) is not None:
         lines += settings_lines(st.settings)
     refresh = [t for t in st.refresh if t]
@@ -809,10 +811,15 @@ def index_note(stats) -> str:
 
 
 def index_note_plain(stats) -> str:
+    if getattr(stats, "changed", 0):
+        return (f"-- index rebuilt: {stats.changed} of {stats.shards} shards had changed since "
+                f"it was updated (a recompilation after a merge or a branch switch), "
+                f"{stats.seconds:.0f} s; rebuilding is faster than updating so many\n")
     if stats.built_from_scratch:
         return (f"-- index built: {stats.processed} shards in {stats.seconds:.0f} s (once per "
                 "checkout; later updates are incremental)\n")
-    return f"-- index updated: {stats.processed} shards, {stats.removed} removed\n"
+    return (f"-- index updated: {stats.processed} shards, {stats.removed} removed, "
+            f"{stats.seconds:.0f} s\n")
 
 
 def entry_points(entries, per_kind: int = 12, depth: int = 0, searched: int = 0) -> list[str]:

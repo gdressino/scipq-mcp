@@ -137,7 +137,8 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
     @tool
     def find_symbols(
         name: Annotated[str, Field(description="Name or part of it, e.g. `Account`, "
-                                               "`Account#setState`, `setState`, `Blanqueo`")],
+                                               "`Account#setState`, `setState`, `Blanqueo`; "
+                                               "`Account#`: the members Account declares")],
         project_root: ProjectRoot = "",
         match: Annotated[Literal["auto", "exact", "prefix", "contains", "camel"], Field(
             description="auto: exact name, else names containing it. prefix/contains/camel "
@@ -613,7 +614,9 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
     @tool
     def index_status(project_root: ProjectRoot = "") -> str:
         """The state of the index: shards per compile task, stale and not-yet-compiled
-        sources, git-tracked .java files without a shard, and what to recompile."""
+        sources, git-tracked .java files without a shard, and what to recompile; and how far
+        the auxiliary index (impact, path, dead_code…) is behind the shards, with about how
+        long the first query that reads it will take to catch up."""
         return service.index_status(project_root)
 
     @tool

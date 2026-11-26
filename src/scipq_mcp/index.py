@@ -108,6 +108,15 @@ REL_TYPE_DEFINITION = 3
 
 EXTERNAL_MODES = ("all", "methods", "none")
 PARALLEL_FROM = 200  # shards to reprocess before using worker processes
+# Updating a shard's rows in place costs two or more times what building them anew does
+# (deletes and inserts through every index and the FTS tables, pages rewritten all over the
+# file): from this share of the shards changed (a merge, a branch switch), the index is rebuilt
+# instead, and replaces the old one when complete. On 10,000 shards: 2,000 updated in 7 s,
+# 4,000 in 40 s, all rebuilt in 20 s.
+REBUILD_SHARE = 0.2
+REBUILD_FROM = 200       # and at least this many shards
+UPDATE_COST = 2          # an updated shard, in shards of a build from scratch
+BUILD_SECONDS_PER_SHARD = 0.003   # until the first build here measures it
 BULK_CACHE_KIB = 65536  # SQLite page cache for a build from scratch
 
 _DECL = re.compile(r"\b(record|class|interface|enum)\s+")
@@ -122,6 +131,16 @@ class IndexError_(Exception):  # noqa: N801 - "IndexError" is a builtin
     pass
 
 
+def damaged(e: Exception) -> bool:
+    """SQLite's error for a damaged file (SQLITE_CORRUPT, SQLITE_NOTADB), also as reported by
+    the child process of a big update."""
+    if not isinstance(e, (sqlite3.DatabaseError, IndexError_)):
+        return False
+    name = getattr(e, "sqlite_errorname", "") or ""
+    return name.startswith(("SQLITE_CORRUPT", "SQLITE_NOTADB")) or any(
+        w in str(e) for w in ("database disk image is malformed", "file is not a database"))
+
+
 @dataclass
 class UpdateStats:
     shards: int = 0          # on disk
@@ -130,6 +149,7 @@ class UpdateStats:
     seconds: float = 0.0
     built_from_scratch: bool = False
     unreadable: int = 0      # shards cut short (being written), retried next time
+    changed: int = 0         # rebuilt instead of updated: the shards that had changed
 
 
 def default_workers() -> int:
@@ -623,7 +643,12 @@ class Index:
             con.execute(f"PRAGMA cache_size=-{BULK_CACHE_KIB}")
         else:
             con.execute("PRAGMA journal_mode=WAL")
-            con.execute("PRAGMA synchronous=NORMAL")
+            # No fsync: an update rewrites pages all over the file (a shard's rows are spread
+            # through every table and index), and the checkpoint's fsync of them took most of
+            # its time (17 of 21 s for 1,000 shards of 10,000). A crash of the process loses
+            # nothing; one of the machine can damage this cache, which is then discarded and
+            # rebuilt (`damaged`).
+            con.execute("PRAGMA synchronous=OFF")
         con.execute("PRAGMA busy_timeout=30000")
         con.execute("PRAGMA temp_store=MEMORY")
         con.executescript(TABLES)
@@ -645,6 +670,27 @@ class Index:
         else:
             con.executescript(INDEXES)
         return con
+
+    def discard_damaged(self) -> bool:
+        """After an error that says the file is damaged: removes it if SQLite's quick check
+        (~0.5 s for 200 MB) confirms it is this index (not another one the query read) and still
+        (another process may have rebuilt it meanwhile). True if removed: the next update
+        builds it anew."""
+        with self._lock():
+            if not os.path.exists(self.path):
+                return True
+            try:
+                con = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=30)
+                try:
+                    row = con.execute("PRAGMA quick_check(1)").fetchone()
+                finally:
+                    con.close()
+                bad = not row or row[0] != "ok"
+            except sqlite3.DatabaseError as e:
+                bad = damaged(e)
+            if bad:
+                self._discard()
+            return bad
 
     def _discard(self, path: str | None = None) -> None:
         for suffix in ("", "-wal", "-shm", "-journal"):
@@ -754,6 +800,7 @@ class Index:
             stats.removed = int(vals["removed"])
             stats.built_from_scratch = vals["scratch"] == "1"
             stats.unreadable = int(vals.get("unreadable", 0))
+            stats.changed = int(vals.get("changed", 0))
         except (KeyError, ValueError):
             pass
         return stats
@@ -763,17 +810,30 @@ class Index:
         t0 = time.perf_counter()
         stats = UpdateStats()
         with self._lock():
+            started = time.perf_counter()    # not counting the wait for another update
             # From scratch: build into a temporary file with bulk settings and move it into
             # place when complete (half the writes of WAL, no fsync, readers never see it half
             # done).
-            building = self.path + ".building" if self._needs_scratch() else None
+            scratch = self._needs_scratch()
+            if not scratch:
+                n = self.pending()
+                if self._rebuild_instead(n):
+                    scratch, stats.changed = True, n
+            building = self.path + ".building" if scratch else None
             if building:
                 self._discard(building)
             con = self.connect(building, bulk=building is not None)
             try:
                 self._update(con, stats, progress)
+                took = time.perf_counter() - started
+                if stats.changed:
+                    self._carry_over(con)
                 con.execute("INSERT OR REPLACE INTO meta VALUES ('last_used_at', ?)",
                             (str(int(time.time())),))
+                if building and stats.processed >= PARALLEL_FROM:   # with worker processes
+                    con.executemany("INSERT OR REPLACE INTO meta VALUES (?, ?)", [
+                        ("build_seconds", f"{took:.1f}"), ("build_shards", str(stats.processed)),
+                        ("build_workers", str(self.workers))])
                 con.commit()
                 if building:
                     # Switch to WAL here, without fsync: done by the first normal connection
@@ -787,6 +847,72 @@ class Index:
                 os.replace(building, self.path)
         stats.seconds = time.perf_counter() - t0
         return stats
+
+    def _carry_over(self, con: sqlite3.Connection) -> None:
+        """What a rebuild keeps from the index it replaces: the hashes of sources as compiled,
+        for the shards that did not change (taken when their source was not newer, or recorded
+        since: a file written again unchanged must not look stale now), and the index of names
+        in text files (kept up to date on its own, by mtime)."""
+        from .graph import TEXT_SCHEMA
+        # The new file has no journal (no rollback): the build is committed first, and what
+        # fails here is left out, never half done.
+        con.commit()
+        try:
+            con.execute("ATTACH DATABASE ? AS old", (self.path,))
+        except sqlite3.Error:
+            return
+        try:
+            try:
+                con.execute("""UPDATE shards SET src_sha1 = (
+                                   SELECT o.src_sha1 FROM old.shards o WHERE o.path = shards.path
+                                   AND o.mtime_ns = shards.mtime_ns AND o.size = shards.size)
+                               WHERE src_sha1 IS NULL AND EXISTS (
+                                   SELECT 1 FROM old.shards o WHERE o.path = shards.path
+                                   AND o.mtime_ns = shards.mtime_ns AND o.size = shards.size
+                                   AND o.src_sha1 IS NOT NULL)""")
+                con.commit()
+            except sqlite3.Error:
+                pass   # the hashes are taken again as the files compile
+            try:
+                if con.execute("SELECT 1 FROM old.sqlite_master WHERE name = 'text_words'"
+                               ).fetchone():
+                    con.executescript(TEXT_SCHEMA.replace("EXISTS ", "EXISTS main."))
+                    con.execute("INSERT INTO main.text_files SELECT id, path, mtime_ns, size "
+                                "FROM old.text_files")
+                    con.execute("INSERT INTO main.text_words (rowid, java_strings, "
+                                "java_annotations, other) SELECT rowid, java_strings, "
+                                "java_annotations, other FROM old.text_words")
+                    con.commit()
+            except sqlite3.Error:   # rebuilt from the files when next needed
+                con.commit()
+                con.executescript("DROP TABLE IF EXISTS main.text_words; "
+                                  "DROP TABLE IF EXISTS main.text_files;")
+        finally:
+            con.commit()
+            con.execute("DETACH DATABASE old")
+
+    def update_seconds(self, pending: int) -> float:
+        """About how long bringing the index up to date takes, from the last build here."""
+        total = len(self.ws.files())
+        per, workers = BUILD_SECONDS_PER_SHARD, self.workers
+        try:
+            con = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=5)
+            try:
+                meta = dict(con.execute("SELECT key, value FROM meta WHERE key IN "
+                                        "('build_seconds', 'build_shards', 'build_workers')"))
+            finally:
+                con.close()
+            per = float(meta["build_seconds"]) / max(1, int(meta["build_shards"]))
+            workers = int(meta.get("build_workers", workers))
+        except (sqlite3.Error, KeyError, ValueError):
+            pass
+        if self._needs_scratch() or self._rebuild_instead(pending):
+            return per * total
+        # Fewer than PARALLEL_FROM are decoded one after the other, not by the workers.
+        return per * UPDATE_COST * pending * (max(1, workers) if pending < PARALLEL_FROM else 1)
+
+    def _rebuild_instead(self, pending: int) -> bool:
+        return pending >= REBUILD_FROM and pending >= REBUILD_SHARE * len(self.ws.files())
 
     def _update(self, con: sqlite3.Connection, stats: UpdateStats, progress) -> None:
         ws = self.ws
@@ -989,7 +1115,8 @@ def _main(argv: list[str]) -> int:
     ix = Index(Workspace(root, shards_dir), base, external, workers)
     st = ix.update()
     print(f"shards={st.shards} processed={st.processed} removed={st.removed} "
-          f"scratch={int(st.built_from_scratch)} unreadable={st.unreadable}")
+          f"scratch={int(st.built_from_scratch)} unreadable={st.unreadable} "
+          f"changed={st.changed}")
     return 0
 
 

@@ -441,6 +441,21 @@ class Navigator:
 
     # --- find / resolve ---------------------------------------------------------------------
 
+    def members_of(self, text: str) -> list[Definition]:
+        """`Type#`, with nothing after the `#`: the members Type declares, in order."""
+        q = S.parse_query(text.strip())
+        if not q.names:
+            return []
+        regex = S.members_regex(q.names)
+        compiled = re.compile(regex)
+        out = []
+        for v in self._views(self.ws.grep_regex(regex)):
+            infos = {i.symbol: i for i in v.doc.symbol_infos_matching(compiled)
+                     if S.is_member_of(i.symbol, q.names)}
+            out.extend(v.definitions_of(infos, infos))
+        out.sort(key=lambda d: (d.location.source, d.location.range.start_line))
+        return out
+
     def find_fuzzy(self, text: str, mode: str) -> list[Definition]:
         """find() with the last name matched by prefix, substring or camel humps, ignoring
         case."""

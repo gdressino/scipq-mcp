@@ -3,6 +3,27 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Added
+
+- `index_status` says how far the auxiliary index (`impact`, `path`, `dead_code`…) is behind
+  the shards, and about how long the first query that reads it will take to catch up:
+  after a merge, the shards are fresh but that index is not, and the wait fell on whatever
+  query came first.
+- `find_symbols("Type#")`, with nothing after the `#`: the members the type declares, in
+  order (constructors and nested types too), and `members(Type)` for the inherited ones.
+  It returned the type itself and fields named like it.
+
+### Fixed
+
+- Bringing the auxiliary index up to date after a recompilation that rewrote many shards (a
+  merge, a branch switch) took several times longer than building it anew (78 s for 8,500
+  of 10,000 shards, 20 s for all). From a fifth of the shards changed it is rebuilt now,
+  keeping the hashes of sources as compiled and the index of names in text files; a
+  smaller update no longer waits on syncing the file to disk (1,000 shards: 21 s → 6 s).
+  An index SQLite reports damaged is discarded and rebuilt.
+
 ## 0.9.5 — 2026-11-26
 
 ### Added

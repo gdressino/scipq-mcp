@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import re
 import shutil
 import subprocess
 
@@ -7,7 +8,7 @@ import pytest
 
 from scipq_mcp import cachedir as C
 from scipq_mcp.graph import Graph, cycles
-from scipq_mcp.index import Index
+from scipq_mcp.index import Index, IndexError_
 from scipq_mcp.service import Service
 from scipq_mcp.workspace import Workspace
 
@@ -43,6 +44,99 @@ def test_build_and_incremental_update(sample_copy, cache):
     assert gone.removed == 1
     st = ix.status()
     assert st["shards"] == 18 and st["refs"] > 0
+
+
+def _mark_changed(ix, n):
+    """Makes the index believe n shards changed since it was updated."""
+    con = sqlite3.connect(ix.path)
+    ids = [r[0] for r in con.execute("SELECT id FROM shards WHERE orphan = 0 ORDER BY id "
+                                     "LIMIT ?", (n,))]
+    con.executemany("UPDATE shards SET mtime_ns = mtime_ns - 1 WHERE id = ?",
+                    [(i,) for i in ids])
+    con.commit()
+    con.close()
+    return ids
+
+
+def test_many_changed_shards_rebuild_the_index_keeping_what_is_not_in_them(
+        sample_copy, cache, monkeypatch):
+    from scipq_mcp import graph as G
+    from scipq_mcp import index as I
+    from scipq_mcp import render
+    ix = Index(Workspace(sample_copy), cache)
+    ix.update()
+    con = sqlite3.connect(ix.path)
+    con.execute("UPDATE shards SET src_sha1 = 'as-compiled'")   # recorded earlier
+    con.executescript(G.TEXT_SCHEMA)
+    con.execute("INSERT INTO text_files VALUES (7, 'a.xml', 1, 2)")
+    con.execute("INSERT INTO text_words (rowid, java_strings, java_annotations, other) "
+                "VALUES (7, '', '', 'chargeAccount')")
+    con.commit()
+    con.close()
+    _mark_changed(ix, 3)                      # 3 of 18: below the share, updated in place
+    monkeypatch.setattr(I, "REBUILD_FROM", 1)
+    st = ix.update()
+    assert (st.processed, st.changed, st.built_from_scratch) == (3, 0, False)
+    _mark_changed(ix, 9)                      # half of them: rebuilt
+    monkeypatch.setattr(I, "source_sha1", lambda *a, **k: None)   # every source edited since
+    st = ix.update()
+    assert st.changed == 9 and st.processed == 18 and st.built_from_scratch
+    assert "index rebuilt: 9 of 19 shards had changed" in render.index_note(st)
+    con = sqlite3.connect(ix.path)
+    sha = [v for (v,) in con.execute("SELECT src_sha1 FROM shards WHERE orphan = 0")]
+    assert sha.count("as-compiled") == len(sha) - 9 and sha.count(None) == 9
+    assert con.execute("SELECT other FROM text_words WHERE rowid = 7").fetchone() == (
+        "chargeAccount",)
+    meta = dict(con.execute("SELECT key, value FROM meta"))
+    assert "build_seconds" not in meta   # 18 shards, decoded one by one: not a build's rate
+    con.close()
+    assert ix.update().processed == 0
+
+
+def test_index_status_says_how_far_the_auxiliary_index_is_behind(sample_root, cache):
+    svc = Service(sample_root, cache_dir=cache)
+    assert "auxiliary index: not built yet for this checkout; the first query that reads " \
+           "it (impact, path" in svc.index_status()
+    svc.impact("Entity#setState")
+    assert "auxiliary index: up to date with the shards" in svc.index_status()
+    _mark_changed(Index(Workspace(sample_root), cache), 4)
+    out = svc.index_status()
+    assert re.search(r"auxiliary index: 4 shards to update since the last compilation, ~\d+ s, "
+                     r"done by the first query that reads it", out), out
+    assert re.search(r"-- index updated: 4 shards, 0 removed, \d+ s",
+                     svc.impact("Entity#setState"))
+
+
+def test_a_damaged_index_is_rebuilt(sample_root, cache, monkeypatch):
+    from scipq_mcp.index import damaged
+    assert damaged(sqlite3.DatabaseError("database disk image is malformed"))
+    assert damaged(IndexError_("index build failed: sqlite3.DatabaseError: file is not a "
+                               "database"))
+    assert not damaged(sqlite3.OperationalError("database is locked"))
+    svc = Service(sample_root, cache_dir=cache)
+    good = "impact of Entity#setState(int)"
+    assert good in svc.impact("Entity#setState")
+    path = Index(Workspace(sample_root), cache).path
+
+    # An error that says "malformed" while this index is sound (another one: compare's other
+    # side) leaves it in place.
+    def broken(*a, **k):
+        raise sqlite3.DatabaseError("database disk image is malformed")
+    monkeypatch.setattr(Graph, "impact", broken)
+    assert good not in svc.impact("Entity#setState")
+    assert os.path.exists(path)
+    monkeypatch.undo()
+
+    size = os.path.getsize(path)
+    with open(path, "r+b") as fh:       # pages in the middle overwritten
+        fh.seek(size // 3)
+        fh.write(b"\xa5" * (size // 3))
+    answers = [svc.impact("Entity#setState") for _ in range(2)]
+    assert good in answers[0] or ("damaged" in answers[0] and "ask again" in answers[0])
+    assert good in answers[1]
+    with open(path, "r+b") as fh:       # the header: no longer a database
+        fh.write(b"\0" * 100)
+    assert good in svc.impact("Entity#setState")
 
 
 def test_index_recreated_when_deleted(sample_root, cache):

@@ -3,6 +3,7 @@ import re
 
 import pytest
 
+from scipq_mcp import symbols as S
 from scipq_mcp.queries import AmbiguousName, Navigator
 from scipq_mcp.service import Service
 from scipq_mcp.workspace import Workspace
@@ -390,3 +391,18 @@ def test_methods_whose_parameters_are_not_read_are_written_with_an_ellipsis(refa
     assert "Map#of(…)" in out and "Overloaded#pick(String, int)" in out
     assert "methods are written m(…), their parameters not read" in out
     assert "past the time for names" in out
+
+
+def test_is_member_of_wants_the_type_itself():
+    yes = ["com/example/account/Account#uid().", "com/example/Account#`<init>`().",
+           "com/example/Account#Builder#", "com/example/Account#number."]
+    no = ["com/example/account/AccountService#",    # a package named like the type
+          "com/example/account/Account#", "com/example/ACCOUNT#uid().",
+          "com/example/Account#Builder#build().", "com/example/Account#uid().(x)",
+          "com/example/Account#[T]"]
+    assert [S.is_member_of(x, ("Account",)) for x in yes] == [True] * len(yes)
+    assert [S.is_member_of(x, ("Account",)) for x in no] == [False] * len(no)
+    assert S.is_member_of("com/example/account/Account#uid().",
+                          ("com", "example", "account", "Account"))
+    assert not S.is_member_of("com/other/Account#uid().", ("example", "Account"))
+

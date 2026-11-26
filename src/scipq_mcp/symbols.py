@@ -499,6 +499,30 @@ def parse_query(text: str) -> Query:
                  params_text if keep and params is not None else "")
 
 
+def members_query(text: str) -> str:
+    """The type written in `Account#` or `com.example.Account#` (asking for its members):
+    "" for anything else."""
+    t = text.strip().replace("`", "")
+    if t.endswith("#") and not looks_like_symbol(t):
+        return t.rstrip("#").strip() if re.search(r"[\w$]#+$", t) else ""
+    return ""
+
+
+def is_member_of(symbol: str, names: tuple[str, ...]) -> bool:
+    """A member (field, method, constructor, nested type) declared by the type the names end
+    with: `("Account",)`, `("com", "example", "Account")` — that name exactly, and a type, not
+    a package named like it."""
+    if not names or is_local_like(symbol):
+        return False
+    d = parse(symbol)
+    if len(d) < len(names) + 1 or d[-1].suffix in (NAMESPACE, PARAMETER, TYPE_PARAMETER):
+        return False
+    owner = d[-2]
+    if owner.suffix != TYPE or owner.name != names[-1]:
+        return False
+    return all(x.name.lower() == n.lower() for x, n in zip(d[-len(names) - 1:-2], names[:-1]))
+
+
 def matches(symbol: str, q: Query) -> bool:
     if not q.names or is_local(symbol):
         return False
@@ -570,6 +594,14 @@ def fuzzy_definition_regex(q: Query, mode: str) -> bytes:
     head = b"[/#]".join(_escape(n) for n in q.names[:-1])
     lead = (head + b"[/#]") if head else b"[/#]"
     return lead + core + rb"(#|\.|\((\+[0-9]+)?\)\.)[\x28\x32\x1a\x22]"
+
+
+def members_regex(names: tuple[str, ...]) -> bytes:
+    """Prefilter for the members declared by the type the names end with (checked exactly by
+    is_member_of): the type's descriptor, `#`, then the member's name or a constructor."""
+    head = b"[/#]".join(_escape(n) for n in names)
+    return (head + rb"#(`<init>`|" + _IDENT + rb")(#|\.|\((\+[0-9]+)?\)\.)"
+            rb"[\x28\x32\x1a\x22]")
 
 
 def _humps(name: str) -> list[str]:

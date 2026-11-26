@@ -182,7 +182,7 @@ run different versions).
 |---|---|---|
 | `setup` | how this project produces shards, whether they are fresh, the steps to enable them | — |
 | `context(symbol, token_budget)` | start here before changing a symbol: definition and body, overrides, callers with the call lines, callees, tests (a type: members, subtypes, users; a field: accessors, writers, readers), trimmed to a budget; each cut section names the tool for the rest | — |
-| `find_symbols(name, match)` | definitions by name or part of it (exact, prefix, contains, camel humps; case-insensitive) | workspace/symbol |
+| `find_symbols(name, match)` | definitions by name or part of it (exact, prefix, contains, camel humps; case-insensitive); `Type#`: the members it declares | workspace/symbol |
 | `references(symbol, exclude_imports, by_name)` | every use, grouped by file, with the line of code and the enclosing method (imports left out for types; large results open with a summary); optionally possible uses by name in strings | findReferences |
 | `definition(symbol)` | location, kind, signature, javadoc, what it overrides or extends | definition + hover |
 | `source(symbol, git_ref)` | the exact source of a definition, with line numbers; with `git_ref` (`origin/main`, a tag, a commit), as it is there, read with git and without the index, so also code never compiled here | — |
@@ -197,7 +197,7 @@ run different versions).
 | `annotated(annotation)` | definitions carrying an annotation, with its line (attribute values) | — |
 | `typed(symbol, categories)` | where a type is used: fields, parameters, return types, locals, supertypes, bodies, imports | — |
 | `tests(symbol)` | test classes that use a symbol directly, with a ready `--tests` / `-Dtest` filter | — |
-| `index_status()` | shards per task, stale and uncompiled files, tracked files without a shard, what to recompile | — |
+| `index_status()` | shards per task, stale and uncompiled files, tracked files without a shard, what to recompile; how far the auxiliary index is behind the shards | — |
 | `compare(other_root, scope, api_only)` | this checkout against another (e.g. two worktrees): definitions only in one side or with another signature, maybe-renamed pairs; with shared git history, members changed on both sides since the merge base and what merging one into the other would break (the other side's uses of what one removed or changed) | — |
 | `steps(query, check)` | Cucumber-JVM: a step definition's feature steps and the scenarios to run; a .feature's steps and the method each runs; a step's text and its method; `check=True`: undefined, ambiguous, not understood and unused step definitions | — |
 | `concepts(query, kind, scope)` | definitions about something when you do not know their names: words of names, owners, annotation texts, call labels, signatures and javadoc, ranked | workspace/symbol by meaning (words, not embeddings) |
@@ -261,7 +261,10 @@ downloads sources jars when an IDE asks for them; without one, the answer says s
 
 Questions that follow call chains or look at everything use an on-disk index, built from the
 shards the first time one of these tools runs (~15 s and ~170 MB for 10,000 files, in a child
-process so the server stays small) and updated incrementally afterwards (unchanged: ~0.1 s).
+process so the server stays small) and updated incrementally afterwards (unchanged: ~0.1 s;
+1,000 recompiled files: a few seconds). When a recompilation rewrote a fifth of the shards or
+more (a merge, a branch switch), it is rebuilt instead, which is faster. `index_status` says
+how far behind it is and about how long catching up will take.
 
 | Tool | What it answers |
 |---|---|

@@ -222,6 +222,30 @@ def test_find_by_fragment(sample_root):
     assert "names containing it" in svc.references("ChangedAt")
 
 
+def test_find_type_hash_lists_the_members_it_declares(sample_root):
+    svc = Service(sample_root)
+    for name, match in (("Account#", "auto"), ("com.example.model.Account#", "prefix"),
+                        ("`Account#`", "contains")):
+        out = svc.find(name, match=match)
+        rows = [x.split()[2] for x in out.splitlines()[1:]]
+        assert rows == ["com/example/model/Account#number.",
+                        "com/example/model/Account#`<init>`().",
+                        "com/example/model/Account#uid().",
+                        "com/example/model/Account#Builder#"], out
+        assert "members(Account) adds the inherited ones" in out.replace(
+            "com.example.model.", "")
+    assert "Account#Builder#build()." in svc.find("Builder#")
+    out = svc.find("Nope#")
+    assert out.startswith("no type of the project named Nope declares members") and \
+        "members(Nope)" in out
+    # An exact SCIP symbol, or match='exact', is still the type itself; a name after `#`
+    # still matches by it.
+    assert "1 definition match" in svc.find("com/example/model/Account#")
+    assert "class  com/example/model/Account#  —" in svc.find("Account#", match="exact")
+    assert "Account#uid()." in svc.find("Account#u", match="prefix")
+    assert svc.batch([{"tool": "find_symbols", "name": "Account#"}]).count("Account#") > 4
+
+
 def test_type_references_drop_imports_by_default(sample_root):
     svc = Service(sample_root)
     assert "import com.example.model.Entity;" not in svc.references("Entity")

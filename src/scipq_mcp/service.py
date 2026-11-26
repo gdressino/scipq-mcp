@@ -32,7 +32,7 @@ from . import context as C
 from . import libsrc as L
 from .cachedir import CacheError, default_base, entry_name
 from .graph import Graph, GraphError
-from .index import SCHEMA_VERSION, Index, IndexError_, unchanged_sources
+from .index import SCHEMA_VERSION, Index, IndexError_, damaged, unchanged_sources
 from .queries import AmbiguousName, Navigator, QueryError
 from .workspace import Freshness, Workspace, WorkspaceError, build_running, find_project_root
 
@@ -373,6 +373,19 @@ class Service:
     def _b_find(self, name: str, offset: int = 0, limit: int = 50, match: str = "auto") -> Body:
         def body(nav: Navigator):
             how = ""
+            owner = S.members_query(name) if match != "exact" else ""
+            if owner:
+                if match not in ("auto", *S.MATCH_MODES):
+                    raise ValueError(f"match must be auto or one of {S.MATCH_MODES}")
+                found = nav.members_of(name)
+                if not found:
+                    return (f"no type of the project named {owner} declares members (for a "
+                            f"library type, members({owner}); for part of a name, "
+                            f"find_symbols({owner!r}, match='contains'))"), set()
+                how = (f"the members {owner} declares, in order; members({owner}) adds the "
+                       "inherited ones, and lists library types too")
+                return (render.find(name, found, offset, limit, how),
+                        {d.location.source for d in found[offset:offset + limit]})
             if match in ("auto", "exact"):
                 found = nav.find(name)
                 if not found and match == "auto":
@@ -1323,7 +1336,9 @@ class Service:
                 nodes, truncated = g.impact(sym, 3, True, root=nav.ws.root)
             finally:
                 g.close()
-        except (CacheError, IndexError_, sqlite3.Error, OSError):
+        except (CacheError, IndexError_, sqlite3.Error, OSError) as e:
+            if damaged(e):   # the next query that reads it builds it anew
+                ix.discard_damaged()
             return ""
         if not nodes:
             return "impact (depth 3): nothing in this project reaches it"
@@ -1364,8 +1379,7 @@ class Service:
                 raise QueryError(f"a gradle/mvn build is running in {b_root}: its index is "
                                  "not updated meanwhile; retry when it finishes")
             try:
-                stats_b = ix_b.ensure()
-                g_b = Graph(ix_b)
+                g_b, stats_b = self._open_graph(ix_b)
             except (CacheError, IndexError_, sqlite3.Error) as e:
                 raise QueryError(f"auxiliary index of B unavailable: {e}") from e
             try:
@@ -1378,6 +1392,12 @@ class Service:
                     # What a merge breaks does not depend on visibility: a package-private
                     # member changed in one module breaks its callers there too.
                     git = self._compare_git(a_root, b_root, g_a, g_b, full)
+            except sqlite3.DatabaseError as e:
+                g_b.close()
+                err = self._damaged_error(e, ix_b, "B's")
+                if err is None:
+                    raise
+                raise err from e
             finally:
                 g_b.close()
             notes = render.index_note(stats_a)
@@ -1432,16 +1452,22 @@ class Service:
                         rows.append(f"  {label}: index not built yet (call again)")
                         continue
                     try:
-                        st = ix_b.ensure()
+                        g_b, st = self._open_graph(ix_b)
                         if st.built_from_scratch:
                             built.append(path)
-                        g_b = Graph(ix_b)
                     except (CacheError, IndexError_, sqlite3.Error) as e:
                         rows.append(f"  {label}: index unavailable ({e})")
                         continue
                     try:
                         full = CMP.api_diff(all_a, CMP.api_of(g_b, scope, False))
                         git = self._compare_git(a_root, ws_b.root, g_a, g_b, full)
+                    except sqlite3.DatabaseError as e:
+                        g_b.close()
+                        if self._damaged_error(e, ix_b) is None:
+                            raise
+                        rows.append(f"  {label}: its index was damaged and was removed "
+                                    "(call again)")
+                        continue
                     finally:
                         g_b.close()
                     stale = "  [B stale]" if ws_b.freshness() else ""
@@ -1491,16 +1517,44 @@ class Service:
 
     # --- v2: queries over the auxiliary index -----------------------------------------------
 
+    @staticmethod
+    def _open_graph(ix: Index) -> tuple[Graph, Any]:
+        """ensure() and a Graph on the index; one SQLite finds damaged (a crash of the machine
+        while it was written) is discarded and built anew."""
+        try:
+            stats = ix.ensure()
+            return Graph(ix), stats
+        except (sqlite3.DatabaseError, IndexError_) as e:
+            if not damaged(e) or not ix.discard_damaged():
+                raise
+        stats = ix.ensure()
+        return Graph(ix), stats
+
+    @staticmethod
+    def _damaged_error(e: Exception, ix: Index, whose: str = "the") -> QueryError | None:
+        """For an error met while reading the index: the answer when it was this index and it
+        was damaged, now removed."""
+        if not damaged(e) or not ix.discard_damaged():
+            return None
+        return QueryError(f"{whose} auxiliary index was damaged (by a crash of the machine while "
+                          "it was written?) and was removed: ask again, and the query rebuilds "
+                          "it")
+
     @contextlib.contextmanager
     def _graph(self, nav: Navigator):
         try:
             ix = Index(nav.ws, self.cache_dir, self.index_external, self.build_workers)
-            stats = ix.ensure()
-            g = Graph(ix)
+            g, stats = self._open_graph(ix)
         except (CacheError, IndexError_, sqlite3.Error) as e:
             raise QueryError(f"auxiliary index unavailable: {e}") from e
         try:
             yield g, stats
+        except sqlite3.DatabaseError as e:
+            g.close()
+            err = self._damaged_error(e, ix)
+            if err is None:
+                raise     # not damage, or another index (compare's other side)
+            raise err from e
         finally:
             g.close()
 
@@ -1815,8 +1869,30 @@ class Service:
         def body(nav: Navigator):
             st = X.index_status(nav)
             st.settings = self._settings_if_indexed(nav)
+            st.aux = self._aux_state(nav)
             return render.status(st, nav.ws.root), set()
         return body
+
+    AUX_READERS = "impact, path, dead_code, concepts, census, deps, changed, tests(transitive)…"
+
+    def _aux_state(self, nav: Navigator) -> str:
+        """Whether the auxiliary index is behind the shards, and about how long catching up
+        takes (a status never builds or updates it: the first query that reads it does)."""
+        try:
+            ix = Index(nav.ws, self.cache_dir, self.index_external, self.build_workers)
+            if ix._needs_scratch():
+                n = len(nav.ws.files())
+                return (f"auxiliary index: not built yet for this checkout; the first query that "
+                        f"reads it ({self.AUX_READERS}) builds it, "
+                        f"~{_duration(ix.update_seconds(n))} for {n} shards")
+            n = ix.pending()
+            if not n:
+                return "auxiliary index: up to date with the shards"
+            return (f"auxiliary index: {n} shards to update since the last compilation, "
+                    f"~{_duration(ix.update_seconds(n))}, done by the first query that reads it "
+                    f"({self.AUX_READERS}; the others read the shards)")
+        except (CacheError, IndexError_, sqlite3.Error, OSError):
+            return ""
 
     def _settings_if_indexed(self, nav: Navigator) -> CFG.Settings:
         """Settings with the profiles chosen from the project's annotations when the auxiliary
@@ -2065,6 +2141,10 @@ class Service:
 def _fqcn(symbol: str) -> str:
     top, pkg = S.top_level_type_name(symbol), S.package_of(symbol)
     return f"{pkg}.{top}" if pkg else top
+
+
+def _duration(seconds: float) -> str:
+    return f"{max(1, round(seconds))} s" if seconds < 90 else f"{seconds / 60:.0f} min"
 
 
 def _drop_imports(nav: Navigator, refs: list) -> list:
