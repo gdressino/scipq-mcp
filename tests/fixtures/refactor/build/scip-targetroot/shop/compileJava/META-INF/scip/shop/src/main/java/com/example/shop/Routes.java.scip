@@ -1,0 +1,15 @@
+Ø
+/shop/src/main/java/com/example/shop/Routes.java,com/example/shop/Routes#BZ' /#com/example/shop/Routes#`<init>`().B5com/example/shop/Routes#open().B	Z local 0BRlocal 0B* com/example/shop/Routes#quick().B)com/example/shop/Routes#slow().B(com/example/shop/Routes#far().B
+6 com/example/shop/Routes#quick().B	Z )com/example/shop/Routes#step().B5com/example/shop/Routes#slow().B	Z )com/example/shop/Routes#step().B5com/example/shop/Routes#step().B	Z )com/example/shop/Routes#done().B4com/example/shop/Routes#far().B	Z ,"com/example/shop/Routes#farther().B8"com/example/shop/Routes#farther().B	Z -#com/example/shop/Routes#farthest().B9#com/example/shop/Routes#farthest().B!	Z!# )com/example/shop/Routes#done().B"5com/example/shop/Routes#done().B%	Z%& “
+com/example/shop/Routes#Popen() reaches done() two shortest ways, both through step(), and a longer one. (2Routes:"java*public class RoutesH
+#com/example/shop/Routes#`<init>`().(	2<init>:"java*public Routes()J
+com/example/shop/Routes#open().(2open:"java*void open(boolean fast)F
+local 02fast:"java*boolean fastBcom/example/shop/Routes#open().A
+ com/example/shop/Routes#quick().(2quick:"java*void quick()>
+com/example/shop/Routes#slow().(2slow:"java*void slow()>
+com/example/shop/Routes#step().(2step:"java*void step();
+com/example/shop/Routes#far().(2far:"java*
+void far()G
+"com/example/shop/Routes#farther().(2farther:"java*void farther()J
+#com/example/shop/Routes#farthest().(2farthest:"java*void farthest()>
+com/example/shop/Routes#done().(2done:"java*void done()"java

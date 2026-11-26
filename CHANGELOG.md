@@ -11,8 +11,26 @@ version and date when releasing.
   as it is there, read with git (`ls-tree`, `show`) and parsed, without the index, so also
   a class that only exists on another branch. The name finds its type's file there; a
   parameter list, `(+N)` or an exact symbol picks the overload.
+- `path` takes `avoid`: methods, or types (all their members), the paths must not go
+  through, to look for paths other than the ones found. It says how many shortest paths
+  there are in all, and which methods every one goes through, with the `avoid` that looks
+  for others.
 
 ### Fixed
+
+- `path` followed every call of an overridden method to the override, also from code that
+  calls it on another subtype's object (a field declared and created as a sibling class),
+  so it showed chains that cannot run. It now follows them with `impact`'s rule: from the
+  override's hierarchy and from files that may hold an object of its type, leaving out a
+  sibling's own `this.m()` and `super.m()`; for the target, also through the library
+  methods it overrides. The hop is shown as `A ⇒ B`, and a search with no path says how
+  many such calls it did not follow.
+- `impact` took the code of a class that calls an overridden method on another object (a
+  field: `view.render()`) as running on that object, so it left out the callers of that
+  code from its own subclasses (`this.paint()`). Only code of the override's hierarchy is
+  tied to its object now.
+- `batch` did not run `persistence`, `check_refs`, `doctor`, `refactor` or `refactor_help`
+  ("unknown tool"): it runs every tool but `setup`.
 
 - `callers` with `include_overridden` followed the calls through overridden methods only for
   the method asked about: further up, the tree stopped at a caller that overrides a project

@@ -1,0 +1,7 @@
+â
+.shop/src/main/java/com/example/shop/Frame.java+com/example/shop/Frame#BZ	 ."com/example/shop/Frame#`<init>`().B com/example/shop/View#B0com/example/shop/Frame#view.B	Rjava/lang/String#B
+5com/example/shop/Frame#paint().BZ &com/example/shop/Frame#view.B)com/example/shop/View#render().BŠ
+com/example/shop/Frame#JRenders the view it holds: its own code runs on a Frame, not on the view. (2Frame:"java*public class FrameF
+"com/example/shop/Frame#`<init>`().(	2<init>:"java*public Frame()9
+com/example/shop/Frame#view.(2view:"java*	View viewB
+com/example/shop/Frame#paint().(2paint:"java*String paint()"java

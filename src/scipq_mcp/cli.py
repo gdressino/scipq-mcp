@@ -97,7 +97,7 @@ def _query_parser(sub) -> None:
         no_overridden={"action": "store_true"},
         group_by={"choices": ["module", "package"], "default": "module"})
     add("path", "source", "target", max_depth={"type": int, "default": 6},
-        limit={"type": int, "default": 3})
+        limit={"type": int, "default": 3}, avoid={"action": "append", "default": None})
     add("changed", base={"default": "HEAD"}, staged={"action": "store_true"},
         paths={"nargs": "*", "default": None}, depth={"type": int, "default": 3})
     add("deps", **paging, level={"choices": ["module", "package"], "default": "module"},
@@ -184,7 +184,8 @@ def _run_query(a) -> str:
         return svc.impact(a.symbol, depth=a.depth, include_overridden=not a.no_overridden,
                           group_by=a.group_by, offset=a.offset, limit=a.limit)
     if t == "path":
-        return svc.path(a.source, a.target, max_depth=a.max_depth, limit=a.limit)
+        return svc.path(a.source, a.target, max_depth=a.max_depth, limit=a.limit,
+                        avoid=a.avoid)
     if t == "changed":
         return svc.changed(base=a.base, staged=a.staged, paths=a.paths, depth=a.depth)
     if t == "deps":

@@ -75,8 +75,9 @@ def test_impact_through_overridden_methods(graph):
 
 
 def test_path(graph):
-    paths = graph.path("com/example/app/Service#seed.", SET_STATE)
-    assert [s for s, _ in paths[0]] == [
+    r = graph.path("com/example/app/Service#seed.", SET_STATE)
+    assert r.total == 1 and r.calls == 3
+    assert [h.symbol for h in r.paths[0]] == [
         "com/example/app/Service#seed.", "com/example/model/Account#Builder#build().",
         "com/example/model/Account#`<init>`().", SET_STATE]
 

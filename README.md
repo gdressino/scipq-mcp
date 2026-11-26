@@ -206,7 +206,7 @@ run different versions).
 | `doctor()` | what can make the index wrong here, with what to do: plugin setup, files without shards, IDE builds, failed javac, stale files, running builds, build cache, cache, config, JDKs | — |
 | `refactor(plan, dry_run)` / `refactor(plan_id, verify)` | runs a refactoring plan (see below) into a verified patch; after it is applied and compiled, checks the new index and lists what to test | rename / change signature / move |
 | `refactor_help(topic)` | the plan format, with examples | — |
-| `batch(queries)` | several of the above in one call | — |
+| `batch(queries)` | several of the above in one call (any tool but `setup`) | — |
 
 All tools are read-only and take an optional `project_root`. Lists take `offset`/`limit` and
 say `next offset N` when there is more.
@@ -267,7 +267,7 @@ process so the server stays small) and updated incrementally afterwards (unchang
 |---|---|
 | `impact(symbol, depth, include_overridden, group_by)` | transitive callers by depth, grouped by module or package, tests marked |
 | `tests(symbol, transitive=true)` | test classes that reach a symbol through callers, with the command to run them |
-| `path(source, target)` | shortest call chains between two symbols, with the lines |
+| `path(source, target, avoid)` | shortest call chains between two symbols, with the lines, how many there are and what they all go through; `avoid` methods or types to look for others; an override is followed only where the call may run it |
 | `changed(base, staged, paths)` | from `git diff` to the definitions whose lines changed, their callers and the tests to run |
 | `deps(level, scope, target, sites)` | dependencies between modules or packages, cycles, or every call site from one scope to another |
 | `dead_code(scope, public_is_api)` | candidates nobody references, leaving out framework entry points, overrides, accessors in use and names used in strings |

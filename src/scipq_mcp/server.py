@@ -434,9 +434,19 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
              target: Annotated[str, Field(description="Where it ends (the callee)")],
              project_root: ProjectRoot = "",
              max_depth: Annotated[int, Field(ge=1, le=12)] = 6,
-             limit: Annotated[int, Field(ge=1, le=20, description="Max paths")] = 3) -> str:
-        """Shortest call chains from one symbol to another, with the lines of each call."""
-        return service.path(source, target, project_root, max_depth, limit)
+             limit: Annotated[int, Field(ge=1, le=20, description="Max paths")] = 3,
+             avoid: Annotated[list[str] | None, Field(
+                 description="Methods or types (all their members) the paths must not go "
+                             "through: to look for paths other than the ones found")] = None
+             ) -> str:
+        """Shortest call chains (fewest calls) from one symbol to another, with the lines of
+        each call, and how many there are in all. Longer ones are not listed: when every
+        path found goes through a method, the answer says so; `avoid` it to look for
+        others. A call of a method that an override on the way overrides counts where it may
+        run that override (`A ⇒ B`): from B's hierarchy or from files that may hold a B, not
+        from files naming only another subtype. Not seen: reflection and code compiled
+        without the plugin, so no path is not proof that none exists."""
+        return service.path(source, target, project_root, max_depth, limit, avoid)
 
     @tool
     def changed(project_root: ProjectRoot = "",

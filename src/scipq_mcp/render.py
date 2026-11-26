@@ -940,17 +940,42 @@ def impact(symbol: str, nodes, truncated: bool, depth: int, group_by: str, offse
     return "\n".join(lines)
 
 
-def path(src: str, dst: str, paths) -> str:
-    if not paths:
-        return f"no call path from {S.short(src)} to {S.short(dst)} within the depth searched"
-    lines = [f"{len(paths)} shortest call path{'s' if len(paths) != 1 else ''} from "
-             f"{S.short(src)} to {S.short(dst)}:"]
-    for k, p in enumerate(paths, 1):
-        chain = []
-        for sym, sites in p:
-            at = f" (line {', '.join(map(str, sites[:3]))})" if sites else ""
-            chain.append(S.short(sym) + at)
-        lines.append(f"{k}. " + "  →  ".join(chain))
+def path(src: str, dst: str, r, max_depth: int, avoid: list[str] = ()) -> str:
+    """The answer of `path` from a graph.Paths."""
+    avoiding = f", avoiding {', '.join(S.short(x) for x in avoid)}" if avoid else ""
+    if not r.paths:
+        left = (f"\nnote: {r.left_out} caller{'s' if r.left_out != 1 else ''} of overridden "
+                "methods not followed to the override: they run them on another type's "
+                "object (a sibling's own this.m() or super.m(), or a file naming only another "
+                "subtype)") if r.left_out else ""
+        why = ("; the search stopped at its limit of methods, so this is no proof"
+               if r.truncated else "")
+        return (f"no call path from {S.short(src)} to {S.short(dst)} within {max_depth} "
+                f"calls{avoiding}{why} (calls through reflection, or from code compiled "
+                "without the plugin, are not seen)" + left)
+    n = len(r.paths)
+    many = f"{n} of {r.total}" if r.total > n else f"{n}"
+    lines = [f"{many} shortest call path{'s' if r.total != 1 else ''} from {S.short(src)} to "
+             f"{S.short(dst)} ({r.calls} call{'s' if r.calls != 1 else ''}"
+             f"{' each' if r.total != 1 else ''}{avoiding}):"]
+    dispatch = False
+    for k, p in enumerate(r.paths, 1):
+        chain = ""
+        for h in p:
+            at = f" (line {', '.join(map(str, h.lines[:3]))})" if h.lines else ""
+            chain += S.short(h.symbol) + at + ("  ⇒  " if h.override else "  →  ")
+            dispatch |= h.override
+        lines.append(f"{k}. " + chain[:-5])
+    if dispatch:
+        lines.append("A ⇒ B: B overrides A, and the call of A may run it (followed from B's "
+                     "hierarchy and from files that may hold a B, not from those naming only "
+                     "another subtype)")
+    if r.through:
+        shown = [S.short(x) for x in r.through[:3]]
+        again = [S.short(x) for x in avoid] + shown[:1]
+        lines.append(("every one goes through " if r.total > 1 else "the only one; it goes "
+                      "through ") + ", ".join(shown) + f" — avoid={again!r} looks for "
+                     "paths that do not")
     return "\n".join(lines)
 
 

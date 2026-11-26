@@ -1,0 +1,8 @@
+Ú
+3shop/src/main/java/com/example/shop/FancyFrame.java0com/example/shop/FancyFrame#BZ 3'com/example/shop/FancyFrame#`<init>`().B!com/example/shop/Frame#B %java/lang/String#B
+9#com/example/shop/FancyFrame#draw().BZ )com/example/shop/Frame#paint().Bx
+com/example/shop/FancyFrame#"
+com/example/shop/Frame#(2
+FancyFrame:-"java*%public class FancyFrame extends FrameP
+'com/example/shop/FancyFrame#`<init>`().(	2<init>:"java*public FancyFrame()D
+#com/example/shop/FancyFrame#draw().(2draw:"java*String draw()"java

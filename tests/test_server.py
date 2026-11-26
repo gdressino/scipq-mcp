@@ -95,3 +95,32 @@ def test_batch_arguments_without_the_args_wrapper(sample_root):
     assert "error: source: missing 1 required positional argument: 'symbol' (each query is " \
         "{'tool': 'source', 'args': {…}}" in second and "_b_source" not in second
     assert "callers of Entity#setState" in third
+
+
+def test_batch_runs_every_tool_but_setup(sample_root):
+    import inspect
+    from scipq_mcp.server import build
+    from scipq_mcp.service import Service
+    svc = Service(sample_root)
+    tools = anyio.run(build(svc).list_tools)
+    assert len(tools) > 30
+    for t in tools:
+        if t.name in ("setup", "batch"):
+            continue
+        assert t.name in Service.BATCH_TOOLS, t.name
+        params = inspect.signature(getattr(svc, Service.BATCH_TOOLS[t.name])).parameters
+        schema = getattr(t, "input_schema", None) or t.inputSchema
+        aliases = Service.BATCH_ALIASES.get(t.name, {})
+        assert {aliases.get(p, p) for p in schema["properties"]} - {"project_root"} <= \
+            set(params), t.name
+    out = svc.batch([{"tool": "persistence"}, {"tool": "refactor_help", "topic": "flow"},
+                     {"tool": "check_refs", "format": "json"}])
+    assert "unknown tool" not in out and "### 2. refactor_help" in out
+    assert "TypeError" not in out
+
+
+def test_batch_of_refactor_help_needs_no_shards(tmp_path):
+    from scipq_mcp.service import Service
+    (tmp_path / "pom.xml").write_text("<project/>")
+    out = Service(str(tmp_path)).batch([{"tool": "refactor_help", "topic": "flow"}])
+    assert out.startswith("### 1. refactor_help") and "error" not in out.split("\n")[1]

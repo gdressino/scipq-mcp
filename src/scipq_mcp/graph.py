@@ -44,6 +44,25 @@ class Node:
 
 
 @dataclass
+class Hop:
+    """A method on a call path."""
+    symbol: str
+    lines: list[int] = field(default_factory=list)  # 1-based lines where it calls the next
+    override: bool = False      # the next one overrides it, and the call may run that
+
+
+@dataclass
+class Paths:
+    """The shortest call paths from one method to another (`path`)."""
+    paths: list[list[Hop]]
+    total: int = 0              # shortest paths in all (some may not be shown)
+    calls: int = 0              # calls in each
+    through: list[str] = field(default_factory=list)  # methods every one goes through
+    left_out: int = 0           # callers of overridden methods left out: another type's object
+    truncated: bool = False     # the search stopped at its node limit
+
+
+@dataclass
 class Entry:
     """A reached definition someone starts from outside (a screen, an endpoint, a job…)."""
     kind: str
@@ -539,50 +558,13 @@ class Graph:
         texts: dict[str, list[str]] = {}
         dispatch: dict[int, str] = {}       # overridden method -> the type whose override
         bound: dict[int, str] = {}          # reached through it -> that type
-        families: dict[str, set[str]] = {}
-
-        def family(t: str) -> set[str]:
-            if t not in families:
-                tid = self.ids([t]).get(t)
-                families[t] = {t} | self._subtypes_of({t}) | (
-                    set(self.names(self.ancestors(tid)).values()) if tid is not None else set())
-            return families[t]
-        naming: dict[tuple, set[int]] = {}
-
-        def shards_naming(types: frozenset) -> set[int]:
-            """Shards that reference or define one of these types."""
-            if types not in naming:
-                tids = list(self.ids(types).values())
-                out_: set[int] = set()
-                for i in range(0, len(tids), 500):
-                    chunk = tids[i:i + 500]
-                    q = ",".join("?" * len(chunk))
-                    for table in ("refs", "defs"):
-                        out_ |= {x for (x,) in self.con.execute(
-                            f"SELECT DISTINCT shard_id FROM {table} WHERE symbol_id IN ({q})",
-                            chunk)}
-                naming[types] = out_
-            return naming[types]
-        def reaches(base_method: int, x: str, caller: int, shard_id: int) -> bool:
-            """Whether a call of a method X#m overrides may run X#m: from X's hierarchy; from
-            a file that names X or a subtype; or a generic call, from a file that names the
-            base type itself and none of its other subtypes (`Service a; a.start()`). A
-            file naming only another type (`DefaultFieldGroup form; form.setDataSource()`)
-            calls it on that type's objects."""
-            if S.owner_type(names.get(caller, "")) in family(x):
-                return True
-            if shard_id in shards_naming(frozenset({x} | self._subtypes_of({x}))):
-                return True
-            base = S.owner_type(names.get(base_method, ""))
-            if not base or shard_id not in shards_naming(frozenset({base})):
-                return False
-            others = frozenset(self._subtypes_of({base}) - family(x) - {base})
-            return shard_id not in shards_naming(others)
         self.left_out = 0                   # calls to overridden methods left out
         masked: dict[str, tuple] = {}       # source -> its masked text, line starts
         given: dict = {}                    # what runs a lambda it is given in place
         nodes: dict[int, Node] = {}
         names: dict[int, str] = self.names(frontier)
+        reach = _Dispatch(self, names)
+        family, reaches = reach.family, reach.reaches
         truncated = False
         sh = self.shards()
         lifecycle = lifecycle or set()
@@ -647,7 +629,10 @@ class Graph:
                 seen.add(caller)
                 nxt.append(caller)
                 if target in dispatch:
-                    bound[caller] = dispatch[target]
+                    # Code of X's hierarchy runs on that object; another class's code runs
+                    # on its own object, whoever calls it.
+                    if S.owner_type(names.get(caller, "")) in family(dispatch[target]):
+                        bound[caller] = dispatch[target]
                 elif level == 1 and target in overridden and \
                         S.owner_type(names.get(caller, "")) in family(S.owner_type(symbol)):
                     bound[caller] = S.owner_type(symbol)    # the base's code, on this object
@@ -880,55 +865,165 @@ class Graph:
         return out
 
     def path(self, src: str, dst: str, max_depth: int = 6, limit: int = 3,
-             max_nodes: int = 100000) -> list[list[tuple[str, list[int]]]]:
-        """Shortest call chains from `src` to `dst` ([(symbol, lines where it calls the next)]),
-        searching callers backwards from `dst`. A call of a project method that a method on
-        the way overrides counts (dispatch, as in impact): the chain shows the overridden
-        method, then the override."""
+             max_nodes: int = 100000, avoid: list[str] = (), root: str = "") -> Paths:
+        """The shortest call chains from `src` to `dst` (fewest calls), searching callers
+        backwards from `dst`, never through `avoid` (methods; a type: all its members).
+
+        A call of a project method that a method on the way overrides (for `dst`, of any
+        method it overrides) counts (dispatch, as in impact) where it may run the override: from the override's own hierarchy (a base
+        class calling this.m()), or from code that may hold an object of its type (`reaches`:
+        not from a file naming only another subtype). The chain shows the overridden method,
+        then the override. Once a chain runs a base class's code on such an object, the
+        calls of that code from other classes must reach that type too, and `super.m()`
+        calls (read from the sources under `root`) are left out as in impact."""
         ids = self.ids([src, dst])
         if src not in ids or dst not in ids:
-            return []
+            return Paths([])
         a, b = ids[src], ids[dst]
-        parents: dict[int, list[tuple[int, str]]] = {b: []}
-        frontier = [b]
-        found = False
-        for _level in range(max_depth):
-            rows = self.callers_of(frontier)
+        if a == b:
+            return Paths([[Hop(dst)]], 1)
+        skip = self._avoided(avoid) - {a, b}
+        names = self.names([a, b])
+        reach = _Dispatch(self, names)
+        texts: dict[str, list[str]] = {}
+        method_names: dict[int, str] = {}
+        sh = self.shards()
+        # A state is (method, X, kind): kind 0, any object; 1, the method's code runs on an
+        # object of type X; 2, an overridden method, whose calls may run X's override.
+        start = (b, "", 0)
+        level_of: dict[tuple, int] = {start: 0}
+        edges: dict[tuple, list[tuple[tuple, str]]] = {start: []}  # -> [(state it leads to,
+        left: set[int] = set()                                        #     sites of the call)]
+
+        def add(new: tuple, to: tuple, sites: str, level: int) -> bool:
+            """Records new → to when it is as short as the shortest; True when first seen."""
+            lv = level_of.get(new)
+            if lv is None:
+                level_of[new], edges[new] = level, [(to, sites)]
+                return True
+            if lv == level and (to, sites) not in edges[new]:
+                edges[new].append((to, sites))
+            return False
+
+        def overridden(states: list[tuple], level: int) -> list[tuple]:
+            """The project methods these override (for dst, library ones too, as in impact):
+            a call of one may run the override."""
+            by_id: dict[int, list[tuple]] = defaultdict(list)
+            for st in states:
+                by_id[st[0]].append(st)
+            rels = [(b, t) for t in self.ancestors(b) if t != b] if level == 0 and \
+                S.is_method(dst) else self._project_overridden(list(by_id))
+            rels = [(m, t) for m, t in rels if t not in skip]
+            names.update(self.names({t for _m, t in rels} - names.keys()))
+            out = []
+            for m, base in rels:
+                for st in by_id[m]:
+                    # An override reached for X stays X's (narrower than its owner).
+                    new = (base, st[1] or reach.owner(m), 2)
+                    if add(new, st, "", level):
+                        out.append(new)
+            return out
+
+        frontier = [start] + overridden([start], 0)
+        nxt, level = frontier, 0
+        found = any(st[0] == a for st in frontier)     # src is a method dst overrides
+        truncated = False
+        for level in range(1, (0 if found else max_depth) + 1):
+            by_id: dict[int, list[tuple]] = defaultdict(list)
+            for st in frontier:
+                by_id[st[0]].append(st)
+            rows = self.callers_of(list(by_id))
+            names.update(self.names({c for _t, c, _s, _x in rows} - names.keys()))
             nxt = []
-            for target, caller, _shard, sites in rows:
-                if caller not in parents:
-                    parents[caller] = []
-                    nxt.append(caller)
-                if caller != target:
-                    parents[caller].append((target, sites))
-                if caller == a:
-                    found = True
-            if found or not nxt or len(parents) > max_nodes:
+            for target, caller, shard_id, sites in rows:
+                if caller == target or caller in skip or shard_id not in sh:
+                    continue
+                for st in by_id[target]:
+                    _m, x, kind = st
+                    s, new = sites, (caller, "", 0)
+                    if x:
+                        mine = reach.owner(caller) in reach.family(x)
+                        if target not in method_names:
+                            method_names[target] = S.name_of(names.get(target, ""))
+                        name = method_names[target]
+                        if kind == 2 and root:
+                            # super.m() runs the caller's superclass's method, not X's.
+                            s = _not_super(root, sh[shard_id][0], s, name, texts)
+                            if not s:
+                                continue
+                        if mine:
+                            new = (caller, x, 1)        # still code of X's object
+                        else:
+                            # Another class's this.m(), m() or super.m() runs on its own
+                            # object; its other calls may reach X's only as `reaches` tells.
+                            if kind == 1 and root:
+                                s = _not_super(root, sh[shard_id][0], s, name, texts, own=True)
+                            if not s or not reach.reaches(target, x, caller, shard_id):
+                                left.add(caller)
+                                continue
+                    if add(new, st, s, level):
+                        nxt.append(new)
+            if not nxt:
                 break
-            for override, base in self._project_overridden(nxt):
-                if base not in parents:
-                    parents[base] = [(override, "")]
-                    nxt.append(base)
-                    if base == a:
-                        found = True
+            nxt += overridden(nxt, level)
+            if any(st[0] == a for st in nxt):
+                found = True
+                break
+            if len(level_of) > max_nodes:
+                truncated = True
+                break
             frontier = nxt
-        if a not in parents:
-            return []
-        paths: list[list[tuple[int, str]]] = []
+        left_out = len(left - {st[0] for st in level_of})
+        if not found:
+            return Paths([], left_out=left_out, truncated=truncated)
+        starts = [st for st in nxt if st[0] == a]
+        count: dict[tuple, int] = {start: 1}
 
-        def walk(node: int, acc: list[tuple[int, str]]):
-            if len(paths) >= limit:
-                return
-            if node == b:
-                paths.append(acc + [(b, "")])
-                return
-            for nxt_node, sites in parents.get(node, []):
-                if nxt_node not in {x for x, _ in acc}:
-                    walk(nxt_node, acc + [(node, sites)])
+        def paths_from(st: tuple) -> int:
+            if st not in count:
+                count[st] = sum(paths_from(to) for to, _s in edges[st])
+            return count[st]
 
-        walk(a, [])
-        names = self.names({x for p in paths for x, _ in p})
-        return [[(names.get(x, "?"), _lines(sites)) for x, sites in p] for p in paths]
+        def reaches_end(st: tuple, without: int, memo: dict) -> bool:
+            if st[0] == without:
+                return False
+            if st == start:
+                return True
+            if st not in memo:
+                memo[st] = any(reaches_end(to, without, memo) for to, _s in edges[st])
+            return memo[st]
+
+        out: list[list[tuple[tuple, str]]] = []
+
+        def walk(st: tuple, acc: list[tuple[tuple, str]]):
+            if len(out) >= limit:
+                return
+            if st == start:
+                out.append(acc + [(st, "")])
+                return
+            # Levels only go down toward dst (an override's hop stays on its level, and never
+            # back): no state repeats, though a method may, on another object (recursion).
+            for to, sites in edges[st]:
+                walk(to, acc + [(st, sites)])
+
+        for st in starts:
+            walk(st, [])
+        through = [st[0] for st, _s in out[0][1:-1]] if out else []
+        through = list(dict.fromkeys(
+            m for m in through if not any(reaches_end(st, m, {}) for st in starts)))
+        names.update(self.names({st[0] for p in out for st, _s in p} - names.keys()))
+        return Paths([[Hop(names.get(st[0], "?"), _lines(sites), st[2] == 2)
+                       for st, sites in p] for p in out],
+                     sum(paths_from(st) for st in starts), level,
+                     [names.get(m, "?") for m in through], left_out)
+
+    def _avoided(self, symbols) -> set[int]:
+        """The ids of these methods and fields, and of every member of these types."""
+        out = set(self.ids([s for s in symbols if not S.is_type(s)]).values())
+        for t in (s for s in symbols if S.is_type(s)):
+            out |= {i for (i,) in self.con.execute(
+                "SELECT id FROM symbols WHERE symbol >= ? AND symbol < ?", (t, t + "\uffff"))}
+        return out
 
     # changed ---------------------------------------------------------------------------------
 
@@ -1440,6 +1535,71 @@ def _annotation_text(root: str, source: str, def_line: int, before: int = 25) ->
 
 
 # --- helpers ----------------------------------------------------------------------------------
+
+class _Dispatch:
+    """Which calls of an overridden method may run a given override (impact and path).
+    `names` (id -> symbol) must hold the callers and methods asked about."""
+
+    def __init__(self, g: "Graph", names: dict[int, str]):
+        self.g, self.names = g, names
+        self._families: dict[str, set[str]] = {}
+        self._naming: dict[frozenset, set[int]] = {}
+        self._subtypes: dict[str, set[str]] = {}
+        self._owners: dict[int, str] = {}
+
+    def owner(self, sid: int) -> str:
+        """The type that declares this method (by id; names must hold it)."""
+        if sid not in self._owners:
+            name = self.names.get(sid)
+            if name is None:
+                return ""
+            self._owners[sid] = S.owner_type(name)
+        return self._owners[sid]
+
+    def subtypes(self, t: str) -> set[str]:
+        if t not in self._subtypes:
+            self._subtypes[t] = self.g._subtypes_of({t})
+        return self._subtypes[t]
+
+    def family(self, t: str) -> set[str]:
+        """t, its subtypes and its supertypes."""
+        if t not in self._families:
+            tid = self.g.ids([t]).get(t)
+            self._families[t] = {t} | self.subtypes(t) | (
+                set(self.g.names(self.g.ancestors(tid)).values()) if tid is not None else set())
+        return self._families[t]
+
+    def shards_naming(self, types: frozenset) -> set[int]:
+        """Shards that reference or define one of these types."""
+        if types not in self._naming:
+            tids = list(self.g.ids(types).values())
+            out: set[int] = set()
+            for i in range(0, len(tids), 500):
+                chunk = tids[i:i + 500]
+                q = ",".join("?" * len(chunk))
+                for table in ("refs", "defs"):
+                    out |= {x for (x,) in self.g.con.execute(
+                        f"SELECT DISTINCT shard_id FROM {table} WHERE symbol_id IN ({q})",
+                        chunk)}
+            self._naming[types] = out
+        return self._naming[types]
+
+    def reaches(self, base_method: int, x: str, caller: int, shard_id: int) -> bool:
+        """Whether a call of a method X#m overrides may run X#m: from X's hierarchy; from a
+        file that names X or a subtype; or a generic call, from a file that names the base
+        type itself and none of its other subtypes (`Service a; a.start()`). A file naming
+        only another type (`DefaultFieldGroup form; form.setDataSource()`) calls it on that
+        type's objects."""
+        if self.owner(caller) in self.family(x):
+            return True
+        if shard_id in self.shards_naming(frozenset({x} | self.subtypes(x))):
+            return True
+        base = self.owner(base_method)
+        if not base or shard_id not in self.shards_naming(frozenset({base})):
+            return False
+        others = frozenset(self.subtypes(base) - self.family(x) - {base})
+        return shard_id not in self.shards_naming(others)
+
 
 def _not_super(root: str, source: str, sites: str, name: str, cache: dict,
                own: bool = False) -> str:

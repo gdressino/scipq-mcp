@@ -676,6 +676,10 @@ def test_impact_dispatches_through_template_methods(refactor_root, tmp_path):
     out = Service(refactor_root, cache_dir=str(tmp_path / "c")).impact("SalesPage#body",
                                                                        depth=4)
     assert "Page#render()" in out and "Pages#show(Page)" in out and "StockPage" not in out
+    # Frame#paint() calls render() on the view it holds: its own code runs on a Frame, so a
+    # subclass's this.paint() reaches it too.
+    deep = Service(refactor_root, cache_dir=str(tmp_path / "c")).impact("Pages#sales", depth=6)
+    assert "d3  Frame#paint()" in deep and "d4  FancyFrame#draw()" in deep
 
 
 def test_impact_lifecycle_creators_layouts_and_startup_lambdas(refactor_root, tmp_path):
@@ -1082,6 +1086,52 @@ def test_path_goes_through_dispatch(refactor_root, tmp_path):
     out = Service(refactor_root, cache_dir=str(tmp_path / "c")).path("Gallery#show",
                                                                      "Pages#sales")
     assert "Gallery#show(View)" in out and "SalesPage#body()" in out and "Page#body()" in out
+
+
+def test_path_follows_an_override_only_where_the_object_may_be_its_type(refactor_root,
+                                                                       tmp_path):
+    # Dash calls measure() on a StockPage; StockPage's own measure(), frame() and super calls
+    # run its own body(): none of them reaches SalesPage#body(), as in impact.
+    from scipq_mcp.service import Service
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    out = svc.path("Gallery#show", "Pages#sales")
+    assert "View#render()  ⇒  Page#render() (line 7)" in out
+    assert "Page#body()  ⇒  SalesPage#body() (line 6)" in out and "A ⇒ B: B overrides A" in out
+    assert "the only one; it goes through View#measure()" in out
+    for start in ("Dash#show", "StockPage#refreshAll", "StockPage#refresh"):
+        out = svc.path(start, "Pages#sales")
+        assert "no call path from" in out and "not followed to the override" in out, out
+    # From the override itself, and around a method or a whole type.
+    assert "1 shortest call path from Pages#show(Page) to SalesPage#body() (2 calls)" in \
+        svc.path("Pages#show", "SalesPage#body")
+    out = svc.path("Gallery#show", "Pages#sales", avoid=["Page#render"])
+    assert "no call path" in out and "avoiding Page#render()" in out
+    assert "no call path" in svc.path("Gallery#show", "Pages#sales", avoid=["SalesPage"])
+    assert "1 shortest" in svc.path("Gallery#show", "Pages#sales", avoid=["StockPage"])
+    # A method dst overrides: calling it may run dst, with no call between.
+    out = svc.path("Page#body", "SalesPage#body")
+    assert "1 shortest call path from Page#body() to SalesPage#body() (0 calls)" in out
+    assert "1. Page#body()  ⇒  SalesPage#body()" in out
+
+
+def test_path_counts_the_shortest_and_says_what_they_all_go_through(refactor_root, tmp_path):
+    from scipq_mcp.service import Service
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+    out = svc.path("Routes#open", "Routes#done", limit=1)
+    assert "1 of 2 shortest call paths from Routes#open(boolean) to Routes#done() (3 calls " \
+        "each):" in out
+    assert "every one goes through Routes#step() — avoid=['Routes#step()']" in out
+    out = svc.path("Routes#open", "Routes#done", avoid=["Routes#step"])
+    assert "(4 calls, avoiding Routes#step()):" in out and "Routes#farther() (line 31)" in out
+    assert "avoid=['Routes#step()', 'Routes#far()']" in out
+    out = svc.batch([{"tool": "path", "source": "Routes#open", "target": "Routes#done",
+                      "avoid": ["Routes#step", "Routes#farther"]}])
+    assert "no call path from Routes#open(boolean) to Routes#done() within 6 calls, " \
+        "avoiding Routes#step(), Routes#farther()" in out
+    # batch passes arguments unchecked: one name for avoid.
+    out = svc.batch([{"tool": "path", "source": "Routes#open", "target": "Routes#done",
+                      "avoid": "Routes#step"}])
+    assert "(4 calls, avoiding Routes#step()):" in out
 
 
 def test_impact_names_library_callbacks_and_deferred_calls(refactor_root, tmp_path):

@@ -1548,13 +1548,22 @@ class Service:
             return render.index_note(stats) + note + text, {n.source for n in nodes}
         return body
 
-    def _b_path(self, source: str, target: str, max_depth: int = 6, limit: int = 3) -> Body:
+    def _b_path(self, source: str, target: str, max_depth: int = 6, limit: int = 3,
+                avoid: list[str] | None = None) -> Body:
         def body(nav: Navigator):
             a, note_a = self._resolve(nav, source)
             b, note_b = self._resolve(nav, target)
+            skip, notes = [], ""
+            # batch passes its arguments unchecked: one name instead of a list.
+            for x in [avoid] if isinstance(avoid, str) else avoid or []:
+                sym, note = self._resolve(nav, x)
+                skip.append(sym)
+                notes += note
+            depth = max(1, min(max_depth, 12))
             with self._graph(nav) as (g, stats):
-                paths = g.path(a, b, max(1, min(max_depth, 12)), max(1, limit))
-            return render.index_note(stats) + note_a + note_b + render.path(a, b, paths), set()
+                r = g.path(a, b, depth, max(1, limit), avoid=skip, root=nav.ws.root)
+            return (render.index_note(stats) + note_a + note_b + notes
+                    + render.path(a, b, r, depth, skip)), set()
         return body
 
     def _test_classes(self, g, nodes, settings) -> OrderedDict[str, set[str]]:
@@ -1953,8 +1962,8 @@ class Service:
                                                       group_by, offset, limit))
 
     def path(self, source: str, target: str, project_root: str | None = None,
-             max_depth: int = 6, limit: int = 3) -> str:
-        return self._run(project_root, self._b_path(source, target, max_depth, limit))
+             max_depth: int = 6, limit: int = 3, avoid: list[str] | None = None) -> str:
+        return self._run(project_root, self._b_path(source, target, max_depth, limit, avoid))
 
     def changed(self, project_root: str | None = None, base: str = "HEAD", staged: bool = False,
                 paths: list[str] | None = None, depth: int = 3) -> str:
@@ -2006,7 +2015,18 @@ class Service:
         "impact": "_b_impact", "path": "_b_path", "changed": "_b_changed", "deps": "_b_deps",
         "dead_code": "_b_dead_code", "census": "_b_census", "concepts": "_b_concepts", "cache_status": "_b_cache_status",
         "context": "_b_context", "compare": "_b_compare", "steps": "_b_steps",
+        "persistence": "_b_persistence", "check_refs": "_b_check_refs", "doctor": "_b_doctor",
+        "refactor": "_b_refactor", "refactor_help": "_b_refactor_help",
     }
+
+    BATCH_NO_CHECKOUT = {"refactor_help"}
+    # Tool arguments named otherwise in the bodies.
+    BATCH_ALIASES = {"check_refs": {"format": "fmt"}}
+
+    @staticmethod
+    def _b_refactor_help(topic: str = "all") -> Body:
+        from . import refactor as R
+        return _const(R.help_topic(topic))
 
     def batch(self, queries: list[dict[str, Any]], project_root: str | None = None) -> str:
         """Several queries over the same checkout in one call; one freshness check."""
@@ -2017,6 +2037,9 @@ class Service:
             # The arguments may also come next to "tool", without the "args" wrapper.
             args.update({k: v for k, v in q.items() if k not in ("tool", "args", *args)})
             args.pop("project_root", None)
+            for name, alias in self.BATCH_ALIASES.get(tool, {}).items():
+                if name in args:
+                    args[alias] = args.pop(name)
             method = self.BATCH_TOOLS.get(tool)
             if method is None:
                 bodies.append(_const(f"### {k}. {tool}\nerror: unknown tool {tool!r}; one of "
@@ -2033,6 +2056,9 @@ class Service:
             bodies.append(_titled(f"### {k}. {tool} {_brief(args)}", inner))
         if not bodies:
             return "error: no queries"
+        if all(q.get("tool") in self.BATCH_NO_CHECKOUT for q in queries):
+            # Answers that need no checkout, also before the first compilation.
+            return "\n\n".join(b(None)[0] for b in bodies)
         return self._run(project_root, *bodies)
 
 
