@@ -3,7 +3,9 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
-## 0.9.6 — 2026-11-26
+## Unreleased
+
+0.9.6 was tagged but never published: a test failed in the release build. Its changes are these.
 
 ### Added
 

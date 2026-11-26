@@ -1,4 +1,5 @@
 import os
+import re
 
 import pytest
 
@@ -227,7 +228,8 @@ def test_find_type_hash_lists_the_members_it_declares(sample_root):
     for name, match in (("Account#", "auto"), ("com.example.model.Account#", "prefix"),
                         ("`Account#`", "contains")):
         out = svc.find(name, match=match)
-        rows = [x.split()[2] for x in out.splitlines()[1:]]
+        rows = [x.split()[2] for x in out.splitlines()[1:]    # not the freshness notes
+                if re.match(r"\S+\.java:\d+  ", x)]
         assert rows == ["com/example/model/Account#number.",
                         "com/example/model/Account#`<init>`().",
                         "com/example/model/Account#uid().",
@@ -236,7 +238,7 @@ def test_find_type_hash_lists_the_members_it_declares(sample_root):
             "com.example.model.", "")
     assert "Account#Builder#build()." in svc.find("Builder#")
     out = svc.find("Nope#")
-    assert out.startswith("no type of the project named Nope declares members") and \
+    assert "no type of the project named Nope declares members" in out and \
         "members(Nope)" in out
     # An exact SCIP symbol, or match='exact', is still the type itself; a name after `#`
     # still matches by it.
