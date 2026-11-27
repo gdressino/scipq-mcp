@@ -153,7 +153,7 @@ def head_of(nav: Navigator, d: Definition) -> list[str]:
     elif d.enclosing is not None and d.enclosing.end_line > d.enclosing.start_line:
         where += f", body {d.enclosing.start_line + 1}–{d.enclosing.end_line + 1}"
     if not d.generated:
-        where += _where_now(nav, d)
+        where += where_now(nav, d)
     out = [d.symbol, where]
     if d.container:
         out.append(f"anonymous class member, in {d.container}")
@@ -182,7 +182,7 @@ def _source_of(nav: Navigator, d: Definition):
     return cache[d.symbol]
 
 
-def _where_now(nav: Navigator, d: Definition) -> str:
+def where_now(nav: Navigator, d: Definition) -> str:
     """After the compiled location, when the file changed after its compilation: where the
     definition is now (found as `source` finds it, if it moved), that it is no longer there
     (with the renamed one `source` suggests), or that it may have moved."""
@@ -191,6 +191,11 @@ def _where_now(nav: Navigator, d: Definition) -> str:
     src = _source_of(nav, d)
     if src is None or src.compiled is None:
         return ""
+    if src.located == "changed" and src.lines:
+        a, b = src.lines[0][0], src.end_line
+        return (f" — its parameters changed after its compilation (the signature shown is "
+                f"the compiled one); now at {'line ' + str(a) if a == b else f'lines {a}–{b}'}: "
+                f"{src.hint}")
     if src.located == "found" and src.lines:
         a, b = src.lines[0][0], src.end_line
         if (a, b) == src.compiled:
@@ -216,6 +221,8 @@ def body_section(nav: Navigator, d: Definition, short: str) -> Section | None:
         a, b = src.compiled
         title = (f"body (as it is now; compiled at {a}–{b}, before the file changed):"
                  if src.located == "found" else
+                 f"body (as it is now, with other parameters; compiled at {a}–{b}, before "
+                 "the file changed):" if src.located == "changed" else
                  f"body (lines {a}–{b} of the file as it is now: it changed after its "
                  "compilation and the definition was not found in it, so they may hold other "
                  "code):" if src.located == "absent" else

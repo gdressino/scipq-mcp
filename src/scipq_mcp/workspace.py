@@ -61,6 +61,7 @@ class Freshness:
     same_content: int = 0     # newer than their shard, but with the content compiled
     # stale source -> (when its shard was written, when the source was modified): mtimes
     times: dict[str, tuple[float, float]] = field(default_factory=dict)
+    cause: str = ""   # why they are stale, when file times tell it (stalecause), for the hint
 
     def __bool__(self) -> bool:
         return bool(self.stale or self.uncompiled or self.recent)

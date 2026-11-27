@@ -45,8 +45,9 @@ Symbols can be given as names: `Account`, `Account#setState`, `com.example.Accou
 `Account#<init>` (constructor); with overloads, `pick(String, int)` (by parameter types),
 `pick()` (the one without parameters) or `pick(+1)` (SCIP's numbering, in declaration
 order); answers write overloaded methods with their parameter list, which reads back as the
-same overload. Or the exact SCIP symbol printed by find_symbols/definition (e.g.
-`com/example/Account#setState().`).
+same overload. `Child#m` when Child only inherits m means the m it inherits (from the
+nearest supertype declaring it). Or the exact SCIP symbol printed by find_symbols/definition
+(e.g. `com/example/Account#setState().`).
 JDK and library symbols work too (`PersistenceManager#evict`). A unique name is resolved and
 the answer starts with `-- name → symbol`; an ambiguous name returns the candidates.
 
@@ -138,7 +139,9 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
     def find_symbols(
         name: Annotated[str, Field(description="Name or part of it, e.g. `Account`, "
                                                "`Account#setState`, `setState`, `Blanqueo`; "
-                                               "`Account#`: the members Account declares")],
+                                               "`Account#`: the members Account declares; "
+                                               "`Cache*#getPlace`: wildcards (* ?) in any "
+                                               "name")],
         project_root: ProjectRoot = "",
         match: Annotated[Literal["auto", "exact", "prefix", "contains", "camel"], Field(
             description="auto: exact name, else names containing it. prefix/contains/camel "
@@ -146,10 +149,13 @@ def build(service: Service, active: bool = True, tools: set[str] | None = None) 
                         "name; owner names before it must match")] = "auto",
         offset: Offset = 0,
         limit: Limit(50) = 50,
+        scope: Annotated[str, Field(description="Only definitions in this package (prefix or "
+                                                "glob) or, with '/', source path glob")] = "",
     ) -> str:
         """Definitions in the project by name or part of a name (like workspace/symbol).
-        Each row: path:line  kind  exact symbol — signature."""
-        return service.find(name, project_root, limit, offset, match)
+        Each row: path:line  kind  exact symbol — signature. `Type#m` when Type only
+        inherits m lists the declaration it inherits."""
+        return service.find(name, project_root, limit, offset, match, scope)
 
     @tool
     def references(

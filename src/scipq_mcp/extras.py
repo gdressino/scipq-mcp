@@ -32,11 +32,14 @@ class Source:
     truncated: bool
     # The file changed after its compilation: the lines of the last compilation (1-based,
     # first and last), and whether the definition was looked for in the current text:
-    # "found" (then `lines` are where it is now), "absent", or "" (it cannot be looked for:
+    # "found" (then `lines` are where it is now), "changed" (found, with other parameters:
+    # the only method of that name then and now), "absent", or "" (it cannot be looked for:
     # a parameter, a local, a member of a local class…, or the text did not parse).
     compiled: tuple[int, int] | None = None
     located: str = ""
-    hint: str = ""   # when "absent": a method there now with the same parameters (renamed?)
+    # When "absent": a method there now with the same parameters (renamed?); when
+    # "changed": its declaration now.
+    hint: str = ""
 
 
 def source(nav: Navigator, symbol: str, max_lines: int = 200) -> Source | None:
@@ -53,12 +56,10 @@ def source(nav: Navigator, symbol: str, max_lines: int = 200) -> Source | None:
     compiled, located, hint = None, "", ""
     if not d.generated and nav.ws.freshness_of({d.location.source}).stale:
         compiled = (first + 1, last + 1)
-        owner = S.parent(d.symbol)
-        known = {S.name_of(x.symbol) for v in nav._views(nav.ws.shard_for_source(
-                 d.location.source)[:1]) for x in v.definitions(
-                 lambda sym, _i: S.is_method(sym) and S.parent(sym) == owner)}
+        then = _methods_then(nav, d)
         try:
-            located, now, hint = _locate_now(nav.ws.root, d, known=known)
+            located, now, hint = _locate_now(nav.ws.root, d, known=set(then),
+                                             overloads=then.count(S.name_of(d.symbol)))
         except Exception:   # half-edited code the parser does not expect: not looked for
             located, now = "", None
         if now is not None:
@@ -69,11 +70,29 @@ def source(nav: Navigator, symbol: str, max_lines: int = 200) -> Source | None:
     return Source(d, lines, last + 1, shown_last < last, compiled, located, hint)
 
 
+def _methods_then(nav: Navigator, d: Definition) -> list[str]:
+    """The names of the methods (and constructors) of d's owner when it was compiled, once
+    per overload."""
+    owner = S.parent(d.symbol)
+    return [S.name_of(x.symbol) for v in nav._views(nav.ws.shard_for_source(
+            d.location.source)[:1]) for x in v.definitions(
+            lambda sym, _i: S.is_method(sym) and S.parent(sym) == owner)]
+
+
+def _overloads_then(nav: Navigator, d: Definition) -> int:
+    if S.kind_of(d.symbol) not in ("method", "constructor"):
+        return 0
+    return _methods_then(nav, d).count(S.name_of(d.symbol))
+
+
 def _locate_now(root: str, d: Definition, parsed: dict | None = None,
-                known: set[str] | None = None) -> tuple[str, tuple[int, int] | None, str]:
+                known: set[str] | None = None, overloads: int = 0
+                ) -> tuple[str, tuple[int, int] | None, str]:
     """Where a type, method, constructor, field, enum constant or record component is in its
     file now (0-based first and last lines), found by its enclosing types, name and
-    parameter types: ("found", lines, ""), ("absent", None, hint: a method with the same
+    parameter types: ("found", lines, ""), ("changed", lines, its declaration now) for a
+    method or constructor whose parameters changed (`overloads`: how many of that name the
+    type had then; the only one then and now), ("absent", None, hint: a method with the same
     parameters that did not exist when it was compiled (`known`: the type's method names
     then), as it may have been renamed), or ("", None, "") when it cannot be looked for.
     `parsed` keeps each file's parse for the next call."""
@@ -113,6 +132,7 @@ def _locate_now(root: str, d: Definition, parsed: dict | None = None,
     pick = None
     if kind in ("method", "constructor"):
         same = [m for m in members if m.kind == kind and (kind == "constructor" or m.name == name)]
+        named = same
         tvars = _type_variables(header, types[-1])
         want = param_types(S.without_annotations(d.info.signature), tvars) \
             if d.info and d.info.signature else None
@@ -121,6 +141,11 @@ def _locate_now(root: str, d: Definition, parsed: dict | None = None,
         pick = same[0] if len(same) == 1 else None
         if pick is None and len(same) > 1:
             return "", None, ""
+        if pick is None and want is not None and overloads == 1 and len(named) == 1:
+            m = named[0]   # the only one then and now: its parameters changed
+            decl = " ".join(S.without_annotations(m.declaration).split())
+            return "changed", (m.start_line - 1, m.end_line - 1), \
+                re.sub(r"\s+\)", ")", re.sub(r"\(\s+", "(", decl))
         if pick is None and kind == "method" and want is not None and known is not None:
             # Renamed? The one method with these parameters the compilation did not have.
             new = [m for m in members if m.kind == "method" and m.name != name
@@ -254,10 +279,11 @@ def _container_shifts(nav: Navigator, container: str, source: str, parsed: dict
     if d is None or d.location.source != source or d.generated:
         return (0,)
     try:
-        status, now, _hint = _locate_now(nav.ws.root, d, parsed=parsed)
+        status, now, _hint = _locate_now(nav.ws.root, d, parsed=parsed,
+                                         overloads=_overloads_then(nav, d))
     except Exception:
         return (0,)
-    if status != "found" or now is None:
+    if status not in ("found", "changed") or now is None:
         return (0,)
     rng = d.enclosing or d.location.range
     last = rng.end_line - 1 if rng.end_char == 0 and rng.end_line > rng.start_line \
@@ -878,6 +904,7 @@ class Status:
     settings: object = None               # config.Settings, filled by the service
     same_content: int = 0                 # newer than their shard, content as compiled
     aux: str = ""                         # the auxiliary index's state, filled by the service
+    why: str = ""                         # why the stale files are (stalecause), when told
 
 
 def index_status(nav: Navigator) -> Status:
@@ -895,8 +922,14 @@ def index_status(nav: Navigator) -> Status:
     f = ws.freshness()
     tracked = _git_java_files(ws.root)
     without = sorted(set(tracked) - sources) if tracked is not None else None
+    from .stalecause import cause
+    try:
+        why = cause(ws, f).full
+    except Exception:   # noqa: BLE001 - a hint never breaks the status
+        why = ""
     return Status(list(counts.items()), len(ws.files()), sorted(set(orphans)), f.stale,
-                  f.uncompiled, without, sorted(f.tasks), same_content=f.same_content)
+                  f.uncompiled, without, sorted(f.tasks), same_content=f.same_content,
+                  why=why)
 
 
 def _git_java_files(root: str) -> list[str] | None:

@@ -183,8 +183,10 @@ def moved_note(compiled: int, how: str) -> str:
     return ""
 
 
-def definition(ws: Workspace, d: Definition | None, symbol: str, value: str = "") -> str:
-    """`value`: a field's initializer, read from the source."""
+def definition(ws: Workspace, d: Definition | None, symbol: str, value: str = "",
+               where_now: str = "") -> str:
+    """`value`: a field's initializer, read from the source; `where_now`: where the
+    definition is now, when its file changed after its compilation (context's)."""
     if d is None:
         return (f"{symbol} is not defined in this project (external, e.g. JDK or a dependency, "
                 "or its file was not compiled)")
@@ -197,7 +199,7 @@ def definition(ws: Workspace, d: Definition | None, symbol: str, value: str = ""
         head += "  (generated)"
     elif d.enclosing is not None:
         head += f", body {d.enclosing.start_line + 1}–{d.enclosing.end_line + 1}"
-    lines = [d.symbol, head]
+    lines = [d.symbol, head + where_now]
     if d.container:
         lines.append(f"anonymous class member, in {d.container}")
     if value and not (d.info and d.info.signature):
@@ -402,10 +404,11 @@ def freshness(f: Freshness | None, result_sources: set[str] | None = None,
                      + _some(f.uncompiled))
     tasks = sorted(t for t in f.tasks if t)
     if tasks:
+        why = getattr(f, "cause", "") if f.stale else ""
         lines.append("  recompile to refresh: " + ", ".join(tasks[:6])
-                     + (" …" if len(tasks) > 6 else "") + " (scipq-mcp does not build; if "
-                     "the shards stay old after it, the task came FROM-CACHE without them: "
-                     "--rerun it)")
+                     + (" …" if len(tasks) > 6 else "") + " (scipq-mcp does not build; "
+                     + (why if why else "if the shards stay old after it, the task came "
+                        "FROM-CACHE without them: --rerun it") + ")")
     elif f.stale or f.uncompiled:
         lines.append("  recompile the project to refresh (scipq-mcp does not build)")
     return "\n".join(lines)
@@ -470,7 +473,13 @@ def source(src, symbol: str) -> str:
     out = [head]
     if src.compiled is not None:
         a, b = src.compiled
-        if src.located == "found" and src.lines:
+        if src.located == "changed" and src.lines:
+            now = f"{src.lines[0][0]}–{src.end_line}"
+            out.append(f"-- {d.location.source} changed after its compilation, and so did "
+                       f"these parameters: shown as it is now, at lines {now} (compiled at "
+                       f"{a}–{b} as {signature_line(d.info)}); the other tools still see the "
+                       "compiled version")
+        elif src.located == "found" and src.lines:
             now = f"{src.lines[0][0]}–{src.end_line}"
             out.append(f"-- {d.location.source} changed after its compilation: shown as it is "
                        f"now, at lines {now} (compiled at {a}–{b}); the other tools still see "
@@ -705,6 +714,8 @@ def status(st, root: str) -> str:
         lines.append(f"orphan shards (source deleted, ignored): {len(st.orphans)}")
     lines.append(f"stale (source edited after its shard): {len(st.stale)}"
                  + (": " + _some(st.stale) if st.stale else ""))
+    if getattr(st, "why", ""):
+        lines.append("  " + st.why)
     if getattr(st, "same_content", 0):
         lines.append(f"  not counted: {st.same_content} files newer than their shard but with "
                      "the content they were compiled from (written again unchanged; the "
@@ -725,8 +736,9 @@ def status(st, root: str) -> str:
     refresh = [t for t in st.refresh if t]
     if refresh:
         lines.append("recompile to refresh: " + ", ".join(refresh)
-                     + " (scipq-mcp does not build; a task that comes FROM-CACHE does not "
-                     "rewrite the shards: --rerun it)")
+                     + (" (scipq-mcp does not build)" if getattr(st, "why", "") else
+                        " (scipq-mcp does not build; a task that comes FROM-CACHE does not "
+                        "rewrite the shards: --rerun it)"))
     elif st.stale or st.uncompiled:
         lines.append("recompile the project to refresh (scipq-mcp does not build)")
     return "\n".join(lines)

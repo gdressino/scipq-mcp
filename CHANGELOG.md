@@ -3,6 +3,29 @@
 One section per version published on PyPI. `scripts/release.sh` turns `## Unreleased` into the
 version and date when releasing.
 
+## Unreleased
+
+### Added
+
+- `Child#m`, when Child does not declare `m` but inherits it, resolves to the declaration it
+  inherits (the nearest supertype declaring it, then library types and `Object`), in every
+  tool; `find_symbols` lists it. It answered that no symbol matched.
+- `find_symbols` takes wildcards in any name (`Cache*#getPlace`, `*Service#find*`) and a
+  `scope` (a package, or a path glob), like `references`: a common name gave too many rows
+  to read.
+- The stale-files warning and `index_status` say why the files are stale when file dates
+  tell it: a git checkout (or reset, merge…) after the last build, with the commit the index
+  shows, read from HEAD's reflog; and whether javac compiled them since, from their class
+  files (newer: FROM-CACHE without the shards, or a build without the plugin; older:
+  nothing compiled them). The warning blamed the build cache either way.
+
+### Fixed
+
+- A method whose parameters changed after its compilation was "not in the file as it is
+  now": `context` and `source` showed the lines it had then, now other code, and
+  `definition` its old signature with nothing to say so. When it is the only method of that
+  name, then and now, it is found: shown where it is, with its declaration as it is now.
+
 ## 0.9.7 — 2026-11-26
 
 0.9.6 was tagged but never published: a test failed in the release build. Its changes are these.

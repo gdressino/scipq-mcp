@@ -33,7 +33,8 @@ from . import libsrc as L
 from .cachedir import CacheError, default_base, entry_name
 from .graph import Graph, GraphError
 from .index import SCHEMA_VERSION, Index, IndexError_, damaged, unchanged_sources
-from .queries import AmbiguousName, Navigator, QueryError
+from .queries import AmbiguousName, Navigator, QueryError, _declared_params, by_params
+from .stalecause import cause as stale_cause
 from .workspace import Freshness, Workspace, WorkspaceError, build_running, find_project_root
 
 DEFAULT_LIMIT = 100
@@ -284,6 +285,8 @@ class Service:
         nav = Navigator(ws)
         nav.library_overloads = lambda sym, qualified=False: \
             self._library_overload_params(sym, ws.root, qualified)
+        nav.library_declaration = lambda t: self._library_declaration(t, ws.root)
+        nav.library_supertypes = lambda t: self._library_supertypes(t, ws.root)
         labeler = OverloadLabels(self, nav)
         labels = S.METHOD_LABELS.set(labeler)
         try:
@@ -313,6 +316,11 @@ class Service:
             fresh = check.result()
         elif self.freshness == "results":
             fresh = ws.freshness_of(sources)
+        if fresh is not None and fresh.stale and ws.root not in self._explained:
+            try:
+                fresh.cause = stale_cause(ws, fresh).brief
+            except Exception:   # noqa: BLE001 - a hint never breaks an answer
+                fresh.cause = ""
         foot = render.freshness(fresh, sources, brief=ws.root in self._explained)
         if fresh and (fresh.stale or fresh.uncompiled):
             self._explained.add(ws.root)
@@ -370,36 +378,104 @@ class Service:
 
     # --- bodies (shared by the tools and batch) ---------------------------------------------
 
-    def _b_find(self, name: str, offset: int = 0, limit: int = 50, match: str = "auto") -> Body:
+    def _b_find(self, name: str, offset: int = 0, limit: int = 50, match: str = "auto",
+                scope: str = "") -> Body:
         def body(nav: Navigator):
-            how = ""
-            owner = S.members_query(name) if match != "exact" else ""
-            if owner:
-                if match not in ("auto", *S.MATCH_MODES):
-                    raise ValueError(f"match must be auto or one of {S.MATCH_MODES}")
-                found = nav.members_of(name)
-                if not found:
-                    return (f"no type of the project named {owner} declares members (for a "
-                            f"library type, members({owner}); for part of a name, "
-                            f"find_symbols({owner!r}, match='contains'))"), set()
-                how = (f"the members {owner} declares, in order; members({owner}) adds the "
-                       "inherited ones, and lists library types too")
-                return (render.find(name, found, offset, limit, how),
-                        {d.location.source for d in found[offset:offset + limit]})
-            if match in ("auto", "exact"):
-                found = nav.find(name)
-                if not found and match == "auto":
-                    found = [d for d in nav.find_fuzzy(name, "contains")
-                             if not S.is_local_like(d.symbol)]
-                    how = "no exact name; names containing it, ignoring case" if found else ""
-            elif match in S.MATCH_MODES:
-                found = [d for d in nav.find_fuzzy(name, match) if not S.is_local_like(d.symbol)]
-                how = f"match={match}, ignoring case"
-            else:
-                raise ValueError(f"match must be auto or one of {S.MATCH_MODES}")
+            found, how = self._found(nav, name, match)
+            if isinstance(found, str):
+                return found, set()
+            if scope:
+                every = len(found)
+                found = [d for d in found if X.in_scope(d.symbol, d.location.source, scope)]
+                how = "; ".join(x for x in (how, f"in {scope}, {every - len(found)} "
+                                                  "elsewhere") if x)
             return (render.find(name, found, offset, limit, how),
                     {d.location.source for d in found[offset:offset + limit]})
         return body
+
+    @staticmethod
+    def _found(nav: Navigator, name: str, match: str) -> tuple[list | str, str]:
+        """find_symbols' definitions and how they were found (or the answer, when there is
+        nothing to list)."""
+        if match not in ("auto", *S.MATCH_MODES):
+            raise ValueError(f"match must be auto or one of {S.MATCH_MODES}")
+        globbed = S.split_glob_query(name)
+        if globbed is not None:
+            return Service._found_glob(nav, *globbed, match)
+        how = ""
+        owner = S.members_query(name) if match != "exact" else ""
+        if owner:
+            found = nav.members_of(name)
+            if not found:
+                return (f"no type of the project named {owner} declares members (for a "
+                        f"library type, members({owner}); for part of a name, "
+                        f"find_symbols({owner!r}, match='contains'))"), ""
+            return found, (f"the members {owner} declares, in order; members({owner}) adds "
+                           "the inherited ones, and lists library types too")
+        if match in ("auto", "exact"):
+            found = nav.find(name)
+            if not found:
+                inherited = nav.inherited_member(name)
+                if inherited is not None and inherited.symbol is None and \
+                        inherited.note.startswith("no overload"):
+                    # Inherited, but with other parameters: said, not listed as a match.
+                    how = inherited.note.split(";", 1)[0]
+                elif inherited is not None and inherited.candidates:
+                    q = S.parse_query(name)
+                    found = sorted(inherited.candidates, key=lambda d: (
+                        d.location.source, d.location.range.start_line))
+                    how = (f"{'.'.join(q.names[:-1])} does not declare {q.names[-1]}: "
+                           "inherited from " + ", ".join(sorted(
+                               {S.short(S.parent(d.symbol)) for d in found})))
+            if not found and match == "auto":
+                fuzzy = [d for d in nav.find_fuzzy(name, "contains")
+                         if not S.is_local_like(d.symbol)]
+                if fuzzy:
+                    found, how = fuzzy, "no exact name; names containing it, ignoring case"
+            return found, how
+        found = [d for d in nav.find_fuzzy(name, match) if not S.is_local_like(d.symbol)]
+        return found, f"match={match}, ignoring case"
+
+    @staticmethod
+    def _found_glob(nav: Navigator, owner: str, patterns: tuple[str, ...], member: str,
+                    match: str) -> tuple[list | str, str]:
+        """`Cache*#getPlace`, `*Service#get*`: the member's name found as find_symbols
+        finds it (a wildcard in it: by its longest literal part), then kept where the owner
+        names (and the member's name) match the patterns."""
+        q = S.parse_query(member)
+        last = q.names[-1] if q.names else ""
+        if not last:
+            raise ValueError(f"{member!r}: no member name after the owner {owner!r}")
+        def keep(items: list, ignore_case: bool) -> list:
+            return [d for d in items if not S.is_local_like(d.symbol)
+                    and S.owner_matches(d.symbol, patterns, ignore_case)]
+
+        fuzzy = match not in ("auto", "exact")
+        if re.search(r"[*?]", last):
+            literal = max(re.split(r"[*?]+", last), key=len)
+            if len(literal) < 2:
+                raise ValueError(f"{last!r} is too broad: write at least two letters of the "
+                                 "name (the owner may be a pattern: `Cache*#get*`)")
+            near = nav.find_fuzzy(literal, "contains")   # any case: then the pattern decides
+            # As names are: case-sensitive (exact, auto), then ignoring case (auto, the rest).
+            found = [] if fuzzy else keep([d for d in near if fnmatch.fnmatchcase(
+                S.name_of(d.symbol), last)], False)
+            if not found and match != "exact":
+                found = keep([d for d in near if fnmatch.fnmatch(
+                    S.name_of(d.symbol).lower(), last.lower())], True)
+                fuzzy = True
+        elif match in ("auto", "exact"):
+            found = keep(nav.find(member), False)
+            if not found and match == "auto":
+                found, fuzzy = keep(nav.find_fuzzy(member, "contains"), True), True
+        else:
+            found = keep(nav.find_fuzzy(member, match), True)
+        if q.params is not None:   # as find does: the overloads taking these types
+            found = by_params(found, q.params, _declared_params, nav._qualified_params)
+        how = f"in types matching {owner}" if owner else ""
+        if fuzzy:
+            how += ("; " if how else "") + "names matched ignoring case"
+        return found, how
 
     def _b_references(self, symbol: str, offset: int = 0, limit: int = DEFAULT_LIMIT,
                       include_definitions: bool = False, exclude_imports: bool | None = None,
@@ -479,6 +555,20 @@ class Service:
         except (CacheError, OSError, sqlite3.Error):
             return None
 
+    def _library_declaration(self, type_symbol: str, root: str) -> str:
+        """A library type's declaration header, from its sources jar ("" when unknown)."""
+        try:
+            d = self._library(type_symbol, root)
+        except QueryError:
+            return ""
+        return " ".join(d.type_declaration.split()) if d is not None else ""
+
+    def _library_supertypes(self, type_symbol: str, root: str) -> list[str]:
+        try:
+            return L.library_supertypes(self._library_index(root), type_symbol)
+        except (L.LibraryBusy, CacheError, OSError, sqlite3.Error):
+            return []
+
     def _library_overload_params(self, symbol: str, root: str,
                                  qualified: bool = False) -> list[tuple]:
         """Every overload of a library method or constructor, numbered as SCIP does, with its
@@ -513,7 +603,8 @@ class Service:
                 if lib is not None:
                     return note + render.library_definition(lib), set()
             value = X.initializer_of(nav, d) if d else ""
-            return note + render.definition(nav.ws, d, sym, value), \
+            where = C.where_now(nav, d) if d and not d.generated else ""
+            return note + render.definition(nav.ws, d, sym, value, where), \
                 {d.location.source} if d else set()
         return body
 
@@ -1916,8 +2007,8 @@ class Service:
     # --- tools ------------------------------------------------------------------------------
 
     def find(self, name: str, project_root: str | None = None, limit: int = 50,
-             offset: int = 0, match: str = "auto") -> str:
-        return self._run(project_root, self._b_find(name, offset, limit, match))
+             offset: int = 0, match: str = "auto", scope: str = "") -> str:
+        return self._run(project_root, self._b_find(name, offset, limit, match, scope))
 
     def references(self, symbol: str, project_root: str | None = None, offset: int = 0,
                    limit: int = DEFAULT_LIMIT, include_definitions: bool = False,

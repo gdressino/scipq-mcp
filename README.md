@@ -182,7 +182,7 @@ run different versions).
 |---|---|---|
 | `setup` | how this project produces shards, whether they are fresh, the steps to enable them | — |
 | `context(symbol, token_budget)` | start here before changing a symbol: definition and body, overrides, callers with the call lines, callees, tests (a type: members, subtypes, users; a field: accessors, writers, readers), trimmed to a budget; each cut section names the tool for the rest | — |
-| `find_symbols(name, match)` | definitions by name or part of it (exact, prefix, contains, camel humps; case-insensitive); `Type#`: the members it declares | workspace/symbol |
+| `find_symbols(name, match, scope)` | definitions by name or part of it (exact, prefix, contains, camel humps; case-insensitive); wildcards in any name (`Cache*#getPlace`); `Type#`: the members it declares; in a package or path | workspace/symbol |
 | `references(symbol, exclude_imports, by_name)` | every use, grouped by file, with the line of code and the enclosing method (imports left out for types; large results open with a summary); optionally possible uses by name in strings | findReferences |
 | `definition(symbol)` | location, kind, signature, javadoc, what it overrides or extends | definition + hover |
 | `source(symbol, git_ref)` | the exact source of a definition, with line numbers; with `git_ref` (`origin/main`, a tag, a commit), as it is there, read with git and without the index, so also code never compiled here | — |
@@ -197,7 +197,7 @@ run different versions).
 | `annotated(annotation)` | definitions carrying an annotation, with its line (attribute values) | — |
 | `typed(symbol, categories)` | where a type is used: fields, parameters, return types, locals, supertypes, bodies, imports | — |
 | `tests(symbol)` | test classes that use a symbol directly, with a ready `--tests` / `-Dtest` filter | — |
-| `index_status()` | shards per task, stale and uncompiled files, tracked files without a shard, what to recompile; how far the auxiliary index is behind the shards | — |
+| `index_status()` | shards per task, stale and uncompiled files and why they are (a git checkout after the build, a task FROM-CACHE), tracked files without a shard, what to recompile; how far the auxiliary index is behind the shards | — |
 | `compare(other_root, scope, api_only)` | this checkout against another (e.g. two worktrees): definitions only in one side or with another signature, maybe-renamed pairs; with shared git history, members changed on both sides since the merge base and what merging one into the other would break (the other side's uses of what one removed or changed) | — |
 | `steps(query, check)` | Cucumber-JVM: a step definition's feature steps and the scenarios to run; a .feature's steps and the method each runs; a step's text and its method; `check=True`: undefined, ambiguous, not understood and unused step definitions | — |
 | `concepts(query, kind, scope)` | definitions about something when you do not know their names: words of names, owners, annotation texts, call labels, signatures and javadoc, ranked | workspace/symbol by meaning (words, not embeddings) |
@@ -423,8 +423,11 @@ A name that matches one symbol is resolved, and the answer starts with
 `-- Account#setState → com/example/model/Account#setState().`. An ambiguous name returns the
 candidates with their signatures instead. Answers write a method that has overloads with its
 parameter list (`Service#process(String)`), which reads back as the same overload; the `--` line
-gives the exact symbol. `Type#m()` on a type that only inherits the method without parameters
-resolves to the inherited one. Library overloads are told apart by their sources jar.
+gives the exact symbol. `Type#m` on a type that only inherits `m` resolves to the
+declaration it inherits, as Java does (the nearest supertype declaring it, then library
+types and `Object`), and the `--` line says so; `Type#m()` on a type that declares only
+overloads with parameters resolves to an inherited one without. Library overloads are told
+apart by their sources jar.
 
 ## Freshness
 
@@ -433,6 +436,14 @@ What scipq-mcp sees is the **last compilation**. Every answer ends with a warnin
 - a source was edited after its shard was written (its results may be off), naming those that
   appear in the answer;
 - a `.java` file was created after the last compilation of its module and has no shard yet.
+
+When it can tell from file dates, the warning (and `index_status`, in full) says why: a git
+checkout, reset or merge after the last build, read from HEAD's reflog (the index then shows
+the commit compiled before it), and whether javac compiled the files since: class files
+newer than the change mean the task ran without writing the shards (FROM-CACHE without them,
+an IDE build, `-Pscip=false`); older ones, that nothing compiled them. A method whose
+parameters changed since is shown where it is now, with its declaration as it is now, by
+`definition`, `context` and `source`.
 
 A file written again with the same text (a `git checkout` and back, re-applying a patch, an
 editor saving it unchanged) is newer than its shard, but Gradle, which compares contents, does

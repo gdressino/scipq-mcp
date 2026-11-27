@@ -49,7 +49,8 @@ def _query_parser(sub) -> None:
     paging = {"offset": {"type": int, "default": 0}, "limit": {"type": int, "default": 100}}
     add("find", "name", **paging, match={"default": "auto",
                                          "choices": ["auto", "exact", "prefix", "contains",
-                                                     "camel"]})
+                                                     "camel"]},
+        scope={"default": ""})
     add("refs", "symbol", **paging, defs={"action": "store_true"},
         no_imports={"action": "store_const", "const": True, "default": None},
         with_imports={"action": "store_const", "const": False, "dest": "no_imports"},
@@ -118,7 +119,7 @@ def _run_query(a) -> str:
                   build_workers=a.build_workers)
     t = a.tool
     if t == "find":
-        return svc.find(a.name, limit=a.limit, offset=a.offset, match=a.match)
+        return svc.find(a.name, limit=a.limit, offset=a.offset, match=a.match, scope=a.scope)
     if t == "refs":
         return svc.references(a.symbol, offset=a.offset, limit=a.limit,
                               include_definitions=a.defs, exclude_imports=a.no_imports,

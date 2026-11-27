@@ -499,6 +499,38 @@ def parse_query(text: str) -> Query:
                  params_text if keep and params is not None else "")
 
 
+def split_glob_query(text: str) -> tuple[str, tuple[str, ...], str] | None:
+    """`Cache*#getPlace(String)` -> ("Cache*", ("Cache*",), "getPlace(String)"):
+    the owner names, with a `*` or `?` in one of them or in the member's name, and the
+    member as written (`*Service` -> ("", (), "*Service")). None without a wildcard."""
+    t = text.strip().replace("`", "")
+    head = t.split("(", 1)[0]
+    if not re.search(r"[*?]", head) or looks_like_symbol(t):
+        return None
+    cut = max(head.rfind("#"), head.rfind("."), head.rfind("/"))
+    if cut < 0:   # `*Service`, `get*Name`: a name alone, of any owner
+        return "", (), t
+    owner, member = t[:cut].strip(), t[cut + 1:].strip()
+    names = parse_query(owner).names if owner else ()
+    return (owner, names, member) if member else None
+
+
+def owner_matches(symbol: str, patterns: tuple[str, ...], ignore_case: bool = False) -> bool:
+    """Whether the names before a symbol's last one end with these (fnmatch patterns, each
+    a type or package name: `Cache*`, `service`)."""
+    if not patterns:
+        return True
+    d = [x for x in parse(symbol) if x.suffix not in (PARAMETER, TYPE_PARAMETER)][:-1]
+    if len(d) < len(patterns):
+        return False
+    import fnmatch
+
+    def same(name: str, pattern: str) -> bool:
+        return fnmatch.fnmatch(name.lower(), pattern.lower()) if ignore_case \
+            else fnmatch.fnmatchcase(name, pattern)
+    return all(same(x.name, p) for x, p in zip(d[-len(patterns):], patterns))
+
+
 def members_query(text: str) -> str:
     """The type written in `Account#` or `com.example.Account#` (asking for its members):
     "" for anything else."""

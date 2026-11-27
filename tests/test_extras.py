@@ -4,6 +4,7 @@ import re
 import pytest
 
 from scipq_mcp import extras as X
+from scipq_mcp import symbols as S
 from scipq_mcp.queries import Navigator
 from scipq_mcp.service import Service
 from scipq_mcp.workspace import Workspace, build_task
@@ -1444,3 +1445,99 @@ def test_context_head_of_a_definition_that_did_not_move(sample_copy, tmp_path):
           "        return state;", "        return state; // edited below setState", 1_700_000_500)
     ctx = Service(sample_copy, cache_dir=str(tmp_path / "c")).context("Entity#setState")
     assert "body 14–16\n" in ctx and "as it is now" not in ctx.split("\n")[2], ctx
+
+
+def test_find_with_wildcards_scope_and_inherited_members(refactor_root, sample_root, tmp_path):
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"))
+
+    def rows(out):
+        return [x.split()[2] for x in out.splitlines()[1:] if re.match(r"\S+\.java:\d+  ", x)]
+
+    out = svc.find("*Page#render")
+    assert rows(out) == ["com/example/shop/Page#render().", "com/example/shop/StockPage#render()."]
+    assert "(in types matching *Page)" in out
+    assert rows(svc.find("Stock*#ref*")) == ["com/example/shop/StockPage#refresh().",
+                                             "com/example/shop/StockPage#refreshAll()."]
+    assert "too broad" in svc.find("Page#*")
+    out = svc.find("render", scope="com.example.nowhere")
+    assert rows(out) == [] and "in com.example.nowhere, " in out
+    assert "com/example/shop/View#render()." in rows(svc.find("render", scope="com.example.shop"))
+    # A type that only inherits the member: the declaration it inherits.
+    out = svc.find("SalesPage#measure")
+    assert rows(out) == ["com/example/shop/View#measure()."]
+    assert "SalesPage does not declare measure: inherited from View" in out
+    # ...but not with parameters it does not take.
+    out = svc.find("SalesPage#render(int)")
+    assert rows(out) == [] and "no overload of 'render' that SalesPage inherits takes (int)" \
+        in out, out
+    # A wildcard in a name alone: any owner; types too.
+    assert {"com/example/shop/Page#", "com/example/shop/SalesPage#",
+            "com/example/shop/StockPage#"} <= set(rows(svc.find("*Page")))
+    found = rows(svc.find("refresh*"))
+    assert {"com/example/shop/StockPage#refresh().", "com/example/shop/StockPage#refreshAll().",
+            "com/example/shop/Panel#refresh()."} <= set(found) and \
+        all(S.name_of(x).startswith("refresh") for x in found)
+    # A parameter list still picks overloads.
+    assert rows(svc.find("*Page#render(int)")) == []
+    assert rows(svc.find("*Page#render()")) == ["com/example/shop/Page#render().",
+                                                "com/example/shop/StockPage#render()."]
+
+
+def test_a_method_whose_parameters_changed_is_shown_as_it_is_now(sample_copy, tmp_path):
+    rel = "core/src/main/java/com/example/model/Entity.java"
+    _edit(sample_copy, rel, "    public void setState(int state) {\n",
+          "    private int a;\n\n    public void setState(int state,\n"
+          "                         boolean force) {\n", 1_700_000_500)
+    svc = Service(sample_copy, cache_dir=str(tmp_path / "c"))
+    out = svc.definition("Entity#setState")
+    assert "body 14–16 — its parameters changed after its compilation (the signature shown " \
+           "is the compiled one); now at lines 16–19: public void setState(int state, " \
+           "boolean force)" in out, out
+    assert "\npublic void setState(int state)\n" in out   # the compiled signature
+    out = svc.source("Entity#setState")
+    assert "and so did these parameters: shown as it is now, at lines 16–19 (compiled at " \
+           "14–16 as public void setState(int state))" in out, out
+    assert "body (as it is now, with other parameters; compiled at 14–16" in \
+        svc.context("Entity#setState")
+
+
+def test_why_sources_are_stale(sample_copy, tmp_path):
+    from scipq_mcp import stalecause as SC
+    rel = "core/src/main/java/com/example/model/Entity.java"
+    _edit(sample_copy, rel, "    private int state;\n", "    private int state;\n\n",
+          1_700_000_500)
+    classes = os.path.join(sample_copy, "core/build/classes/java/main/com/example/model")
+    os.makedirs(classes)
+    cls = os.path.join(classes, "Entity.class")
+    open(cls, "wb").close()
+    os.utime(cls, (1_700_000_050, 1_700_000_050))      # javac's, with the shard
+    git = os.path.join(sample_copy, ".git", "logs")
+    os.makedirs(git)
+    a, b = "a" * 40, "b" * 40
+    with open(os.path.join(git, "HEAD"), "w", encoding="utf-8") as fh:
+        fh.write(f"{'0' * 40} {a} Someone <someone@example.com> 1700000000 -0300\t"
+                 "commit (initial): start\n"
+                 f"{a} {b} Someone <someone@example.com> 1700000501 -0300\t"
+                 f"checkout: moving from {a} to topic\n")
+    ws = Workspace(sample_copy)
+    c = SC.cause(ws, ws.freshness())
+    assert c.brief.startswith("git changed it at ") and \
+        "checkout: moving from aaaaaaaaaa to topic; nothing compiled it since; if the " \
+        "shards stay old after a build, it came FROM-CACHE without them: --rerun it" in c.brief, c
+    assert "when git wrote it (checkout: moving from aaaaaaaaaa to topic), after its " \
+           "compilation at " in c.full and "with HEAD at aaaaaaaaaa: the index shows " \
+           "aaaaaaaaaa's version of it; nothing compiled it since" in c.full, c
+    assert "someone" not in c.full + c.brief
+    svc = Service(sample_copy, cache_dir=str(tmp_path / "c"))
+    assert "  why stale: changed at " in svc.index_status()
+    svc = Service(sample_copy, cache_dir=str(tmp_path / "c"))   # the warning in full
+    assert "(scipq-mcp does not build; git changed it at " in svc.definition("Entity#setState")
+    # Compiled after the change, the shard left behind: FROM-CACHE or without the plugin.
+    os.utime(cls, (1_700_000_700, 1_700_000_700))
+    os.remove(os.path.join(git, "HEAD"))
+    c = SC.cause(ws, ws.freshness())
+    assert c.brief.startswith("javac compiled it after the change without writing the "
+                              "shards: the task came FROM-CACHE"), c
+    # Neither tells: the hint stays the general one.
+    os.remove(cls)
+    assert SC.cause(ws, ws.freshness()).brief == ""

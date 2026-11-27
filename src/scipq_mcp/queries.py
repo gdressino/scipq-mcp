@@ -24,6 +24,7 @@ GENERATED_MARKERS = ("@Generated", "@lombok.Generated", "@javax.annotation.Gener
                      "@javax.annotation.processing.Generated")
 
 
+OBJECT = "java/lang/Object#"
 _DECL_KEYWORD = re.compile(r"\b(class|interface|enum|record|@interface)\b")
 
 
@@ -405,6 +406,10 @@ class Navigator:
         # Every overload of a library method with its parameter types (from its sources jar),
         # set by the service: picks among them when a name is written with a parameter list.
         self.library_overloads: Callable[..., list[tuple]] = lambda _sym, _q=False: []
+        # A library type's declaration header and its direct supertypes (from its sources
+        # jar; "" and [] when unknown), set by the service: orders inherited library methods.
+        self.library_declaration: Callable[[str], str] = lambda _t: ""
+        self.library_supertypes: Callable[[str], list[str]] = lambda _t: []
 
     # --- plumbing ---------------------------------------------------------------------------
 
@@ -555,6 +560,10 @@ class Navigator:
             return Resolution(text)
         q = S.parse_query(text)
         every = [d for d in self._find(text) if not S.is_local_like(d.symbol)]
+        if not every:
+            inherited = self.inherited_member(text)
+            if inherited is not None:
+                return inherited
         found = by_params(every, q.params, _declared_params, self._qualified_params) \
             if q.params is not None else every
         if every and not found:
@@ -620,6 +629,125 @@ class Navigator:
                                         f"(not defined in this project); pass one of them",
                               external)
         return Resolution(None, [], f"no symbol in this project matches {text!r}")
+
+    def inherited_member(self, text: str) -> Resolution | None:
+        """`Child#m` when the project type Child does not declare m: what Java means by it,
+        the m Child inherits from its nearest supertypes declaring one (project types from
+        the shards, then library ones from their sources jars). None when the owner is not
+        a project type, or inherits no such member."""
+        q = S.parse_query(text)
+        if len(q.names) < 2 or q.names[-1] == S.CONSTRUCTOR or S.looks_like_symbol(text):
+            return None   # (constructors are not inherited)
+        name = q.names[-1]
+        owners = sorted({d.symbol for d in self._find(".".join(q.names[:-1]))
+                         if S.is_type(d.symbol)})
+        found: list[Definition] = []
+        external: list[str] = []
+        for owner in owners:
+            _d, supers = self.supertypes(owner)
+            found += self._inherited_named(q, supers)
+            if not found:
+                external += self._library_inherited(q, supers)
+        if not found and not external:
+            return None
+        every, every_external = found, external
+        if q.params is not None:
+            found = by_params(found, q.params, _declared_params, self._qualified_params)
+            external = self._library_by_params(external, q.params)[0] if external else []
+        syms = sorted({d.symbol for d in found}) + sorted(set(external))
+        child = S.short(owners[0]) if len(owners) == 1 else ".".join(q.names[:-1])
+        if not syms:
+            return Resolution(None, every, f"no overload of {name!r} that {child} inherits "
+                                           f"takes {_param_list(q.params, q.params_text)}; "
+                                           "its overloads:", sorted(set(every_external)))
+        if len(syms) == 1:
+            sym = syms[0]
+            where = S.short(S.parent(sym))
+            return Resolution(sym, found, f"{text} → {sym} (inherited: {child} does not "
+                                          f"declare {name}, {where} does; the callers and "
+                                          f"references of {where}'s are those through any "
+                                          "of its subtypes)")
+        return Resolution(None, found, f"{child} does not declare {name!r}; it inherits "
+                                       f"{len(syms)}: pass one of them", sorted(set(external)))
+
+    def _inherited_named(self, q: S.Query, supers: list[Supertype]) -> list[Definition]:
+        """The members named q's last name of the project supertypes that are not private,
+        nor hidden by a nearer one: a method overriding it, a member with the same name
+        and parameters in a subtype of its owner, or a class's against an interface's."""
+        name = q.names[-1]
+        owners = {s.symbol: s.definition for s in supers if s.definition is not None}
+        cands: list[Definition] = []
+        for sym, d in owners.items():
+            for v in self._views(self.ws.shard_for_source(d.location.source)[:1]):
+                cands += v.definitions(lambda m, _i, o=sym: S.parent(m) == o and
+                                       S.name_of(m) == name and not S.is_local_like(m))
+        cands = [c for c in cands if not (c.info and S.is_private(c.info.signature or ""))
+                 and S.kind_of(c.symbol) != "constructor"
+                 and (not q.method_only or _is_method_symbol(c.symbol))
+                 and (q.disambiguator is None
+                      or S.parse(c.symbol)[-1].disambiguator == q.disambiguator)]
+        overridden = {r.symbol for c in cands if c.info for r in c.info.relationships
+                      if r.is_implementation}
+        above = {sym: {r.symbol for r in d.info.relationships if r.is_implementation}
+                 if d.info else set() for sym, d in owners.items()}
+
+        def key(c: Definition):
+            return (_is_method_symbol(c.symbol), _declared_params(c))
+
+        def interface(c: Definition) -> bool:
+            o = owners.get(S.parent(c.symbol))
+            return o is not None and o.kind == "interface"
+
+        out = []
+        for c in cands:
+            if c.symbol in overridden:
+                continue
+            same = [x for x in cands if x is not c and key(x) == key(c)]
+            if any(S.parent(c.symbol) in above.get(S.parent(x.symbol), set()) for x in same):
+                continue   # a subtype of its owner declares it again
+            if interface(c) and any(not interface(x) for x in same):
+                continue   # a class's implements it
+            out.append(c)
+        return out
+
+    def _library_inherited(self, q: S.Query, supers: list[Supertype]) -> list[str]:
+        """The methods named q's last name that the library supertypes declare (from their
+        sources jars), as Java picks them: a class's over an interface's, and the most
+        specific type's (the one the others are supertypes of); every one when that cannot
+        be told."""
+        if not q.method_only and q.names[-1][:1].isupper():
+            return []   # a nested type or a constant: not looked for in libraries
+        # scip-javac does not record Object among the supertypes: it is the last one.
+        libs = [s.symbol for s in supers if s.definition is None]
+        by_owner: dict[str, list[str]] = {}
+        for sup in libs + ([] if OBJECT in libs else [OBJECT]):
+            first = f"{sup}{S._format_name(q.names[-1])}()."
+            known = [k[0] for k in self.library_overloads(first)]
+            if q.disambiguator is not None:
+                known = [k for k in known if S.parse(k)[-1].disambiguator == q.disambiguator]
+            if known:
+                by_owner[sup] = known
+        owners = list(by_owner)
+        if len(owners) > 1:
+            classes = [o for o in owners if o == OBJECT or not re.search(
+                r"\binterface\b", self.library_declaration(o))]
+            owners = [o for o in classes if o != OBJECT] or classes or owners
+        if len(owners) > 1:
+            above = {o: self._library_ancestors(o) for o in owners}
+            nearest = [o for o in owners if all(x in above[o] for x in owners if x != o)]
+            owners = nearest or owners
+        return [k for o in owners for k in by_owner[o]]
+
+    def _library_ancestors(self, type_symbol: str, limit: int = 64) -> set[str]:
+        """Every supertype of a library type that its sources jar tells."""
+        seen: set[str] = set()
+        queue = list(self.library_supertypes(type_symbol))
+        while queue and len(seen) < limit:
+            t = queue.pop(0)
+            if t not in seen:
+                seen.add(t)
+                queue.extend(self.library_supertypes(t))
+        return seen
 
     def _inherited_parameterless(self, owner: str, name: str) -> str | None:
         """The method `name` without parameters that a project type inherits: from its

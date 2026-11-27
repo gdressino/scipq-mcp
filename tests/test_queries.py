@@ -406,3 +406,41 @@ def test_is_member_of_wants_the_type_itself():
                           ("com", "example", "account", "Account"))
     assert not S.is_member_of("com/other/Account#uid().", ("example", "Account"))
 
+
+
+def test_a_member_named_through_a_subtype_is_the_one_it_inherits(sample_root, refactor_root):
+    nav = Navigator(Workspace(sample_root))
+    # SubAccount extends Account extends Entity: setState is Entity's.
+    r = nav.resolve("SubAccount#setState")
+    assert r.symbol == SET_STATE
+    assert "(inherited: SubAccount does not declare setState, Entity does;" in r.note
+    assert nav.resolve("SubAccount#setState(int)").symbol == SET_STATE
+    r = nav.resolve("SubAccount#setState(String)")
+    assert r.symbol is None and "no overload of 'setState' that SubAccount inherits" in r.note
+    assert nav.resolve("SubAccount#uid").symbol == "com/example/model/SubAccount#uid()."
+    # A private member is not inherited.
+    assert nav.resolve("SubAccount#state").symbol is None
+    nav = Navigator(Workspace(refactor_root))
+    # The nearest declaration: Page overrides View's render; measure is only View's.
+    assert nav.resolve("SalesPage#render").symbol == "com/example/shop/Page#render()."
+    assert nav.resolve("SalesPage#measure").symbol == "com/example/shop/View#measure()."
+    # Through a supertype that declares nothing.
+    assert nav.resolve("MainScreen#attach").symbol == "com/example/shop/Widget#attach()."
+
+
+def test_an_inherited_library_method_comes_from_its_sources(refactor_root, tmp_path):
+    from scipq_mcp import libsrc as L
+    if not L.jdk_src_zip():
+        pytest.skip("no JDK src.zip on this machine")
+    svc = Service(refactor_root, cache_dir=str(tmp_path / "c"), library_roots=[L.jdk_src_zip()])
+    out = svc.definition("SalesPage#toString")
+    assert "→ java/lang/Object#toString(). (inherited: SalesPage does not declare toString, " \
+           "Object does;" in out, out
+    out = svc.definition("SalesPage#toString(int)")
+    assert "that SalesPage inherits takes (int); its overloads:" in out and \
+        "java/lang/Object#toString()." in out, out
+    # Bag extends AbstractList: a class's method, not the List interface's.
+    out = svc.definition("Bag#indexOf")
+    assert "→ java/util/AbstractList#indexOf()." in out, out
+    out = svc.definition("Bag#containsAll")
+    assert "→ java/util/AbstractCollection#containsAll()." in out, out
